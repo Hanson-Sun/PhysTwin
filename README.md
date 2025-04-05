@@ -141,6 +141,7 @@ bash evaluate.sh
 
 ### Data Processing from Raw Videos
 The original data in each case only includes `color`, `depth`, `calibrate.pkl`, `metadata.json`. All other data are processed as below to get, including the projection, tracking and shape priors.
+(Note: Be aware of the conflict in the diff-gaussian-rasterization library between Gaussian Splatting and Trellis. For data processing, you don't need to install the gaussian splatting; ignore the last section in env_install.sh)
 ```
 # Process the data
 python script_process_data.py
