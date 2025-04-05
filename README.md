@@ -56,9 +56,6 @@ This repository contains the official implementation of the **PhysTwin** framewo
   <img src="./assets/force_sloth.gif" width="30%">
 </p>
 
-#### Upcoming Releases (Next Few Days)
-- **Rigid Object Demo:** Demonstrate our framework on rigid object interactions, showcasing its capability for rigid object tracking from videos.
-
 #### Long-Term Plans
 - **Batch Inferencing Support:** Integrate batch inferencing into the underlying SpringMass code, enabling faster rollouts and efficient data generation.
 
