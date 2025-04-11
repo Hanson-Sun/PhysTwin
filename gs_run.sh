@@ -14,6 +14,8 @@ scenes=("double_stretch_sloth")
 
 exp_name="init=hybrid_iso=True_ldepth=0.001_lnormal=0.0_laniso_0.0_lseg=1.0"
 
+python ./gaussian_splatting/generate_interp_poses.py
+
 # Iterate over each folder
 for scene_name in "${scenes[@]}"; do
     echo "Processing: $scene_name"
