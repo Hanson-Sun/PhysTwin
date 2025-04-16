@@ -94,7 +94,7 @@ Use the previously constructed PhysTwin to explore the interactive playground. U
 
 ![example](./assets/sloth.gif)
 
-Run the interactive playground with our different cases (Need to wait some time for the first usage of interactive playground; Can achieve about 30 FPS using RTX 4090)
+Run the interactive playground with our different cases (Need to wait some time for the first usage of interactive playground; Can achieve about 37 FPS using RTX 4090 on sloth case)
 
 ```
 python interactive_playground.py \
