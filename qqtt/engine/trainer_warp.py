@@ -1000,6 +1000,7 @@ class InvPhyTrainerWarp:
         image_path = cfg.bg_img_path
         overlay = cv2.imread(image_path)
         overlay = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
+        overlay = torch.tensor(overlay, dtype=torch.float32, device=cfg.device)
 
         if n_ctrl_parts > 1:
             kmeans = KMeans(n_clusters=n_ctrl_parts, random_state=0, n_init=10)
@@ -1159,7 +1160,7 @@ class InvPhyTrainerWarp:
 
             frame_timer.start()
 
-            frame = overlay.copy()
+            frame = overlay.clone()
 
             frame_setup_time = (
                 frame_timer.stop()
@@ -1173,7 +1174,7 @@ class InvPhyTrainerWarp:
             # render with gaussians and paste the image on top of the frame
             results = render_gaussian(view, gaussians, None, background)
             rendering = results["render"]  # (4, H, W)
-            image = rendering.permute(1, 2, 0).detach().cpu().numpy()
+            image = rendering.permute(1, 2, 0).detach()
 
             render_time = render_timer.stop()
             component_times["rendering"].append(render_time)
@@ -1183,21 +1184,22 @@ class InvPhyTrainerWarp:
             # Continue frame compositing
             frame_timer.start()
 
-            # composition code from Hanxiao
-            image = image.clip(0, 1)
+            image = image.clamp(0, 1)
             if use_white_background:
-                image_mask = np.logical_and(
-                    (image != 1.0).any(axis=2), image[:, :, 3] > 100 / 255
+                image_mask = torch.logical_and(
+                    (image != 1.0).any(dim=2), image[:, :, 3] > 100 / 255
                 )
             else:
-                image_mask = np.logical_and(
-                    (image != 0.0).any(axis=2), image[:, :, 3] > 100 / 255
+                image_mask = torch.logical_and(
+                    (image != 0.0).any(dim=2), image[:, :, 3] > 100 / 255
                 )
-            image[~image_mask, 3] = 0
+            image[..., 3].masked_fill_(~image_mask, 0.0)
 
             alpha = image[..., 3:4]
             rgb = image[..., :3] * 255
             frame = alpha * rgb + (1 - alpha) * frame
+            frame = frame.cpu().numpy()
+            image_mask = image_mask.cpu().numpy()
             frame = frame.astype(np.uint8)
 
             frame = self.update_frame(frame, self.pressed_keys)
