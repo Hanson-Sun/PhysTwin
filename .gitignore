@@ -40,7 +40,7 @@ gaussian_output/
 gaussian_output_video/
 gaussian_output_dynamic
 interactive_my_test.py
-
+xarm/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
