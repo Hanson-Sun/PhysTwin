@@ -39,7 +39,7 @@ cd TRELLIS
 
 cd ../..
 
-pip install gsplat
+pip install git+https://github.com/nerfstudio-project/gsplat.git
 pip install kornia
 cd gaussian_splatting/
 pip install submodules/diff-gaussian-rasterization/
