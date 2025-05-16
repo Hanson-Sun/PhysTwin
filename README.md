@@ -134,10 +134,12 @@ To evaluate the performance of the construected PhysTwin, need to render the ima
 # Use LBS to render the dynamic videos (The final videos in ./gaussian_output_dynamic folder)
 bash gs_run_simulate.sh
 python export_render_eval_data.py
-python visualize_render_results.py
-
 # Get the quantative results
 bash evaluate.sh
+
+# Get the qualitative results
+bash gs_run_simulate_white.sh
+python visualize_render_results.py
 ```
 
 ### Data Processing from Raw Videos
