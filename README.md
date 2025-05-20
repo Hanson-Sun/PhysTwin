@@ -83,7 +83,7 @@ bash ./env_install/download_pretrained_models.sh
 Thanks to @GuangyanCai contributions, now we also have a windows setup codebase in `windows_setup` branch.
 
 ### Install with Docker
-```
+Thanks to @epiception contributions, we now have Docker support as well..
 # Optional: 
 export DOCKER_USERNAME="your_alias" # default is ${whoami}
 chmod +x ./docker_scripts/build.sh
