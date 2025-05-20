@@ -65,6 +65,7 @@ This repository contains the official implementation of the **PhysTwin** framewo
 
 
 ### Setup
+#### 🐧Linux Setup
 ```
 # Here we use cuda-12.1
 export PATH={YOUR_DIR}/cuda/cuda-12.1/bin:$PATH
@@ -80,12 +81,14 @@ bash ./env_install/env_install.sh
 # Download the necessary pretrained models for data processing
 bash ./env_install/download_pretrained_models.sh
 ```
+
+#### 🪟Windows Setup
 Thanks to @GuangyanCai contributions, now we also have a windows setup codebase in `windows_setup` branch.
 
-### Install with Docker
-Thanks to @epiception contributions, we now have Docker support as well..
-# Optional: 
-export DOCKER_USERNAME="your_alias" # default is ${whoami}
+#### 🐳Docker Setup
+Thanks to @epiception contributions, we now have Docker support as well.
+```
+export DOCKER_USERNAME="your_alias" # default is ${whoami} (optional)
 chmod +x ./docker_scripts/build.sh
 ./docker_scripts/build.sh
 
