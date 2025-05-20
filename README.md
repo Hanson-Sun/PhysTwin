@@ -82,6 +82,17 @@ bash ./env_install/download_pretrained_models.sh
 ```
 Thanks to @GuangyanCai contributions, now we also have a windows setup codebase in `windows_setup` branch.
 
+### Install with Docker
+```
+# Optional: 
+export DOCKER_USERNAME="your_alias" # default is ${whoami}
+chmod +x ./docker_scripts/build.sh
+./docker_scripts/build.sh
+
+# The script accepts architecture version from https://developer.nvidia.com/cuda-gpus as an additional argument
+./docker_scripts/build.sh 8.9+PTX # For NVIDIA RTX 40 series GPUs
+```
+
 ### Download the PhysTwin Data
 Download the original data, processed data, and results into the project's root folder. (The following sections will explain how to process the raw observations and obtain the training results.)
 - [data](https://drive.google.com/file/d/1A6X7X6yZFYJ8oo6Bd5LLn-RldeCKJw5Z/view?usp=sharing): this includes the original data for different cases and the processed data for quick run. The different case_name can be found under `different_types` folder.
@@ -104,6 +115,16 @@ python interactive_playground.py \
 
 # Examples of usage:
 python interactive_playground.py --n_ctrl_parts 2 --case_name double_stretch_sloth
+python interactive_playground.py --inv_ctrl --n_ctrl_parts 2 --case_name double_lift_cloth_3
+```
+or in Docker
+```
+./docker_scripts/run.sh /path/to/data \
+                        /path/to/experiments \
+                        /path/to/experiments_optimization \
+                        /path/to/gaussian_output \
+# inside container
+conda activate phystwin_env
 python interactive_playground.py --inv_ctrl --n_ctrl_parts 2 --case_name double_lift_cloth_3
 ```
 
