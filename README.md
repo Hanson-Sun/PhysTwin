@@ -96,6 +96,27 @@ chmod +x ./docker_scripts/build.sh
 ./docker_scripts/build.sh 8.9+PTX # For NVIDIA RTX 40 series GPUs
 ```
 
+#### 🐧Linux Setup (RTX 5090 + CUDA 12.8 + Python 3.10 Specific)
+```
+# Here we use CUDA 12.8
+export PATH={YOUR_DIR}/cuda/bin:$PATH
+export LD_LIBRARY_PATH={YOUR_DIR}/cuda/lib64:$LD_LIBRARY_PATH
+export CUDA_HOME={YOUR_DIR}/cuda
+
+# Create conda environment
+conda create -y -n phystwin python=3.10
+conda activate phystwin
+
+# Open gaussian_splatting/submodules/diff-gaussian-rasterization/cuda_rasterizer/rasterizer_impl.h and add an include directive for cstdint
+# Forcefully create a symbolic soft link between system libstdc++.so.6 and conda environment libstdc++.so.6 e.g. `ln -sf /usr/lib/x86_64-linux-gnu/libstdc++.so.6 {CONDA_PATH}/envs/phystwin/bin/../lib/libstdc++.so.6`
+
+# Install the packages (comment out TRELLIS, Grounded-SAM-2, Grounding-DINO, RealSense, and SDXL installations for interactive playground only)
+bash ./env_install/5090_env_install.sh
+
+# Download the necessary pretrained models for data processing
+bash ./env_install/download_pretrained_models.sh
+```
+
 ### Download the PhysTwin Data
 Download the original data, processed data, and results into the project's root folder. (The following sections will explain how to process the raw observations and obtain the training results.)
 - [data](https://drive.google.com/file/d/1A6X7X6yZFYJ8oo6Bd5LLn-RldeCKJw5Z/view?usp=sharing): this includes the original data for different cases and the processed data for quick run. The different case_name can be found under `different_types` folder.
