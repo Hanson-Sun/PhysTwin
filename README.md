@@ -169,7 +169,7 @@ python script_train.py
 # Inference with the constructed models
 python script_inference.py
 
-# Trian the Gaussian with the first-frame data
+# Train the Gaussian with the first-frame data
 bash gs_run.sh
 ```
 
