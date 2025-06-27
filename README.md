@@ -251,7 +251,7 @@ If you find this repo useful for your research, please consider citing the paper
 @article{jiang2025phystwin,
     title={PhysTwin: Physics-Informed Reconstruction and Simulation of Deformable Objects from Videos},
     author={Jiang, Hanxiao and Hsu, Hao-Yu and Zhang, Kaifeng and Yu, Hsin-Ni and Wang, Shenlong and Li, Yunzhu},
-    journal={arXiv preprint arXiv:2503.17973},
+    journal={ICCV},
     year={2025}
 }
 ```
