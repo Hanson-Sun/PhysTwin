@@ -10,6 +10,7 @@ import os
 import pickle
 import json
 
+
 def set_all_seeds(seed):
     random.seed(seed)
     np.random.seed(seed)
@@ -44,6 +45,9 @@ if __name__ == "__main__":
     parser.add_argument("--n_ctrl_parts", type=int, default=2)
     parser.add_argument(
         "--inv_ctrl", action="store_true", help="invert horizontal control direction"
+    )
+    parser.add_argument(
+        "--virtual_key_input", action="store_true", help="use virtual key input"
     )
     args = parser.parse_args()
 
@@ -91,5 +95,9 @@ if __name__ == "__main__":
 
     best_model_path = glob.glob(f"experiments/{case_name}/train/best_*.pth")[0]
     trainer.interactive_playground(
-        best_model_path, gaussians_path, args.n_ctrl_parts, args.inv_ctrl
+        best_model_path,
+        gaussians_path,
+        args.n_ctrl_parts,
+        args.inv_ctrl,
+        virtual_key_input=args.virtual_key_input,
     )
