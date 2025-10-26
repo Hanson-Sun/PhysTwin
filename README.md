@@ -69,7 +69,7 @@ This repository contains the official implementation of the **PhysTwin** framewo
 </p>
 
 #### Long-Term Plans
-- **Batch Inferencing Support:** Integrate batch inferencing into the underlying SpringMass code, enabling faster rollouts and efficient data generation.
+In the long term, we aim to develop a comprehensive physics simulator focused on real-to-sim, serving as an easy-to-use platform for XR, VR, and robotics applications. **Feel free to reach out via email if you’re also interested in this direction and would like to collaborate on related research projects.**
 
 
 ### Setup
