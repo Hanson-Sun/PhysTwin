@@ -251,6 +251,10 @@ python interactive_playground.py --n_ctrl_parts 2 --case_name double_stretch_slo
 ### Follow-up and Potential Collaborations  
 If you are interested in collaborating or extending this work for your research, feel free to contact us at `hanxiao.jiang@columbia.edu`.  
 
+## Projects using PhysTwin
+* **[NovaFlow: Zero-Shot Manipulation via Actionable Flow from Generated Videos](https://novaflow.lhy.xyz/).** Hongyu Li*, Lingfeng Sun*, Yafei Hu, Duy Ta, Jennifer Barry, George Konidaris, and Jiahui Fu
+* ...
+
 ### Citation
 If you find this repo useful for your research, please consider citing the paper
 ```
