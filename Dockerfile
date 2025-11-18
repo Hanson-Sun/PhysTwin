@@ -38,7 +38,9 @@ ENV PATH=$CONDA_DIR/bin:$PATH
 RUN conda init bash 
 
 # Create a new conda environment
-RUN /opt/conda/bin/conda create -y -n phystwin_env python=3.10
+RUN /opt/conda/bin/conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main \
+ && /opt/conda/bin/conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r \
+ && /opt/conda/bin/conda create -y -n phystwin_env python=3.10
 
 # Set the working directory, non-root user, and permissions
 WORKDIR /PhysTwin

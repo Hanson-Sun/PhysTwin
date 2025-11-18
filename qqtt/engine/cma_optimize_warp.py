@@ -77,7 +77,7 @@ class OptimizerCMA:
         controller_points,
         object_radius=0.02,
         object_max_neighbours=30,
-        controller_radius=0.04,
+        controller_radius=0.07,
         controller_max_neighbours=50,
         mask=None,
     ):
@@ -117,17 +117,29 @@ class OptimizerCMA:
                 # Connect the springs between the controller points and the object points
                 num_object_points = len(points)
                 points = np.concatenate([points, controller_points], axis=0)
+                disconnected_idx = []
                 for i in range(len(controller_points)):
                     [k, idx, _] = pcd_tree.search_hybrid_vector_3d(
                         controller_points[i],
                         controller_radius,
                         controller_max_neighbours,
                     )
+                    
+                    # If no neighbors found within controller_radius, find the nearest neighbor
+                    # This ensures every control point is connected to the object
+                    if len(idx) == 0:
+                        disconnected_idx.append(i)
+                        [k, idx, _] = pcd_tree.search_knn_vector_3d(controller_points[i], 1)
+                    
                     for j in idx:
                         springs.append([num_object_points + i, j])
                         rest_lengths.append(
                             np.linalg.norm(controller_points[i] - points[j])
                         )
+                if len(disconnected_idx) > 0:
+                    logger.warning(
+                        f"Total {len(disconnected_idx)} disconnected control points: {disconnected_idx[:min(6, len(disconnected_idx))]} {'...' if len(disconnected_idx) > 6 else ''}"
+                    )
 
             springs = np.array(springs)
             rest_lengths = np.array(rest_lengths)

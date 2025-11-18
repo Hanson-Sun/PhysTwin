@@ -47,7 +47,10 @@ TEXT_THRESHOLD = 0.25
 PROMPT_TYPE_FOR_VIDEO = "box"  # choose from ["point", "box", "mask"]
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-VIDEO_PATH = f"{base_path}/{case_name}/color/{camera_idx}.mp4"
+VIDEO_PATH = f"{base_path}/{case_name}/color/{camera_idx}.orig.mp4"
+ALT_VIDEO_PATH = f"{base_path}/{case_name}/color/{camera_idx}.mp4"
+DEPTH_PATH = f"{base_path}/{case_name}/depth/0/0.npy"
+
 existDir(f"{base_path}/{case_name}/tmp_data")
 existDir(f"{base_path}/{case_name}/tmp_data/{case_name}")
 existDir(f"{base_path}/{case_name}/tmp_data/{case_name}/{camera_idx}")
@@ -73,8 +76,20 @@ video_predictor = build_sam2_video_predictor(model_cfg, sam2_checkpoint)
 sam2_image_model = build_sam2(model_cfg, sam2_checkpoint)
 image_predictor = SAM2ImagePredictor(sam2_image_model)
 
+# Get video resolution from the original high-res video
+if (Path(VIDEO_PATH).is_file()):
+    video_info = sv.VideoInfo.from_video_path(VIDEO_PATH)  # get video info from orig
+    print(f"Using high-res original video: {VIDEO_PATH}")
+elif (Path(ALT_VIDEO_PATH).is_file()):
+    video_info = sv.VideoInfo.from_video_path(ALT_VIDEO_PATH)  # fallback to standard
+    print(f"Using standard video: {ALT_VIDEO_PATH}")
+else:
+    raise FileNotFoundError(f"Video file not found at {VIDEO_PATH} or {ALT_VIDEO_PATH}")
 
-video_info = sv.VideoInfo.from_video_path(VIDEO_PATH)  # get video info
+# Use video resolution for mask generation
+size = (video_info.height, video_info.width)
+print(f"Video resolution: {size[1]}x{size[0]}")
+
 print(video_info)
 frame_generator = sv.get_video_frames_generator(VIDEO_PATH, stride=1, start=0, end=None)
 
@@ -206,6 +221,11 @@ for frame_idx, masks in video_segments.items():
     for obj_id, mask in masks.items():
         existDir(f"{output_path}/mask/{camera_idx}/{obj_id}")
         # mask is 1 * H * W
-        Image.fromarray((mask[0] * 255).astype(np.uint8)).save(
+        image = Image.fromarray((mask[0] * 255).astype(np.uint8))
+        # resize masks to match depth
+        image = image.resize((size[1], size[0]), Image.LANCZOS)
+        image.save(
             f"{output_path}/mask/{camera_idx}/{obj_id}/{frame_idx}.png"
         )
+
+

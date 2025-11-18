@@ -68,7 +68,7 @@ def visualize_pc(
 
     # Initialize video writer if save_video is True
     if save_video:
-        fourcc = cv2.VideoWriter_fourcc(*"avc1")  # Codec for .mp4 file format
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # Codec for .mp4 file format
         video_writer = cv2.VideoWriter(save_path, fourcc, FPS, (width, height))
 
     if controller_points is not None:
@@ -135,8 +135,20 @@ def visualize_pc(
                 mask = np.all(frame == [255, 255, 255], axis=-1)
                 image_path = f"{cfg.overlay_path}/{vis_cam_idx}/{i}.png"
                 overlay = cv2.imread(image_path)
-                overlay = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
-                frame[mask] = overlay[mask]
+
+                if overlay is None:
+                    # overlay missing -> skip blending
+                    logger = getattr(cfg, "logger", None)
+                    if logger is not None:
+                        logger.warning(f"Overlay missing: {image_path}")
+                else:
+                    # ensure overlay has same HxW and 3 channels
+                    if overlay.ndim == 3 and overlay.shape[2] == 4:
+                        overlay = cv2.cvtColor(overlay, cv2.COLOR_BGRA2BGR)
+                    overlay = cv2.resize(overlay, (frame.shape[1], frame.shape[0]), interpolation=cv2.INTER_LINEAR)
+                    overlay = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
+                    # safe assignment
+                    frame[mask] = overlay[mask]
             # Convert RGB to BGR
             frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
             video_writer.write(frame)

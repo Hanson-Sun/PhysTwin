@@ -23,7 +23,7 @@ class Config:
 
         self.object_radius = 0.02
         self.object_max_neighbours = 30
-        self.controller_radius = 0.04
+        self.controller_radius = 0.07
         self.controller_max_neighbours = 50
 
         self.spring_Y_min = 0

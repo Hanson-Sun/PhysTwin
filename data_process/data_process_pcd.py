@@ -101,8 +101,21 @@ def get_pcd_from_data(path, frame_idx, num_cam, intrinsics, c2ws):
     for i in range(num_cam):
         color = cv2.imread(f"{path}/color/{i}/{frame_idx}.png")
         color = cv2.cvtColor(color, cv2.COLOR_BGR2RGB)
+        raw_depth = np.load(f"{path}/depth/{i}/{frame_idx}.npy")
+        # Detect units: if raw depth values are large (typical mm like 1000+), divide by 1000.
+        # If raw values are already in meters (<= ~20), keep as-is.
+        raw_max = float(np.nanmax(raw_depth))
+        if raw_max > 20.0:
+            depth = raw_depth.astype(np.float32) / 1000
+        else:
+            depth = raw_depth.astype(np.float32)
+
+        # Ensure color and depth have the same spatial resolution.
+        # Resize color to match depth using bilinear interpolation for images.
+        if color.shape[:2] != depth.shape:
+            color = cv2.resize(color, (depth.shape[1], depth.shape[0]), interpolation=cv2.INTER_LINEAR)
+
         color = color.astype(np.float32) / 255.0
-        depth = np.load(f"{path}/depth/{i}/{frame_idx}.npy") / 1000.0
 
         points = getPcdFromDepth(
             depth,
@@ -119,15 +132,16 @@ def get_pcd_from_data(path, frame_idx, num_cam, intrinsics, c2ws):
         total_points.append(points_final)
         total_colors.append(color)
         total_masks.append(masks)
+
     # pcd = o3d.geometry.PointCloud()
     # visualize_points = []
     # visualize_colors = []
     # for i in range(num_cam):
     #     visualize_points.append(
-    #         total_points[i][total_masks[i]].reshape(-1, 3)
+    #         total_points[i][total_masks[i].astype(bool)].reshape(-1, 3)
     #     )
     #     visualize_colors.append(
-    #         total_colors[i][total_masks[i]].reshape(-1, 3)
+    #         total_colors[i][total_masks[i].astype(bool)].reshape(-1, 3)
     #     )
     # visualize_points = np.concatenate(visualize_points)
     # visualize_colors = np.concatenate(visualize_colors)
@@ -143,10 +157,12 @@ def get_pcd_from_data(path, frame_idx, num_cam, intrinsics, c2ws):
     # pcd.points = o3d.utility.Vector3dVector(np.concatenate(visualize_points).reshape(-1, 3))
     # pcd.colors = o3d.utility.Vector3dVector(np.concatenate(visualize_colors).reshape(-1, 3))
     # o3d.visualization.draw_geometries([pcd])
-    total_points = np.asarray(total_points)
-    total_colors = np.asarray(total_colors)
-    total_masks = np.asarray(total_masks)
-    return total_points, total_colors, total_masks
+
+    # total_points = np.asarray(total_points)
+    # total_colors = np.asarray(total_colors)
+    # total_masks = np.asarray(total_masks)
+
+    return np.asarray(total_points), np.asarray(total_colors), np.asarray(total_masks)
 
 
 def exist_dir(dir):
@@ -197,12 +213,8 @@ if __name__ == "__main__":
 
         if i == 0:
             pcd = o3d.geometry.PointCloud()
-            pcd.points = o3d.utility.Vector3dVector(
-                points.reshape(-1, 3)[masks.reshape(-1)]
-            )
-            pcd.colors = o3d.utility.Vector3dVector(
-                colors.reshape(-1, 3)[masks.reshape(-1)]
-            )
+            pcd.points = o3d.utility.Vector3dVector(points.reshape(-1, 3)[masks.reshape(-1)])
+            pcd.colors = o3d.utility.Vector3dVector(colors.reshape(-1, 3)[masks.reshape(-1)])
             vis.add_geometry(pcd)
             # Adjust the viewpoint
             view_control = vis.get_view_control()
@@ -210,12 +222,8 @@ if __name__ == "__main__":
             view_control.set_up([0, 0, -1])
             view_control.set_zoom(1)
         else:
-            pcd.points = o3d.utility.Vector3dVector(
-                points.reshape(-1, 3)[masks.reshape(-1)]
-            )
-            pcd.colors = o3d.utility.Vector3dVector(
-                colors.reshape(-1, 3)[masks.reshape(-1)]
-            )
+            pcd.points = o3d.utility.Vector3dVector(points.reshape(-1, 3)[masks.reshape(-1)])
+            pcd.colors = o3d.utility.Vector3dVector(colors.reshape(-1, 3)[masks.reshape(-1)])
             vis.update_geometry(pcd)
 
             vis.poll_events()
@@ -225,5 +233,5 @@ if __name__ == "__main__":
             f"{base_path}/{case_name}/pcd/{i}.npz",
             points=points,
             colors=colors,
-            masks=masks,
+            masks=masks
         )

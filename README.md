@@ -90,6 +90,15 @@ bash ./env_install/env_install.sh
 
 # Download the necessary pretrained models for data processing
 bash ./env_install/download_pretrained_models.sh
+
+export CUDA_HOME=/usr/local/cuda-12.1
+export PATH=$CUDA_HOME/bin:$PATH
+export LD_LIBRARY_PATH=$CUDA_HOME/lib64:/usr/lib/wsl/lib:$LD_LIBRARY_PATH
+
+export TORCH_CUDA_ARCH_LIST="8.6"   # RTX 3060
+export PIP_NO_BUILD_ISOLATION=1
+export MAX_JOBS=4                  # optional, avoids WSL OOM
+
 ```
 
 #### 🪟Windows Setup
@@ -103,6 +112,7 @@ chmod +x ./docker_scripts/build.sh
 ./docker_scripts/build.sh
 
 # The script accepts architecture version from https://developer.nvidia.com/cuda-gpus as an additional argument
+# use 8.6 for 3060
 ./docker_scripts/build.sh 8.9+PTX # For NVIDIA RTX 40 series GPUs
 ```
 
@@ -129,11 +139,11 @@ bash ./env_install/download_pretrained_models.sh
 
 ### Download the PhysTwin Data
 Download the original data, processed data, and results into the project's root folder. (The following sections will explain how to process the raw observations and obtain the training results.)
-- [data](https://drive.google.com/file/d/1A6X7X6yZFYJ8oo6Bd5LLn-RldeCKJw5Z/view?usp=sharing): this includes the original data for different cases and the processed data for quick run. The different case_name can be found under `different_types` folder.
-- [experiments_optimization](https://drive.google.com/file/d/1xKlk3WumFp1Qz31NB4DQxos8jMD_pBAt/view?usp=sharing): results of our first-stage zero-order optimization.
-- [experiments](https://drive.google.com/file/d/1hCGzdGlzL4qvZV3GzOCGiaVBshDgFKjq/view?usp=sharing): results of our second-order optimization.
-- [gaussian_output](https://drive.google.com/file/d/12EoxhEhE90NMAqLlQoj_zM_C63BOftNW/view?usp=sharing): results of our static gaussian appearance.
-- [(optional) additional_data](https://drive.google.com/file/d/1Q9AFDr_yQD-n5YNAe157hViTBC9mo876/view?usp=sharing): data for extra clothing demos not included in the original paper.
+- [data](https://huggingface.co/datasets/Jianghanxiao/PhysTwin/resolve/main/data.zip): this includes the original data for different cases and the processed data for quick run. The different case_name can be found under `different_types` folder.
+- [experiments_optimization](https://huggingface.co/datasets/Jianghanxiao/PhysTwin/resolve/main/experiments_optimization.zip): results of our first-stage zero-order optimization.
+- [experiments](https://huggingface.co/datasets/Jianghanxiao/PhysTwin/resolve/main/experiments.zip): results of our second-order optimization.
+- [gaussian_output](https://huggingface.co/datasets/Jianghanxiao/PhysTwin/resolve/main/gaussian_output.zip): results of our static gaussian appearance.
+- [(optional) additional_data](https://huggingface.co/datasets/Jianghanxiao/PhysTwin/resolve/main/additional_data.zip): data for extra clothing demos not included in the original paper.
 
 ### Play with the Interactive Playground
 Use the previously constructed PhysTwin to explore the interactive playground. Users can interact with the pre-built PhysTwin using keyboard. The next section will provide a detailed guide on how to construct the PhysTwin from the original data.
@@ -154,10 +164,10 @@ python interactive_playground.py --inv_ctrl --n_ctrl_parts 2 --case_name double_
 ```
 or in Docker
 ```
-./docker_scripts/run.sh /path/to/data \
-                        /path/to/experiments \
-                        /path/to/experiments_optimization \
-                        /path/to/gaussian_output \
+./docker_scripts/run.sh ~/PhysTwin_data/data \
+                        ~/PhysTwin_data/experiments \
+                        ~/PhysTwin_data/experiments_optimization \
+                        ~/PhysTwin_data/gaussian_output
 # inside container
 conda activate phystwin_env
 python interactive_playground.py --inv_ctrl --n_ctrl_parts 2 --case_name double_lift_cloth_3

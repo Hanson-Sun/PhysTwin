@@ -2,6 +2,7 @@ import glob
 import json
 import numpy as np
 import cv2
+import csv
 
 base_path = "./data/different_types"
 prediction_dir = "./gaussian_output_dynamic_white"
@@ -16,9 +17,15 @@ height, width = 480, 848
 FPS = 30
 alpha = 0.7
 
-dir_names = glob.glob(f"{base_path}/*")
-for dir_name in dir_names:
-    case_name = dir_name.split("/")[-1]
+# Read case names from data_config.csv
+case_names = []
+with open("data_config.csv", "r") as f:
+    reader = csv.reader(f)
+    for row in reader:
+        if row:  # skip empty lines
+            case_names.append(row[0])
+
+for case_name in case_names:
     print(f"Processing {case_name}!!!!!!!!!!!!!!!")
 
     with open(f"{base_path}/{case_name}/split.json", "r") as f:
@@ -28,7 +35,7 @@ for dir_name in dir_names:
     # Need to prepare the video
     for i in range(3):
         # Process each camera
-        fourcc = cv2.VideoWriter_fourcc(*"avc1")  # Codec for .mp4 file format
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # Codec for .mp4 file format
         video_writer = cv2.VideoWriter(
             f"{prediction_dir}/{case_name}/{i}_integrate.mp4",
             fourcc,

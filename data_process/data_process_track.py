@@ -38,6 +38,7 @@ def getSphereMesh(center, radius=0.1, color=[0, 0, 0]):
 def filter_track(track_path, pcd_path, mask_path, frame_num, num_cam):
     with open(f"{mask_path}/processed_masks.pkl", "rb") as f:
         processed_masks = pickle.load(f)
+        print(processed_masks[0].keys())
 
     # Filter out the points not valid in the first frame
     object_points = []
@@ -157,6 +158,17 @@ def filter_motion(track_data, neighbor_dist=0.01):
     vis = o3d.visualization.Visualizer()
     vis.create_window()
     for i in tqdm(range(num_frames - 1)):
+        # Check for NaNs or invalid shapes before creating point clouds
+        if np.isnan(object_points[i]).any() or np.isnan(object_colors[i]).any():
+            print(f"[ERROR] NaN detected in object_points or object_colors at frame {i}")
+            print(f"object_points[{i}]:", object_points[i])
+            print(f"object_colors[{i}]:", object_colors[i])
+            raise ValueError(f"NaN detected in object_points or object_colors at frame {i}")
+        if object_points[i].ndim != 2 or object_colors[i].ndim != 2:
+            print(f"[ERROR] Invalid shape for object_points or object_colors at frame {i}")
+            print(f"object_points[{i}].shape: {object_points[i].shape}")
+            print(f"object_colors[{i}].shape: {object_colors[i].shape}")
+            raise ValueError(f"Invalid shape for object_points or object_colors at frame {i}")
         # Convert the points of the current frame to an Open3D point cloud
         pcd = o3d.geometry.PointCloud()
         pcd.points = o3d.utility.Vector3dVector(object_points[i])
@@ -261,10 +273,21 @@ def filter_motion(track_data, neighbor_dist=0.01):
     y_normalized = (controller_points[0, :, 1] - y_min) / (y_max - y_min)
     rainbow_colors = plt.cm.rainbow(y_normalized)[:, :3]
 
-    vis = o3d.visualization.Visualizer()
-    vis.create_window()
+    # vis = o3d.visualization.Visualizer()
+    # vis.create_window(visible=False)
 
     for i in tqdm(range(num_frames - 1)):
+        # Check for NaNs or invalid shapes before creating point clouds
+        if np.isnan(controller_points[i]).any() or np.isnan(controller_colors[i]).any():
+            print(f"[ERROR] NaN detected in controller_points or controller_colors at frame {i}")
+            print(f"controller_points[{i}]:", controller_points[i])
+            print(f"controller_colors[{i}]:", controller_colors[i])
+            raise ValueError(f"NaN detected in controller_points or controller_colors at frame {i}")
+        if controller_points[i].ndim != 2 or controller_colors[i].ndim != 2:
+            print(f"[ERROR] Invalid shape for controller_points or controller_colors at frame {i}")
+            print(f"controller_points[{i}].shape: {controller_points[i].shape}")
+            print(f"controller_colors[{i}].shape: {controller_colors[i].shape}")
+            raise ValueError(f"Invalid shape for controller_points or controller_colors at frame {i}")
         # Convert the points of the current frame to an Open3D point cloud
         pcd = o3d.geometry.PointCloud()
         pcd.points = o3d.utility.Vector3dVector(controller_points[i])
@@ -305,18 +328,18 @@ def filter_motion(track_data, neighbor_dist=0.01):
 
         if i == 0:
             render_motion_pcd = motion_pcd
-            vis.add_geometry(render_motion_pcd)
-            # Adjust the viewpoint
-            view_control = vis.get_view_control()
-            view_control.set_front([1, 0, -2])
-            view_control.set_up([0, 0, -1])
-            view_control.set_zoom(1)
+            # vis.add_geometry(render_motion_pcd)
+            # # Adjust the viewpoint
+            # view_control = vis.get_view_control()
+            # view_control.set_front([1, 0, -2])
+            # view_control.set_up([0, 0, -1])
+            # view_control.set_zoom(1)
         else:
             render_motion_pcd.points = o3d.utility.Vector3dVector(motion_pcd.points)
             render_motion_pcd.colors = o3d.utility.Vector3dVector(motion_pcd.colors)
-            vis.update_geometry(render_motion_pcd)
-            vis.poll_events()
-            vis.update_renderer()
+            # vis.update_geometry(render_motion_pcd)
+            # vis.poll_events()
+            # vis.update_renderer()
 
     track_data["controller_mask"] = mask
     return track_data

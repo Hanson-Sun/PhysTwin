@@ -7,7 +7,8 @@ pip install trimesh
 pip install rtree 
 pip install pyrender
 
-conda install -y pytorch==2.4.0 torchvision==0.19.0 torchaudio==2.4.0 pytorch-cuda=12.1 -c pytorch -c nvidia
+pip install torch==2.1.2 torchvision==0.16.2 torchaudio==2.1.2 --index-url https://download.pytorch.org/whl/cu121
+pip install torchaudio --index-url https://download.pytorch.org/whl/cpu
 pip install stannum
 pip install termcolor
 pip install fvcore
@@ -15,7 +16,9 @@ pip install wandb
 pip install moviepy imageio
 conda install -y opencv
 pip install cma
-pip install --no-index --no-cache-dir pytorch3d -f https://dl.fbaipublicfiles.com/pytorch3d/packaging/wheels/py310_cu121_pyt240/download.html
+pip install "git+https://github.com/facebookresearch/pytorch3d.git@stable"
+
+
 
 # Install the env for realsense camera
 pip install Cython
@@ -42,6 +45,7 @@ cd ../..
 pip install gsplat==1.4.0
 pip install kornia
 cd gaussian_splatting/
-pip install submodules/diff-gaussian-rasterization/
+# pip install submodules/diff-gaussian-rasterization/
+CC=/usr/bin/gcc-11 CXX=/usr/bin/g++-11 pip install --no-build-isolation ./submodules/diff-gaussian-rasterization/
 pip install submodules/simple-knn/
 cd ..

@@ -1,25 +1,26 @@
-import open3d as o3d
-import numpy as np
-from argparse import ArgumentParser
-import pickle
-import trimesh
-import cv2
 import json
-import torch
 import os
-from utils.align_util import (
-    render_multi_images,
-    render_image,
-    as_mesh,
-    project_2d_to_3d,
-    plot_mesh_with_points,
-    plot_image_with_points,
-    select_point,
-)
-from match_pairs import image_pair_matching
+import pickle
+from argparse import ArgumentParser
+
+import cv2
 import matplotlib.pyplot as plt
+import numpy as np
+import open3d as o3d
+import torch
+import trimesh
+from match_pairs import image_pair_matching
 from scipy.optimize import minimize
 from scipy.spatial import KDTree
+from utils.align_util import (
+    as_mesh,
+    plot_image_with_points,
+    plot_mesh_with_points,
+    project_2d_to_3d,
+    render_image,
+    render_multi_images,
+    select_point,
+)
 
 VIS = True
 parser = ArgumentParser()
@@ -286,6 +287,23 @@ if __name__ == "__main__":
     # Load the c2w for the camera
     with open(f"{base_path}/{case_name}/calibrate.pkl", "rb") as f:
         c2ws = pickle.load(f)
+        # Normalize format: accept dict or list/array-like
+        if isinstance(c2ws, dict):
+            # If keys are numeric strings/ints, try to order by key
+            try:
+                keys = sorted(c2ws.keys(), key=lambda k: int(k))
+                c2ws = [np.array(c2ws[k]) for k in keys]
+            except Exception:
+                c2ws = [np.array(v) for v in c2ws.values()]
+        else:
+            c2ws = [np.array(m) for m in c2ws]
+
+        # Validate shapes
+        for i, m in enumerate(c2ws):
+            if not (isinstance(m, np.ndarray) and m.ndim == 2 and m.shape == (4, 4)):
+                raise ValueError(
+                    f"c2ws[{i}] has invalid shape {getattr(m, 'shape', None)} (type {type(m)}). Check calibrate.pkl"
+                )
         c2w = c2ws[cam_idx]
         w2c = np.linalg.inv(c2w)
         w2cs = [np.linalg.inv(c2w) for c2w in c2ws]
@@ -493,6 +511,10 @@ if __name__ == "__main__":
     trimesh_indices = np.asarray(trimesh_indices, dtype=np.int32)
     initial_mesh_world.transform(mesh2world)
 
+    initial_mesh_world = initial_mesh_world.remove_duplicated_vertices()
+    initial_mesh_world = initial_mesh_world.remove_degenerate_triangles()
+    initial_mesh_world = initial_mesh_world.remove_unreferenced_vertices()
+
     # ARAP based on the keypoints
     deform_kp_mesh_world, mesh_points_indices = deform_ARAP(
         initial_mesh_world, mesh_matching_points_world, matching_points
@@ -526,7 +548,7 @@ if __name__ == "__main__":
         vis.create_window(visible=False)
         dummy_frame = np.asarray(vis.capture_screen_float_buffer(do_render=True))
         height, width, _ = dummy_frame.shape
-        fourcc = cv2.VideoWriter_fourcc(*"avc1")
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
         video_writer = cv2.VideoWriter(
             f"{output_dir}/final_matching.mp4", fourcc, 30, (width, height)
         )

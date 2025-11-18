@@ -1,9 +1,9 @@
-import os
-from argparse import ArgumentParser
-import time
-import logging
-import json
 import glob
+import json
+import logging
+import os
+import time
+from argparse import ArgumentParser
 
 parser = ArgumentParser()
 parser.add_argument(
@@ -18,9 +18,10 @@ parser.add_argument("--shape_prior", action="store_true", default=False)
 args = parser.parse_args()
 
 # Set the debug flags
-PROCESS_SEG = True
-PROCESS_SHAPE_PRIOR = True
-PROCESS_TRACK = True
+ALIGN_DATA = False
+PROCESS_SEG = False
+PROCESS_SHAPE_PRIOR = False
+PROCESS_TRACK = False
 PROCESS_3D = True
 PROCESS_ALIGN = True
 PROCESS_FINAL = True
@@ -36,7 +37,7 @@ logger = None
 
 
 def setup_logger(log_file="timer.log"):
-    global logger 
+    global logger
 
     if logger is None:
         logger = logging.getLogger("GlobalLogger")
@@ -78,6 +79,13 @@ class Timer:
         )
 
 
+if ALIGN_DATA:
+    with Timer("Align depths and color"):
+        os.system(
+            f"python ./align_color_and_depth.py --depth_dir {base_path}/{case_name}/depth --color_dir {base_path}/{case_name}/color --output_dir {base_path}/{case_name}/color --overwrite"
+        )
+
+
 if PROCESS_SEG:
     # Get the masks of the controller and the object using GroundedSAM2
     with Timer("Video Segmentation"):
@@ -103,7 +111,7 @@ if PROCESS_SHAPE_PRIOR and SHAPE_PRIOR:
     with Timer("Image Upscale"):
         if not os.path.isfile(f"{base_path}/{case_name}/shape/high_resolution.png"):
             os.system(
-                f"python ./data_process/image_upscale.py --img_path {base_path}/{case_name}/color/0/0.png --mask_path {mask_path} --output_path {base_path}/{case_name}/shape/high_resolution.png --category {category}"
+                f"python ./data_process/image_upscale.py --img_path {base_path}/{case_name}/color/0/0.png --mask_path {mask_path} --output_path {base_path}/{case_name}/shape/high_resolution.png --category {category} --ultra_low_memory"
             )
 
     # Get the masked image of the object

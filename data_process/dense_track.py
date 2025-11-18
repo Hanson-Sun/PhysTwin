@@ -43,16 +43,47 @@ if __name__ == "__main__":
 
     for i in range(num_cam):
         print(f"Processing {i}th camera")
-        # Load the video
-        frames = iio.imread(f"{base_path}/{case_name}/color/{i}.mp4", plugin="FFMPEG")
+        
+        # Try to load high-res original video if available, otherwise use standard video
+        orig_video_path = f"{base_path}/{case_name}/color/{i}.orig.mp4"
+        std_video_path = f"{base_path}/{case_name}/color/{i}.mp4"
+        
+        # Get scale factor from video resolutions
+        scale_factor = 1.0
+        if os.path.exists(orig_video_path):
+            # Load just first frame of each to get resolutions
+            orig_frames = iio.imread(orig_video_path, plugin="FFMPEG", index=0)
+            std_frames = iio.imread(std_video_path, plugin="FFMPEG", index=0)
+            orig_width = orig_frames.shape[1]
+            std_width = std_frames.shape[1]
+            scale_factor = std_width / orig_width
+            video_path = orig_video_path
+            print(f"  Using high-res original video: {i}.orig.mp4 ({orig_width} → {std_width})")
+        else:
+            video_path = std_video_path
+            print(f"  Using standard video: {i}.mp4")
+        
+        # Load the full video for tracking
+        frames = iio.imread(video_path, plugin="FFMPEG")
+        video_height, video_width = frames.shape[1:3]
+        
         video = (
             torch.tensor(frames).permute(0, 3, 1, 2)[None].float().to(device)
         )  # B T C H W
-        # Load the first-frame mask to get all query points from all masks
+        
+        # Load the first-frame mask and scale it to match video resolution
         mask_paths = glob.glob(f"{base_path}/{case_name}/mask/{i}/*/0.png")
         mask = None
         for mask_path in mask_paths:
             current_mask = read_mask(mask_path)
+            # Scale mask to match the video resolution
+            if (current_mask.shape[0], current_mask.shape[1]) != (video_height, video_width):
+                current_mask = cv2.resize(
+                    current_mask.astype(np.uint8),
+                    (video_width, video_height),
+                    interpolation=cv2.INTER_NEAREST
+                ).astype(bool)
+            
             if mask is None:
                 mask = current_mask
             else:
@@ -88,11 +119,20 @@ if __name__ == "__main__":
             save_dir=f"{base_path}/{case_name}/cotracker", pad_value=0, linewidth=3
         )
         vis.visualize(video, pred_tracks, pred_visibility, filename=f"{i}")
-        # Save the tracking data into npz
+        
+        # Scale tracked points back to original resolution if upscaled
         track_to_save = pred_tracks[0].cpu().numpy()[:, :, ::-1]
         visibility_to_save = pred_visibility[0].cpu().numpy()
+        
+        # Rescale tracked points to match standard video resolution
+        if abs(scale_factor - 1.0) > 0.01:
+            print(f"  Rescaling tracked points by factor {scale_factor:.4f}")
+            track_to_save = track_to_save * scale_factor
+            track_to_save = np.round(track_to_save).astype(np.float32)
+        
         np.savez(
             f"{base_path}/{case_name}/cotracker/{i}.npz",
             tracks=track_to_save,
             visibility=visibility_to_save,
         )
+

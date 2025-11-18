@@ -607,7 +607,7 @@ def readQQTTSceneInfo(
     num_cam = len(intrinsics)
     assert num_cam == len(c2ws), "Number of cameras and camera poses mismatched"
 
-    H, W = 480, 848  # fixed resolution
+    H, W = 480, 848  # default resolution (may be overridden by actual image size)
 
     if use_high_res:
         upsample = 4
@@ -623,7 +623,7 @@ def readQQTTSceneInfo(
     cam_infos_unsorted = []
     for cam_i in range(num_cam):
         c2w = c2ws[cam_i]
-        K = intrinsics[cam_i]
+        K = intrinsics[cam_i].copy()  # Make a copy to avoid modifying original intrinsics
 
         # get the world-to-camera transform and set R, T
         w2c = np.linalg.inv(c2w)
@@ -638,6 +638,21 @@ def readQQTTSceneInfo(
         image_name = f"cam{cam_i}"
         image = Image.open(image_path) if os.path.exists(image_path) else None
 
+        # Get actual image dimensions and adjust intrinsics if needed
+        cam_H, cam_W = H, W
+        if image is not None:
+            cam_W, cam_H = image.size  # PIL Image.size returns (width, height)
+
+        if use_high_res and image is not None:
+            # If using high-res images, ensure intrinsics match actual image size
+            upsample = 4
+            cam_H = int(cam_H * upsample)
+            cam_W = int(cam_W * upsample)
+            K[0, 0] *= upsample
+            K[1, 1] *= upsample
+            K[0, 2] *= upsample
+            K[1, 2] *= upsample
+
         # use additional masks
         if use_masks and image is not None:
             mask_path = (
@@ -648,14 +663,19 @@ def readQQTTSceneInfo(
             mask = np.array(Image.open(mask_path))
             if len(mask.shape) == 3:
                 mask = mask[:, :, -1]  # take the alpha channel
+
+            # resize mask to match image size if needed
+            if mask.shape[0] != cam_H or mask.shape[1] != cam_W:
+                mask = cv2.resize(mask, (cam_W, cam_H), interpolation=cv2.INTER_NEAREST)
+                
             image_rgba = np.concatenate([np.array(image), mask[:, :, None]], axis=-1)
             image = Image.fromarray(image_rgba)
 
-        # this is dummy term for center principal point assumption (not used)
+        # Calculate FOV using actual image dimensions and scaled intrinsics
         focal_length_x = K[0, 0]
         focal_length_y = K[1, 1]
-        FovY = focal2fov(focal_length_y, H)
-        FovX = focal2fov(focal_length_x, W)
+        FovY = focal2fov(focal_length_y, cam_H)
+        FovX = focal2fov(focal_length_x, cam_W)
 
         # load depth
         depth_path = os.path.join(path, str(cam_i) + "_depth.npy")
@@ -705,8 +725,8 @@ def readQQTTSceneInfo(
                 FovX=FovX,
                 image_path=image_path,
                 image_name=image_name,
-                width=W,
-                height=H,
+                width=cam_W,
+                height=cam_H,
                 depth_path="",
                 depth_params=None,
                 is_test=False,
@@ -763,16 +783,16 @@ def readQQTTSceneInfo(
 
     # read point cloud ('pcd', 'mesh', 'hybrid')
     all_xyz, all_rgb, all_normals = [], [], []
-    if gs_init_opt in ["pcd", "hybrid"]:
-        print("Init points from pcd...")
-        pcd_path = os.path.join(path, "observation.ply")
-        if os.path.exists(pcd_path):
-            pcd = o3d.io.read_point_cloud(pcd_path)
-            xyz = np.asarray(pcd.points)
-            rgb = np.asarray(pcd.colors)
-            all_xyz.append(xyz)
-            all_rgb.append(rgb)
-            all_normals.append(np.zeros((xyz.shape[0], 3)))
+    # if gs_init_opt in ["pcd", "hybrid"]:
+    #     print("Init points from pcd...")
+    #     pcd_path = os.path.join(path, "observation.ply")
+    #     if os.path.exists(pcd_path):
+    #         pcd = o3d.io.read_point_cloud(pcd_path)
+    #         xyz = np.asarray(pcd.points)
+    #         rgb = np.asarray(pcd.colors)
+    #         all_xyz.append(xyz)
+    #         all_rgb.append(rgb)
+    #         all_normals.append(np.zeros((xyz.shape[0], 3)))
 
     if gs_init_opt in ["mesh", "hybrid"]:
         print("Init points from mesh...")

@@ -488,6 +488,17 @@ def interpolate_motions_speedup(bones, motions, relations, xyz, rot=None, quat=N
     # Return sparse weights representation for reuse
     weights_sparse = (weights, weights_indices)
 
+    # try:
+    #     print(f"[DBG:{step}] bones mean {bones.mean(dim=0).cpu().numpy()}, bones min {bones.min(dim=0).values.cpu().numpy()}, bones max {bones.max(dim=0).values.cpu().numpy()}")
+    #     print(f"[DBG:{step}] xyz mean {xyz.mean(dim=0).cpu().numpy()}, xyz min {xyz.min(dim=0).values.cpu().numpy()}, xyz max {xyz.max(dim=0).values.cpu().numpy()}")
+    #     if 'selected_bones' in locals():
+    #         print(f"[DBG:{step}] selected_bones mean {(selected_bones.mean(dim=(0,1)).cpu().numpy())}")
+    #     if 'selected_transforms' in locals():
+    #         t = selected_transforms[:, :, :3, 3].reshape(-1, 3)
+    #         print(f"[DBG:{step}] transforms trans mean {t.mean(dim=0).cpu().numpy()}, trans std {t.std(dim=0).cpu().numpy()}")
+    # except Exception as e:
+    #     print(f"[DBG:{step}] debug print failed: {e}")
+
     # xyz_transformed: (n_particles, 3)
     # rot: (n_particles, 3, 3) / (n_particles, 4)
     # weights: (n_particles, n_bones)

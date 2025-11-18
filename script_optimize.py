@@ -1,18 +1,23 @@
-import glob
 import os
 import json
+import csv
 
 base_path = "./data/different_types"
-dir_names = glob.glob(f"{base_path}/*")
-for dir_name in dir_names:
-    case_name = dir_name.split("/")[-1]
+
+with open("data_config.csv", newline="", encoding="utf-8") as csvfile:
+    reader = csv.reader(csvfile)
+    for row in reader:
+        case_name = row[0]
+        
+        if not os.path.exists(f"{base_path}/{case_name}"):
+            continue
     
-    # Read the train test split
-    with open(f"{base_path}/{case_name}/split.json", "r") as f:
-        split = json.load(f)
+        # Read the train test split
+        with open(f"{base_path}/{case_name}/split.json", "r") as f:
+            split = json.load(f)
 
-    train_frame = split["train"][1]
+        train_frame = split["train"][1]
 
-    os.system(
-        f"python optimize_cma.py --base_path {base_path} --case_name {case_name} --train_frame {train_frame}"
-    )
+        os.system(
+            f"python optimize_cma.py --base_path {base_path} --case_name {case_name} --train_frame {train_frame}"
+        )

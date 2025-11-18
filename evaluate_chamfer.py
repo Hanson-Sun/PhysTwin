@@ -14,6 +14,16 @@ output_file = "results/final_results.csv"
 if not os.path.exists("results"):
     os.makedirs("results")
 
+# Read case names from data_config.csv
+def get_case_names():
+    case_names = []
+    with open("data_config.csv", "r") as f:
+        reader = csv.reader(f)
+        for row in reader:
+            if row:  # skip empty lines
+                case_names.append(row[0])
+    return case_names
+
 def evaluate_prediction(
     start_frame,
     end_frame,
@@ -79,9 +89,9 @@ if __name__ == "__main__":
         ]
     )
 
-    dir_names = glob.glob(f"{prediction_dir}/*")
-    for dir_name in dir_names:
-        case_name = dir_name.split("/")[-1]
+    case_names = get_case_names()
+    for case_name in case_names:
+        dir_name = f"{prediction_dir}/{case_name}"
         print(f"Processing {case_name}")
 
         # Read the trajectory data

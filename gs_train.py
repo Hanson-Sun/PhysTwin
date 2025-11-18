@@ -102,6 +102,100 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         viewpoint_cam = viewpoint_stack.pop(rand_idx)
         vind = viewpoint_indices.pop(rand_idx)
 
+        # if iteration % 100 == 0:
+        #     try:
+        #         def _to_cpu_minmax(t):
+        #             t = t.detach().cpu()
+        #             return float(t.min()), float(t.max()), float(t.mean())
+
+        #         cam_center = getattr(viewpoint_cam, "camera_center", None)
+        #         if cam_center is None:
+        #             cam_center = getattr(viewpoint_cam, "world_view_transform", None)
+        #         K = getattr(viewpoint_cam, "intrinsics", None) or getattr(viewpoint_cam, "K", None)
+        #         orig_img = getattr(viewpoint_cam, "original_image", None)
+        #         print(f"[DBG] iteration={iteration} picked_cam_index={vind}")
+        #         if cam_center is not None:
+        #             try:
+        #                 print(f"[DBG] cam_center (sample) = {cam_center[:3] if hasattr(cam_center,'shape') else cam_center}")
+        #             except:
+        #                 print(f"[DBG] cam_center = {cam_center}")
+        #         if K is not None:
+        #             try:
+        #                 print(f"[DBG] intrinsics K = {K if isinstance(K, (list,tuple)) else (K.shape if hasattr(K,'shape') else K)}")
+        #             except:
+        #                 print(f"[DBG] intrinsics = {K}")
+        #         if orig_img is None:
+        #             print("[DBG] original_image is None")
+        #         else:
+        #             try:
+        #                 mn, mx, me = _to_cpu_minmax(orig_img)
+        #                 print(f"[DBG] original_image shape={tuple(orig_img.shape)} min={mn:.6f} max={mx:.6f} mean={me:.6f}")
+        #             except Exception as e:
+        #                 print(f"[DBG] original_image stats failed: {e}")
+        #         try:
+        #             # GaussianModel exposes xyz via property `get_xyz` (a Parameter)
+        #             if hasattr(gaussians, "get_xyz"):
+        #                 xyz_param = gaussians.get_xyz
+        #                 # xyz_param is a Parameter; detach and move to CPU
+        #                 if isinstance(xyz_param, torch.nn.Parameter) or hasattr(xyz_param, 'detach'):
+        #                     xyz = xyz_param.detach()
+        #                 else:
+        #                     xyz = torch.tensor(xyz_param)
+        #                 xyz_cpu = xyz.cpu()
+        #                 print(f"[DBG] gaussians.xyz shape={tuple(xyz_cpu.shape)} min={float(xyz_cpu.min()):.6f} max={float(xyz_cpu.max()):.6f}")
+        #                 sample_n = min(5, xyz_cpu.shape[0])
+        #                 print(f"[DBG] gaussians.xyz sample={xyz_cpu[:sample_n].numpy()}")
+        #                 try:
+        #                     import numpy as np
+        #                     xyz_full = xyz_cpu.numpy()
+        #                     total_pts = xyz_full.shape[0]
+        #                     # fraction of near-exact duplicates after rounding
+        #                     rounded = np.round(xyz_full, 4)
+        #                     uniques = np.unique(rounded, axis=0)
+        #                     dup_frac = 1.0 - float(len(uniques)) / float(total_pts)
+        #                     print(f"[DBG] dup_frac_rounded4={dup_frac:.6f} unique={len(uniques)} total={total_pts}")
+
+        #                     # simple 2-means on a random sample to find if there are two clusters
+        #                     sample_size = min(20000, total_pts)
+        #                     rng = np.random.default_rng(42)
+        #                     sidx = rng.choice(total_pts, sample_size, replace=False)
+        #                     sample_pts = xyz_full[sidx]
+        #                     # init centers
+        #                     centers = np.vstack((sample_pts[0], sample_pts[sample_size//2]))
+        #                     for _km in range(20):
+        #                         d0 = np.linalg.norm(sample_pts - centers[0], axis=1)
+        #                         d1 = np.linalg.norm(sample_pts - centers[1], axis=1)
+        #                         mask = d0 < d1
+        #                         if mask.sum() == 0 or (~mask).sum() == 0:
+        #                             break
+        #                         c0 = sample_pts[mask].mean(axis=0)
+        #                         c1 = sample_pts[~mask].mean(axis=0)
+        #                         if np.allclose(c0, centers[0]) and np.allclose(c1, centers[1]):
+        #                             break
+        #                         centers = np.vstack((c0, c1))
+        #                     counts0 = int(mask.sum())
+        #                     counts1 = int(sample_size - counts0)
+        #                     sep = float(np.linalg.norm(centers[0] - centers[1]))
+        #                     print(f"[DBG] kmeans2_sample counts={counts0},{counts1} centroids={[centers[0].tolist(), centers[1].tolist()]} separation={sep:.6f}")
+        #                 except Exception as e:
+        #                     print(f"[DBG] gaussians cluster failed: {e}")
+        #             elif hasattr(gaussians, "means"):
+        #                 xyz = gaussians.means
+        #                 xyz_cpu = xyz.detach().cpu()
+        #                 print(f"[DBG] gaussians.means shape={tuple(xyz_cpu.shape)} min={float(xyz_cpu.min()):.6f} max={float(xyz_cpu.max()):.6f}")
+        #                 sample_n = min(5, xyz_cpu.shape[0])
+        #                 print(f"[DBG] gaussians.means sample={xyz_cpu[:sample_n].numpy()}")
+        #         except Exception as e:
+        #             print(f"[DBG] gaussians dump failed: {e}")
+        #         # quick camera-list duplication check
+        #         try:
+        #             cams = scene.getTrainCameras()
+        #             print(f"[DBG] total_train_cameras={len(cams)}")
+        #         except:
+        #             pass
+        #     except Exception as e:
+        #         print(f"[DBG] camera debug failed: {e}")
+
         # Render
         if (iteration - 1) == debug_from:
             pipe.debug = True
@@ -291,6 +385,7 @@ if __name__ == "__main__":
     lp = ModelParams(parser)
     op = OptimizationParams(parser)
     pp = PipelineParams(parser)
+
     parser.add_argument('--ip', type=str, default="127.0.0.1")
     parser.add_argument('--port', type=int, default=6009)
     parser.add_argument('--debug_from', type=int, default=-1)

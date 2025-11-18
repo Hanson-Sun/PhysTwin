@@ -14,10 +14,11 @@ if ! docker image inspect $username/phystwin:1.0 > /dev/null 2>&1; then
 fi
 
 # Check if the X11 server is running
-if ! pgrep -x "Xorg" > /dev/null; then
-    echo "X11 server is not running. Please start the X11 server first."
+if [ -z "$DISPLAY" ]; then
+    echo "DISPLAY is not set. X11 may not be running."
     exit 1
 fi
+
 
 # Allow access to the X11 server for local connections
 # This command allows the root user to access the X11 server
@@ -27,8 +28,11 @@ fi
 # It is recommended to use this command only in a trusted environment.
 xhost +local:root
 
-docker run --gpus 'all,"capabilities=compute,utility,graphics"' \
-    -v /tmp/.X11-unix:/tmp/.X11-unix -e DISPLAY \
+docker run --gpus all \
+    -e DISPLAY \
+    -e WAYLAND_DISPLAY \
+    -e XDG_RUNTIME_DIR \
+    -v /mnt/wslg:/mnt/wslg \
     -v $data_dir:/PhysTwin/data \
     -v $experiments_dir:/PhysTwin/experiments \
     -v $experiments_optimization_dir:/PhysTwin/experiments_optimization \

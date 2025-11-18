@@ -9,6 +9,16 @@ base_path = "./data/different_types"
 prediction_path = "experiments"
 output_file = "results/final_track.csv"
 
+# Read case names from data_config.csv
+def get_case_names():
+    case_names = []
+    with open("data_config.csv", "r") as f:
+        reader = csv.reader(f)
+        for row in reader:
+            if row:  # skip empty lines
+                case_names.append(row[0])
+    return case_names
+
 
 def evaluate_prediction(start_frame, end_frame, vertices, gt_track_3d, idx, mask):
     track_errors = []
@@ -36,9 +46,8 @@ writer.writerow(
     ]
 )
 
-dir_names = glob.glob(f"{base_path}/*")
-for dir_name in dir_names:
-    case_name = dir_name.split("/")[-1]
+case_names = get_case_names()
+for case_name in case_names:
     # if case_name != "single_lift_dinosor":
     #     continue
     print(f"Processing {case_name}!!!!!!!!!!!!!!!")

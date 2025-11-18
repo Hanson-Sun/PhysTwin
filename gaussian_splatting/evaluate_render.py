@@ -24,6 +24,8 @@ def compute_iou(mask1, mask2):
 
 
 if __name__ == "__main__":
+    import csv
+    
     render_path = './data/render_eval_data'
     human_mask_path = "./data/different_types_human_mask"
     root_data_dir = './data/gaussian_data'
@@ -33,9 +35,17 @@ if __name__ == "__main__":
     os.makedirs(log_dir, exist_ok=True)
     log_file_path = os.path.join(log_dir, 'output_dynamic.txt')
 
+    # Read case names from data_config.csv
+    case_names = []
+    with open("data_config.csv", "r") as f:
+        reader = csv.reader(f)
+        for row in reader:
+            if row:  # skip empty lines
+                case_names.append(row[0])
+
     with open(log_file_path, 'w') as log_file:
 
-        scene_name = sorted(os.listdir(render_path))
+        scene_name = case_names  # Use data_config.csv instead of os.listdir
 
         all_psnrs_train, all_ssims_train, all_lpipss_train, all_ious_train = [], [], [], []
         all_psnrs_test, all_ssims_test, all_lpipss_test, all_ious_test = [], [], [], []
@@ -67,7 +77,12 @@ if __name__ == "__main__":
 
                 for frame_idx in train_f_idx_range:
                     gt = np.array(Image.open(os.path.join(render_path_dir, 'color', str(view_idx), f'{frame_idx}.png')))
-                    gt_mask = np.array(Image.open(os.path.join(render_path_dir, 'mask', str(view_idx), f'{frame_idx}.png')))
+                    mask_image = Image.open(os.path.join(render_path_dir, 'mask', str(view_idx), f'{frame_idx}.png'))
+                    # resize mask to match gt size if needed
+                    if mask_image.size != (gt.shape[1], gt.shape[0]):
+                        mask_image = mask_image.resize((gt.shape[1], gt.shape[0]))
+
+                    gt_mask = np.array(mask_image)
                     gt_mask = gt_mask.astype(np.float32) / 255.
 
                     render = np.array(Image.open(os.path.join(output_scene_dir, str(view_idx), f'{frame_idx:05d}.png')))
@@ -96,7 +111,12 @@ if __name__ == "__main__":
                 for frame_idx in test_f_idx_range:
                         
                     gt = np.array(Image.open(os.path.join(render_path_dir, 'color', str(view_idx), f'{frame_idx}.png')))
-                    gt_mask = np.array(Image.open(os.path.join(render_path_dir, 'mask', str(view_idx), f'{frame_idx}.png')))
+                    mask_image = Image.open(os.path.join(render_path_dir, 'mask', str(view_idx), f'{frame_idx}.png'))
+                    # resize mask to match gt size if needed
+                    if mask_image.size != (gt.shape[1], gt.shape[0]):
+                        mask_image = mask_image.resize((gt.shape[1], gt.shape[0]))
+                        
+                    gt_mask = np.array(mask_image)
                     gt_mask = gt_mask.astype(np.float32) / 255.
 
                     render = np.array(Image.open(os.path.join(output_scene_dir, str(view_idx), f'{frame_idx:05d}.png')))

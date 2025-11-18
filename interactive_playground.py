@@ -83,6 +83,9 @@ if __name__ == "__main__":
     cfg.WH = data["WH"]
     cfg.bg_img_path = args.bg_img_path
 
+    print(cfg.WH)
+    print(cfg.intrinsics)
+
     exp_name = "init=hybrid_iso=True_ldepth=0.001_lnormal=0.0_laniso_0.0_lseg=1.0"
     gaussians_path = f"{args.gaussian_path}/{case_name}/{exp_name}/point_cloud/iteration_10000/point_cloud.ply"
 

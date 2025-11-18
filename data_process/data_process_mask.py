@@ -32,10 +32,18 @@ def exist_dir(dir):
         os.makedirs(dir)
 
 
-def read_mask(mask_path):
+def read_mask(mask_path, ref_shape=None):
     # Convert the white mask into binary mask
     mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
     mask = mask > 0
+
+    if (ref_shape is not None) and (len(mask) != ref_shape):
+        # resize png mask to match pcd mask size
+        mask = cv2.resize(
+            mask.astype(np.uint8),
+            (ref_shape[1], ref_shape[0]),
+            interpolation=cv2.INTER_NEAREST,
+        ).astype(bool)
     return mask
 
 
@@ -55,8 +63,9 @@ def process_pcd_mask(frame_idx, pcd_path, mask_path, mask_info, num_cam):
     for i in range(num_cam):
         # Load the object mask
         object_idx = mask_info[i]["object"]
-        mask = read_mask(f"{mask_path}/{i}/{object_idx}/{frame_idx}.png")
+        mask = read_mask(f"{mask_path}/{i}/{object_idx}/{frame_idx}.png", ref_shape=masks[i].shape)        
         object_mask = np.logical_and(masks[i], mask)
+
         object_points = points[i][object_mask]
         object_colors = colors[i][object_mask]
         pcd = o3d.geometry.PointCloud()
@@ -67,7 +76,7 @@ def process_pcd_mask(frame_idx, pcd_path, mask_path, mask_info, num_cam):
         # Load the controller mask
         controller_mask = np.zeros_like(masks[i])
         for controller_idx in mask_info[i]["controller"]:
-            mask = read_mask(f"{mask_path}/{i}/{controller_idx}/{frame_idx}.png")
+            mask = read_mask(f"{mask_path}/{i}/{controller_idx}/{frame_idx}.png", ref_shape=masks[i].shape)
             controller_mask = np.logical_or(controller_mask, mask)
         controller_mask = np.logical_and(masks[i], controller_mask)
         controller_points = points[i][controller_mask]
@@ -99,7 +108,7 @@ def process_pcd_mask(frame_idx, pcd_path, mask_path, mask_info, num_cam):
         processed_masks[frame_idx][i] = {}
         # Load the object mask
         object_idx = mask_info[i]["object"]
-        mask = read_mask(f"{mask_path}/{i}/{object_idx}/{frame_idx}.png")
+        mask = read_mask(f"{mask_path}/{i}/{object_idx}/{frame_idx}.png", ref_shape=masks[i].shape)
         object_mask = np.logical_and(masks[i], mask)
         object_points = points[i][object_mask]
         indices = np.nonzero(object_mask)
@@ -118,7 +127,7 @@ def process_pcd_mask(frame_idx, pcd_path, mask_path, mask_info, num_cam):
         # Load the controller mask
         controller_mask = np.zeros_like(masks[i])
         for controller_idx in mask_info[i]["controller"]:
-            mask = read_mask(f"{mask_path}/{i}/{controller_idx}/{frame_idx}.png")
+            mask = read_mask(f"{mask_path}/{i}/{controller_idx}/{frame_idx}.png", ref_shape=masks[i].shape)
             controller_mask = np.logical_or(controller_mask, mask)
         controller_mask = np.logical_and(masks[i], controller_mask)
         controller_points = points[i][controller_mask]

@@ -187,7 +187,7 @@ class InvPhyTrainerWarp:
         controller_points,
         object_radius=0.02,
         object_max_neighbours=30,
-        controller_radius=0.04,
+        controller_radius=0.07,
         controller_max_neighbours=50,
         mask=None,
     ):
@@ -227,17 +227,30 @@ class InvPhyTrainerWarp:
                 # Connect the springs between the controller points and the object points
                 num_object_points = len(points)
                 points = np.concatenate([points, controller_points], axis=0)
+                disconnected_idx = []
                 for i in range(len(controller_points)):
                     [k, idx, _] = pcd_tree.search_hybrid_vector_3d(
                         controller_points[i],
                         controller_radius,
                         controller_max_neighbours,
                     )
+                    
+                    # If no neighbors found within controller_radius, find the nearest neighbor
+                    # This ensures every control point is connected to the object
+                    # TODO: there has to be a better way
+                    if len(idx) == 0:
+                        disconnected_idx.append(i)
+                        [k, idx, _] = pcd_tree.search_knn_vector_3d(controller_points[i], 1)
+                    
                     for j in idx:
                         springs.append([num_object_points + i, j])
                         rest_lengths.append(
                             np.linalg.norm(controller_points[i] - points[j])
                         )
+                if len(disconnected_idx) > 0:
+                    logger.warning(
+                        f"Total {len(disconnected_idx)} disconnected control points: {disconnected_idx[:min(6, len(disconnected_idx))]} {'...' if len(disconnected_idx) > 6 else ''}"
+                    )
 
             springs = np.array(springs)
             rest_lengths = np.array(rest_lengths)
@@ -1000,6 +1013,10 @@ class InvPhyTrainerWarp:
         image_path = cfg.bg_img_path
         overlay = cv2.imread(image_path)
         overlay = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
+        
+        # resize overlay to match width, and height
+        overlay = cv2.resize(overlay, (width, height))
+        
         overlay = torch.tensor(overlay, dtype=torch.float32, device=cfg.device)
 
         if n_ctrl_parts > 1:
@@ -1198,6 +1215,7 @@ class InvPhyTrainerWarp:
                 image_mask = torch.logical_and(
                     (image != 0.0).any(dim=2), image[:, :, 3] > 100 / 255
                 )
+
             image[..., 3].masked_fill_(~image_mask, 0.0)
 
             alpha = image[..., 3:4]
@@ -1544,7 +1562,7 @@ class InvPhyTrainerWarp:
 
         vis = o3d.visualization.Visualizer()
         vis.create_window(visible=False, width=width, height=height)
-        fourcc = cv2.VideoWriter_fourcc(*"avc1")  # Codec for .mp4 file format
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # Codec for .mp4 file format
         video_writer = cv2.VideoWriter(video_path, fourcc, FPS, (width, height))
 
         frame_path = f"{cfg.overlay_path}/{vis_cam_idx}/0.png"
@@ -1836,7 +1854,7 @@ class InvPhyTrainerWarp:
 
         vis = o3d.visualization.Visualizer()
         vis.create_window(visible=False, width=width, height=height)
-        fourcc = cv2.VideoWriter_fourcc(*"avc1")  # Codec for .mp4 file format
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # Codec for .mp4 file format
         video_writer = cv2.VideoWriter(video_path, fourcc, FPS, (width, height))
 
         frame_path = f"{cfg.overlay_path}/{vis_cam_idx}/0.png"
