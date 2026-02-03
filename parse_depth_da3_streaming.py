@@ -279,13 +279,30 @@ class VideoWriterManager:
 # Data Loading
 # ═══════════════════════════════════════════════════════════════════════════
 
-def load_calibration(case_dir: Path) -> Tuple[List[CameraConfig], List[int]]:
-    """Load camera calibration data."""
-    calib_path = case_dir / "calibrate.pkl"
+def load_calibration(case_dir: Path, calib_path: Optional[Path] = None, meta_path: Optional[Path] = None) -> Optional[Tuple[List[CameraConfig], List[int]]]:
+    """
+    Load camera calibration data from files.
+    
+    Args:
+        case_dir: Case directory
+        calib_path: Path to calibrate.pkl (defaults to case_dir/calibrate.pkl)
+        meta_path: Path to metadata.json (defaults to case_dir/metadata.json)
+        
+    Returns:
+        Tuple of (configs, camera_ids) if files exist, None otherwise
+    """
+    if calib_path is None:
+        calib_path = case_dir / "calibrate.pkl"
+    if meta_path is None:
+        meta_path = case_dir / "metadata.json"
+    
+    # Check if files exist
+    if not calib_path.exists() or not meta_path.exists():
+        return None
+    
     with open(calib_path, "rb") as f:
         c2w_list = pickle.load(f)
     
-    meta_path = case_dir / "metadata.json"
     with open(meta_path, "r") as f:
         metadata = json.load(f)
     
@@ -311,6 +328,169 @@ def load_calibration(case_dir: Path) -> Tuple[List[CameraConfig], List[int]]:
     return configs, camera_ids
 
 
+def infer_calibration(
+    model: DepthAnything3,
+    camera_configs: List[CameraConfig],
+    frame_names: List[str],
+    num_frames: int = 3,
+    device: torch.device = torch.device("cpu")
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Infer camera intrinsics and extrinsics from the first few frames.
+    
+    Args:
+        model: DepthAnything3 model
+        camera_configs: List of camera configs (with image paths but no calibration yet)
+        frame_names: List of all available frame names
+        num_frames: Number of frames to use for inference (default: 3)
+        device: Torch device
+        
+    Returns:
+        Tuple of (intrinsics_array, extrinsics_array) both shape (num_cameras, ...)
+    """
+    print(f"\n[*] Inferring camera intrinsics and extrinsics from first {num_frames} frames...")
+    
+    # Use only first num_frames for inference
+    infer_frames = frame_names[:min(num_frames, len(frame_names))]
+    num_cams = len(camera_configs)
+    
+    # Collect images (without calibration - let DA3 infer it)
+    all_images = []
+    for frame_name in infer_frames:
+        for config in camera_configs:
+            img_path = config.image_dir / frame_name
+            if not img_path.exists():
+                raise FileNotFoundError(f"Image not found: {img_path}")
+            all_images.append(str(img_path))
+    
+    print(f"    Processing {len(infer_frames)} frames × {num_cams} cameras = {len(all_images)} images")
+    
+    # Run inference WITHOUT providing intrinsics/extrinsics
+    # This makes DA3 infer them
+    with torch.no_grad():
+        prediction = model.inference(
+            image=all_images,
+            # Note: NOT providing intrinsics/extrinsics - let DA3 infer them
+        )
+    
+    # Extract inferred calibration
+    if prediction.intrinsics is None or prediction.extrinsics is None:
+        raise RuntimeError("DA3 failed to infer camera intrinsics/extrinsics")
+    
+    # prediction.intrinsics shape: (num_images, 3, 3)
+    # prediction.extrinsics shape: (num_images, 4, 4)
+    # We need to reshape to (num_cameras, 3, 3) and (num_cameras, 4, 4)
+    # Assume first num_cams images correspond to first frame, next num_cams to second frame, etc.
+    
+    inferred_intrinsics = []
+    inferred_extrinsics = []
+    
+    # Average calibration across all frames (they should be similar for a fixed multi-camera setup)
+    for cam_id in range(num_cams):
+        cam_intrinsics = []
+        cam_extrinsics = []
+        
+        for frame_idx in range(len(infer_frames)):
+            global_idx = frame_idx * num_cams + cam_id
+            cam_intrinsics.append(prediction.intrinsics[global_idx])
+            # Ensure extrinsics are 4x4 before averaging (DA3 may return 3x4)
+            ext = ensure_4x4_matrix(prediction.extrinsics[global_idx])
+            cam_extrinsics.append(ext)
+        
+        # Average across frames
+        avg_intrinsics = np.mean(cam_intrinsics, axis=0)
+        avg_extrinsics = np.mean(cam_extrinsics, axis=0)
+        
+        inferred_intrinsics.append(avg_intrinsics)
+        inferred_extrinsics.append(avg_extrinsics)
+    
+    intrinsics_array = np.stack(inferred_intrinsics, axis=0)
+    extrinsics_array = np.stack(inferred_extrinsics, axis=0)
+    
+    print(f"    ✓ Inferred intrinsics shape: {intrinsics_array.shape}")
+    print(f"    ✓ Inferred extrinsics shape: {extrinsics_array.shape}")
+    
+    return intrinsics_array, extrinsics_array
+
+
+def save_calibration(
+    case_dir: Path,
+    intrinsics: np.ndarray,
+    extrinsics: np.ndarray,
+    calib_path: Optional[Path] = None,
+    meta_path: Optional[Path] = None
+):
+    """
+    Save inferred camera calibration for future use.
+    
+    Args:
+        case_dir: Case directory
+        intrinsics: Camera intrinsics array (N, 3, 3)
+        extrinsics: Camera extrinsics array (N, 4, 4) - world-to-camera
+        calib_path: Path to save calibrate.pkl (defaults to case_dir/calibrate.pkl)
+        meta_path: Path to save metadata.json (defaults to case_dir/metadata.json)
+    """
+    if calib_path is None:
+        calib_path = case_dir / "calibrate.pkl"
+    if meta_path is None:
+        meta_path = case_dir / "metadata.json"
+    
+    print(f"\n[*] Saving calibration...")
+    
+    # Convert extrinsics (w2c) to c2w for storage
+    c2w_list = []
+    for w2c in extrinsics:
+        # Ensure extrinsics are 4x4 (DA3 may return 3x4)
+        w2c = ensure_4x4_matrix(w2c)
+        c2w = np.linalg.inv(w2c)
+        c2w_list.append(c2w)
+    
+    # Save calibrate.pkl
+    with open(calib_path, "wb") as f:
+        pickle.dump(c2w_list, f)
+    print(f"    ✓ Saved {calib_path}")
+    
+    # Save metadata.json
+    metadata = {
+        "intrinsics": [ixt.tolist() for ixt in intrinsics]
+    }
+    with open(meta_path, "w") as f:
+        json.dump(metadata, f, indent=2)
+    print(f"    ✓ Saved {meta_path}")
+
+
+def create_camera_configs_from_calibration(
+    case_dir: Path,
+    intrinsics: np.ndarray,
+    extrinsics: np.ndarray
+) -> Tuple[List[CameraConfig], List[int]]:
+    """
+    Create camera configs from calibration data.
+    
+    Args:
+        case_dir: Case directory
+        intrinsics: Camera intrinsics array (N, 3, 3)
+        extrinsics: Camera extrinsics array (N, 4, 4) - world-to-camera
+        
+    Returns:
+        Tuple of (configs, camera_ids)
+    """
+    num_cams = len(intrinsics)
+    camera_ids = list(range(num_cams))
+    
+    configs = []
+    for cam_id in camera_ids:
+        img_dir = case_dir / "color" / str(cam_id)
+        
+        configs.append(CameraConfig(
+            intrinsics=intrinsics[cam_id],
+            extrinsics=extrinsics[cam_id],  # Already world-to-camera
+            image_dir=img_dir
+        ))
+    
+    return configs, camera_ids
+
+
 def find_synchronized_frames(camera_configs: List[CameraConfig]) -> List[str]:
     """Find frame filenames that exist across all cameras."""
     frame_sets = []
@@ -327,6 +507,39 @@ def find_synchronized_frames(camera_configs: List[CameraConfig]) -> List[str]:
         raise ValueError("No synchronized frames found across all cameras")
     
     return sorted(common_frames, key=extract_frame_number)
+
+
+def create_temp_camera_configs(case_dir: Path) -> List[CameraConfig]:
+    """
+    Create temporary camera configs for finding synchronized frames.
+    Used when calibration is not yet available.
+    
+    Args:
+        case_dir: Case directory
+        
+    Returns:
+        List of camera configs with image paths but dummy calibration
+    """
+    color_dir = case_dir / "color"
+    if not color_dir.exists():
+        raise FileNotFoundError(f"Color directory not found: {color_dir}")
+    
+    # Find all camera directories
+    camera_dirs = sorted([d for d in color_dir.iterdir() if d.is_dir()])
+    
+    if not camera_dirs:
+        raise ValueError("No camera directories found in color folder")
+    
+    configs = []
+    for cam_dir in camera_dirs:
+        cam_id = int(cam_dir.name)
+        configs.append(CameraConfig(
+            intrinsics=np.eye(3, dtype=np.float32),  # Dummy
+            extrinsics=np.eye(4, dtype=np.float32),  # Dummy
+            image_dir=cam_dir
+        ))
+    
+    return configs
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -360,14 +573,18 @@ def process_chunk(
     
     # Stack calibration data
     intrinsics_tensor = np.stack(all_intrinsics, axis=0)
-    extrinsics_tensor = np.stack(all_extrinsics, axis=0)
+    
+    # Ensure all extrinsics are 4x4 (DA3 may have inferred them as 3x4)
+    extrinsics_4x4 = [ensure_4x4_matrix(ext) for ext in all_extrinsics]
+    extrinsics_tensor = np.stack(extrinsics_4x4, axis=0)
     
     # Run inference on entire chunk
     with torch.no_grad():
         prediction = model.inference(
             image=all_images,
             intrinsics=intrinsics_tensor,
-            extrinsics=extrinsics_tensor
+            extrinsics=extrinsics_tensor,
+            align_to_input_ext_scale=True  # Rescale depth to match input extrinsic scale
         )
     
     # Reorganize results by camera
@@ -388,6 +605,51 @@ def process_chunk(
             chunk_depths[cam_id].append(depth)
     
     return chunk_depths
+
+
+def visualize_first_frame_3d(output_root: Path, verbose: bool = False):
+    """
+    Visualize the first frame's depth maps in 3D using Open3D.
+    
+    Args:
+        output_root: Output directory containing depth maps and calibration
+        verbose: Whether to print debug info
+    """
+    try:
+        from visualize_3d_scene import visualize_depth_scene
+        
+        # Get first frame name from sorted depths in camera 0
+        cam_0_dir = output_root / "0"
+        if not cam_0_dir.exists():
+            if verbose:
+                tqdm.write("  ! Camera 0 directory not found")
+            return
+        
+        depth_files = sorted([f for f in os.listdir(cam_0_dir) if f.endswith(".npy")])
+        if not depth_files:
+            if verbose:
+                tqdm.write("  ! No depth files found")
+            return
+        
+        frame_name = depth_files[0].replace(".npy", "")
+        
+        if verbose:
+            tqdm.write(f"  → Visualizing frame: {frame_name}")
+        
+        visualize_depth_scene(
+            depth_root=str(output_root),
+            calibrate_path=str(output_root / "calibrate.pkl"),
+            metadata_path=str(output_root / "metadata.json"),
+            frame_name=frame_name,
+            depth_scale=None,
+            auto_scale=True,
+            show_cameras=True,
+            frustum_scale=0.05,
+            axis_scale=0.01,
+            max_depth=100.0
+        )
+    except Exception as e:
+        tqdm.write(f"  ✗ Error visualizing 3D: {e}")
 
 
 def save_chunk_results(
@@ -538,6 +800,14 @@ def process_multi_camera_streaming(
                 verbose=args.verbose
             )
             
+            # Visualize first frame in 3D if requested (after first chunk completes)
+            if is_first and args.visualize_3d:
+                pbar.close()  # Close progress bar to avoid interference
+                print("\n[Visualizing first frame in 3D...]")
+                visualize_first_frame_3d(output_root, verbose=args.verbose)
+                print(f"\n[Resuming processing...]")
+                pbar = tqdm(total=num_chunks, desc="Processing chunks", unit="chunk", initial=chunk_idx+1)
+            
             # Move to next chunk
             start_idx += stride
             chunk_idx += 1
@@ -564,23 +834,34 @@ def main():
     )
     
     # I/O
-    parser.add_argument("--case_dir", type=Path, required=True)
-    parser.add_argument("--output_root", type=Path, default=Path("parsed_depth_DA3_streaming_test"))
+    parser.add_argument("--case_dir", type=Path, required=True,
+                       help="Case directory containing color/ subdirectory with images")
+    parser.add_argument("--output_root", type=Path, default=Path("parsed_depth_DA3_streaming"),
+                       help="Root output directory")
+    
+    # Calibration (optional)
+    parser.add_argument("--calibration", type=Path, default=None,
+                       help="Path to calibrate.pkl (optional, defaults to case_dir/calibrate.pkl)")
+    parser.add_argument("--metadata", type=Path, default=None,
+                       help="Path to metadata.json (optional, defaults to case_dir/metadata.json)")
+    parser.add_argument("--infer_calib_frames", type=int, default=3,
+                       help="Number of frames to use for inferring camera calibration (if not provided)")
     
     # Model
     parser.add_argument("--model", default="depth-anything/DA3NESTED-GIANT-LARGE")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     
     # Chunk configuration
-    parser.add_argument("--chunk_size", type=int, default=5, 
+    parser.add_argument("--chunk_size", type=int, default=3, 
                        help="Number of frames per chunk")
-    parser.add_argument("--overlap", type=int, default=4,
+    parser.add_argument("--overlap", type=int, default=2,
                        help="Overlapping frames between chunks")
     parser.add_argument("--blend_mode", choices=["linear", "avg", "last"], default="linear",
                        help="How to blend overlapping regions")
     
     # Visualization
     parser.add_argument("--visualize", action="store_true")
+    parser.add_argument("--visualize_3d", action="store_true", help="Visualize first frame depth map in 3D using Open3D")
     parser.add_argument("--fps", type=int, default=30)
     parser.add_argument("--verbose", action="store_true", help="Print detailed debug information")
     
@@ -605,22 +886,73 @@ def main():
     print(f"Blend mode:    {args.blend_mode}")
     print("=" * 80)
     
-    # Load data
-    print("\n[1/4] Loading calibration...")
-    camera_configs, camera_ids = load_calibration(args.case_dir)
-    print(f"      {len(camera_configs)} cameras")
+    # Try to load calibration, infer if not found
+    print("\n[1/5] Loading/inferring calibration...")
+    calib_result = load_calibration(args.case_dir, args.calibration, args.metadata)
     
-    print("\n[2/4] Finding synchronized frames...")
-    frame_names = find_synchronized_frames(camera_configs)
-    print(f"      {len(frame_names)} frames")
+    if calib_result is not None:
+        camera_configs, camera_ids = calib_result
+        print(f"      ✓ Loaded calibration from files")
+        print(f"      {len(camera_configs)} cameras")
+        has_calibration = True
+        inferred = False
+    else:
+        print(f"      ! No calibration files found")
+        print(f"      ! Will infer from first {args.infer_calib_frames} frames")
+        
+        # Need to find frames first using temporary configs
+        print("\n[2/5] Finding synchronized frames...")
+        temp_configs = create_temp_camera_configs(args.case_dir)
+        frame_names = find_synchronized_frames(temp_configs)
+        print(f"      {len(frame_names)} frames found")
+        
+        # Load model early for calibration inference
+        print(f"\n[3/5] Loading model...")
+        torch.set_grad_enabled(False)
+        model = DepthAnything3.from_pretrained(args.model)
+        model = model.to(args.device)
+        model.eval()
+        
+        # Infer calibration from first frames
+        print(f"\n[4/5] Inferring camera calibration...")
+        intrinsics, extrinsics = infer_calibration(
+            model=model,
+            camera_configs=temp_configs,
+            frame_names=frame_names,
+            num_frames=args.infer_calib_frames,
+            device=args.device
+        )
+        
+        # Save inferred calibration to case_dir (for future runs)
+        save_calibration(args.case_dir, intrinsics, extrinsics, args.calibration, args.metadata)
+        
+        # Also save to output_dir (for output tracking)
+        save_calibration(output_dir, intrinsics, extrinsics)
+        
+        # Create configs from inferred calibration
+        camera_configs, camera_ids = create_camera_configs_from_calibration(
+            args.case_dir, intrinsics, extrinsics
+        )
+        has_calibration = False
+        inferred = True
     
-    print(f"\n[3/4] Loading model...")
-    torch.set_grad_enabled(False)
-    model = DepthAnything3.from_pretrained(args.model)
-    model = model.to(args.device)
-    model.eval()
+    # Find synchronized frames (if not already done)
+    if has_calibration:
+        print("\n[2/5] Finding synchronized frames...")
+        frame_names = find_synchronized_frames(camera_configs)
+        print(f"      {len(frame_names)} frames")
+        
+        print(f"\n[3/5] Loading model...")
+        torch.set_grad_enabled(False)
+        model = DepthAnything3.from_pretrained(args.model)
+        model = model.to(args.device)
+        model.eval()
+        
+        step = 4
+    else:
+        step = 5  # Model and frames already loaded
     
-    print("\n[4/4] Processing chunks...")
+    print(f"\n[{step}/{step}] Processing chunks...")
     process_multi_camera_streaming(
         model=model,
         camera_configs=camera_configs,
@@ -633,7 +965,34 @@ def main():
     print("\n" + "=" * 80)
     print("✓ Complete!")
     print(f"✓ Output: {output_dir}")
+    print(f"✓ Calibration: {output_dir / 'calibrate.pkl'}")
+    print(f"✓ Metadata:    {output_dir / 'metadata.json'}")
+    if inferred:
+        print(f"   (also saved to case_dir for future use)")
     print("=" * 80)
+    
+    # Visualize first frame in 3D if requested
+    if args.visualize_3d:
+        print("\n[Bonus] Visualizing first frame in 3D...")
+        try:
+            from visualize_3d_scene import visualize_depth_scene
+            # Get first frame name from sorted depths
+            first_frame = sorted(os.listdir(output_dir / "0"))[0]
+            frame_name = first_frame.replace(".npy", "")
+            visualize_depth_scene(
+                depth_root=str(output_dir),
+                calibrate_path=str(output_dir / "calibrate.pkl"),
+                metadata_path=str(output_dir / "metadata.json"),
+                frame_name=frame_name,
+                depth_scale=None,
+                auto_scale=True,
+                show_cameras=True,
+                frustum_scale=0.05,
+                axis_scale=0.01,
+                max_depth=100.0
+            )
+        except Exception as e:
+            print(f"✗ Error visualizing 3D: {e}")
 
 
 if __name__ == "__main__":
