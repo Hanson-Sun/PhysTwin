@@ -318,6 +318,14 @@ if __name__ == "__main__":
     # Get mask bounding box, larger than the original bounding box
     mask_img = cv2.imread(mask_img_path, cv2.IMREAD_GRAYSCALE)
 
+    # scale mask to match raw image resolution if needed
+    if (mask_img.shape[0], mask_img.shape[1]) != (raw_img.shape[0], raw_img.shape[1]):
+        mask_img = cv2.resize(
+            mask_img,
+            (raw_img.shape[1], raw_img.shape[0]),
+            interpolation=cv2.INTER_NEAREST,
+        )
+
     # Calculate camera parameters
     fov = 2 * np.arctan(raw_img.shape[1] / (2 * intrinsic[0, 0]))
 
@@ -348,6 +356,7 @@ if __name__ == "__main__":
         )
         # Get the masked cropped image used for superglue
         crop_img = raw_img.copy()
+
         mask_bool = mask_img > 0
         crop_img[~mask_bool] = 0
         crop_img = crop_img[bbox[1] : bbox[3], bbox[0] : bbox[2]]

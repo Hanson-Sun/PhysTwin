@@ -800,14 +800,6 @@ def process_multi_camera_streaming(
                 verbose=args.verbose
             )
             
-            # Visualize first frame in 3D if requested (after first chunk completes)
-            if is_first and args.visualize_3d:
-                pbar.close()  # Close progress bar to avoid interference
-                print("\n[Visualizing first frame in 3D...]")
-                visualize_first_frame_3d(output_root, verbose=args.verbose)
-                print(f"\n[Resuming processing...]")
-                pbar = tqdm(total=num_chunks, desc="Processing chunks", unit="chunk", initial=chunk_idx+1)
-            
             # Move to next chunk
             start_idx += stride
             chunk_idx += 1

@@ -53,26 +53,43 @@ def filter_track(track_path, pcd_path, mask_path, frame_num, num_cam):
         tracks = current_track_data["tracks"]
         tracks = np.round(tracks).astype(int)
         visibility = current_track_data["visibility"]
-        assert tracks.shape[0] == frame_num
+        
+        # Handle case where tracks have different number of frames than pcd data
+        actual_frame_num = min(tracks.shape[0], frame_num)
+        if tracks.shape[0] != frame_num:
+            print(f"Warning: tracks have {tracks.shape[0]} frames but pcd has {frame_num} frames. Using {actual_frame_num} frames.")
+            tracks = tracks[:actual_frame_num]
+            visibility = visibility[:actual_frame_num]
+        
         num_points = np.shape(tracks)[1]
 
         # Locate the track points in the object mask of the first frame
         object_mask = processed_masks[0][i]["object"]
         track_object_idx = np.zeros((num_points), dtype=int)
+        print(object_mask.shape)
+        print(tracks.shape)
+        print(tracks[0])
+        
         for j in range(num_points):
             if visibility[0, j] == 1:
-                track_object_idx[j] = object_mask[tracks[0, j, 0], tracks[0, j, 1]]
+                y, x = tracks[0, j, 0], tracks[0, j, 1]
+                if 0 <= y < object_mask.shape[0] and 0 <= x < object_mask.shape[1]:
+                    track_object_idx[j] = object_mask[y, x]
+                else:
+                    visibility[0, j] = 0
         # Locate the controller points in the controller mask of the first frame
         controller_mask = processed_masks[0][i]["controller"]
         track_controller_idx = np.zeros((num_points), dtype=int)
         for j in range(num_points):
             if visibility[0, j] == 1:
-                track_controller_idx[j] = controller_mask[
-                    tracks[0, j, 0], tracks[0, j, 1]
-                ]
+                y, x = tracks[0, j, 0], tracks[0, j, 1]
+                if 0 <= y < controller_mask.shape[0] and 0 <= x < controller_mask.shape[1]:
+                    track_controller_idx[j] = controller_mask[y, x]
+                else:
+                    visibility[0, j] = 0
 
         # Filter out bad tracking in other frames
-        for frame_idx in range(1, frame_num):
+        for frame_idx in range(1, actual_frame_num):
             # Filter based on object_mask
             object_mask = processed_masks[frame_idx][i]["object"]
             for j in range(num_points):
@@ -95,21 +112,23 @@ def filter_track(track_path, pcd_path, mask_path, frame_num, num_cam):
                         visibility[frame_idx, j] = 0
 
         # Get the track point cloud
-        track_points = np.zeros((frame_num, num_points, 3))
-        track_colors = np.zeros((frame_num, num_points, 3))
-        for frame_idx in range(frame_num):
+        track_points = np.zeros((actual_frame_num, num_points, 3))
+        track_colors = np.zeros((actual_frame_num, num_points, 3))
+        for frame_idx in range(actual_frame_num):
             data = np.load(f"{pcd_path}/{frame_idx}.npz")
             points = data["points"]
             colors = data["colors"]
 
-            track_points[frame_idx][np.where(visibility[frame_idx])] = points[i][
-                tracks[frame_idx, np.where(visibility[frame_idx])[0], 0],
-                tracks[frame_idx, np.where(visibility[frame_idx])[0], 1],
-            ]
-            track_colors[frame_idx][np.where(visibility[frame_idx])] = colors[i][
-                tracks[frame_idx, np.where(visibility[frame_idx])[0], 0],
-                tracks[frame_idx, np.where(visibility[frame_idx])[0], 1],
-            ]
+            visible_indices = np.where(visibility[frame_idx])[0]
+            for idx in visible_indices:
+                y, x = tracks[frame_idx, idx, 0], tracks[frame_idx, idx, 1]
+                # Check bounds before indexing
+                if 0 <= y < points[i].shape[0] and 0 <= x < points[i].shape[1]:
+                    track_points[frame_idx, idx] = points[i][y, x]
+                    track_colors[frame_idx, idx] = colors[i][y, x]
+                else:
+                    # Mark as not visible if out of bounds
+                    visibility[frame_idx, idx] = 0
 
         object_points.append(track_points[:, np.where(track_object_idx)[0], :])
         object_colors.append(track_colors[:, np.where(track_object_idx)[0], :])

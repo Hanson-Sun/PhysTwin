@@ -86,9 +86,18 @@ if __name__ == "__main__":
                     gt_mask = gt_mask.astype(np.float32) / 255.
 
                     render = np.array(Image.open(os.path.join(output_scene_dir, str(view_idx), f'{frame_idx:05d}.png')))
+                    # resize render to match gt size if needed
+                    if render.shape[0] != gt.shape[0] or render.shape[1]:
+                        render = np.array(Image.fromarray(render).resize((gt.shape[1], gt.shape[0])))
+
                     render_mask = render[:, :, 3] if render.shape[-1] == 4 else np.ones_like(render[:, :, 0])
 
                     human_mask = np.array(Image.open(os.path.join(human_mask_dir, 'mask', str(view_idx), '0', f'{frame_idx}.png')))
+
+                    # resize human mask to match gt size if needed
+                    if human_mask.shape != (gt.shape[0], gt.shape[1]):
+                        human_mask = np.array(Image.fromarray(human_mask).resize((gt.shape[1], gt.shape[0])))
+
                     inv_human_mask = (1.0 - human_mask / 255.).astype(np.float32)
 
                     gt = gt.astype(np.float32) * gt_mask[..., None]

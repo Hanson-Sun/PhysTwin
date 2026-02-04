@@ -16,8 +16,6 @@ parser.add_argument("--output_path", type=str)
 parser.add_argument("--category", type=str)
 parser.add_argument("--low_memory", action="store_true", default=False, help="Use CPU offloading to reduce GPU memory (~8GB)")
 parser.add_argument("--ultra_low_memory", action="store_true", default=False, help="Extreme memory saving - runs mostly on CPU (~4GB GPU)")
-parser.add_argument("--quantize", action="store_true", default=False, help="Use 8-bit quantization - keeps model on GPU with ~50%% less memory (~6-8GB)")
-parser.add_argument("--quantize4", action="store_true", default=False, help="Use 4-bit quantization - keeps model on GPU with ~75%% less memory (~4-5GB)")
 parser.add_argument("--simple", action="store_true", default=False, help="Use simple bicubic upscaling instead of SD (no GPU needed)")
 args = parser.parse_args()
 
@@ -62,114 +60,48 @@ else:
     # load model and scheduler
     model_id = "stabilityai/stable-diffusion-x4-upscaler"
 
-    if args.quantize4 or args.quantize:
-        # Quantization - keeps model on GPU with less memory
-        try:
-            from diffusers import PipelineQuantizationConfig
+    if args.ultra_low_memory:
+        # Ultra low memory: use aggressive CPU offloading (slowest but lowest memory)
+        print("Loading model in ultra-low memory mode (this will be slow)...")
+        pipeline = StableDiffusionUpscalePipeline.from_pretrained(
+            model_id,
+            torch_dtype=torch.bfloat16,
+            low_cpu_mem_usage=True,
+        )
+        pipeline.enable_model_cpu_offload()
+        # pipeline.enable_sequential_cpu_offload()
+        pipeline.enable_xformers_memory_efficient_attention()
+        pipeline.enable_attention_slicing("max")
+        # VAE optimizations
+        if hasattr(pipeline, 'vae'):
+            pipeline.vae.enable_slicing()
+            pipeline.vae.enable_tiling()
+            print("VAE slicing and tiling enabled")
 
-            if args.quantize4:
-                print("Loading model with 4-bit quantization (~4-5GB VRAM)...")
-                quantization_config = PipelineQuantizationConfig(
-                    quant_backend="bitsandbytes_4bit",
-                    quant_kwargs={"load_in_4bit": True, "bnb_4bit_compute_dtype": torch.float16}
-                )
-            else:
-                print("Loading model with 8-bit quantization (~6-8GB VRAM)...")
-                quantization_config = PipelineQuantizationConfig(
-                    quant_backend="bitsandbytes_8bit",
-                    quant_kwargs={"load_in_8bit": True}
-                )
+        num_inference_steps = 20  # Default is 50
 
-            pipeline = StableDiffusionUpscalePipeline.from_pretrained(
-                model_id,
-                torch_dtype=torch.float16,
-                quantization_config=quantization_config,
-            )
-            pipeline.enable_attention_slicing(1)
-            #pipeline.enable_vae_tiling()
-            num_inference_steps = 50
+    elif args.low_memory:
+        # Low memory: keep model on GPU but use memory optimizations
+        print("Loading model in low-memory mode (model stays on GPU)...")
+        pipeline = StableDiffusionUpscalePipeline.from_pretrained(
+            model_id,
+            torch_dtype=torch.float16,
+        )
+        pipeline = pipeline.to("cuda")
+        # Use attention slicing to reduce memory during attention computation
+        pipeline.enable_attention_slicing(1)
+        # Use VAE slicing for large images
+        #pipeline.enable_vae_slicing()
+        # Enable tiled VAE decoding for lower memory usage
+        #pipeline.enable_vae_tiling()
+        num_inference_steps = 50  # Default
 
-        except ImportError:
-            # Older diffusers version - try transformers BitsAndBytesConfig
-            print("PipelineQuantizationConfig not available, trying transformers quantization...")
-            from transformers import BitsAndBytesConfig
-
-            if args.quantize4:
-                quantization_config = BitsAndBytesConfig(
-                    load_in_4bit=True,
-                    bnb_4bit_compute_dtype=torch.float16,
-                )
-            else:
-                quantization_config = BitsAndBytesConfig(load_in_8bit=True)
-
-            # Load just the text encoder with quantization, keep rest in fp16
-            from transformers import CLIPTextModel
-            text_encoder = CLIPTextModel.from_pretrained(
-                model_id,
-                subfolder="text_encoder",
-                quantization_config=quantization_config,
-                device_map="cuda",  # Keep on GPU
-            )
-
-            pipeline = StableDiffusionUpscalePipeline.from_pretrained(
-                model_id,
-                text_encoder=text_encoder,
-                torch_dtype=torch.float16,
-            )
-            pipeline = pipeline.to("cuda")  # Keep entire pipeline on GPU
-            pipeline.enable_attention_slicing(1)
-            #pipeline.enable_vae_tiling()
-            num_inference_steps = 50
-
-        except Exception as e:
-            print(f"Quantization failed: {e}")
-            print("Falling back to low_memory mode...")
-            args.low_memory = True
-            args.quantize = False
-            args.quantize4 = False
-
-    if not args.quantize and not args.quantize4:
-        if args.ultra_low_memory:
-            # Ultra low memory: use aggressive CPU offloading (slowest but lowest memory)
-            print("Loading model in ultra-low memory mode (this will be slow)...")
-            pipeline = StableDiffusionUpscalePipeline.from_pretrained(
-                model_id,
-                torch_dtype=torch.float16,
-                low_cpu_mem_usage=True,
-            )
-            # Model CPU offload - moves entire models to CPU, very slow
-            # pipeline.enable_model_cpu_offload()
-            # Maximum attention slicing
-            pipeline.enable_attention_slicing(1)
-            pipeline.enable_sequential_cpu_offload()
-            # VAE optimizations
-            #pipeline.enable_vae_slicing()
-            #pipeline.enable_vae_tiling()
-            # Reduce inference steps for less memory (trades quality for memory)
-            num_inference_steps = 20  # Default is 50
-
-        elif args.low_memory:
-            # Low memory: keep model on GPU but use memory optimizations
-            print("Loading model in low-memory mode (model stays on GPU)...")
-            pipeline = StableDiffusionUpscalePipeline.from_pretrained(
-                model_id,
-                torch_dtype=torch.float16,
-            )
-            pipeline = pipeline.to("cuda")
-            # Use attention slicing to reduce memory during attention computation
-            pipeline.enable_attention_slicing(1)
-            # Use VAE slicing for large images
-            #pipeline.enable_vae_slicing()
-            # Enable tiled VAE decoding for lower memory usage
-            #pipeline.enable_vae_tiling()
-            num_inference_steps = 50  # Default
-
-        else:
-            pipeline = StableDiffusionUpscalePipeline.from_pretrained(
-                model_id, torch_dtype=torch.float16
-            )
-            pipeline = pipeline.to("cuda")
-            num_inference_steps = 50
+    else:
+        pipeline = StableDiffusionUpscalePipeline.from_pretrained(
+            model_id, torch_dtype=torch.float16
+        )
+        pipeline = pipeline.to("cuda")
+        num_inference_steps = 50
 
     prompt = f"Hand manipulates a {category}."
 
@@ -177,7 +109,7 @@ else:
     upscaled_image = pipeline(
         prompt=prompt,
         image=low_res_img,
-        num_inference_steps=num_inference_steps
+        num_inference_steps=num_inference_steps,
     ).images[0]
 
     upscaled_image.save(output_path)

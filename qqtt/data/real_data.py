@@ -33,9 +33,25 @@ class RealData:
         self.num_all_points = self.num_surface_points + interior_points.shape[0]
 
         # Concatenate the surface points and interior points
+        # Reshape interior_points to 2D if needed
+        interior_points_reshaped = interior_points.reshape(-1, 3) if interior_points.ndim == 1 else interior_points
         self.structure_points = np.concatenate(
-            [object_points[0], other_surface_points, interior_points], axis=0
+            [object_points[0], other_surface_points, interior_points_reshaped], axis=0
         )
+        
+        # # Shift all points so they're above Z=0 to avoid ground collision
+        # z_min_struct = np.min(self.structure_points[:, 2])
+        # z_min_object = np.min(object_points[:, :, 2])
+        # z_min_controller = np.min(controller_points[:, :, 2])
+        # z_min_all = min(z_min_struct, z_min_object, z_min_controller)
+        
+        # if z_min_all < 0.0:
+        #     z_shift = abs(z_min_all) + 0.1  # Add small offset above ground
+        #     logger.info(f"[DATA]: Shifting all points up by {z_shift:.4f} to avoid ground collision")
+        #     self.structure_points[:, 2] += z_shift
+        #     object_points[:, :, 2] += z_shift
+        #     controller_points[:, :, 2] += z_shift
+        
         self.structure_points = torch.tensor(
             self.structure_points, dtype=torch.float32, device=cfg.device
         )

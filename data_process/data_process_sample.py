@@ -53,7 +53,7 @@ def process_unique_points(track_data):
     object_motions_valid = object_motions_valid[:, unique_idx]
 
     # Make sure all points are above the ground
-    object_points[object_points[..., 2] > 0, 2] = 0
+    # object_points[object_points[..., 2] > 0, 2] = 0  # COMMENTED OUT: This was flattening the object
 
     if SHAPE_PRIOR:
         shape_mesh_path = f"{base_path}/{case_name}/shape/matching/final_mesh.glb"
@@ -104,10 +104,16 @@ def process_unique_points(track_data):
             if grid_index not in grid_flag:
                 grid_flag[grid_index] = 1
                 final_interior_points.append(interior_points[i])
-        all_points = np.concatenate(
-            [final_surface_points, final_interior_points, object_points[0][index]],
-            axis=0,
-        )
+        
+        # Convert lists to numpy arrays
+        points_to_concat = []
+        if len(final_surface_points) > 0:
+            points_to_concat.append(np.array(final_surface_points))
+        if len(final_interior_points) > 0:
+            points_to_concat.append(np.array(final_interior_points))
+        points_to_concat.append(object_points[0][index])
+        
+        all_points = np.concatenate(points_to_concat, axis=0)
     else:
         all_points = object_points[0][index]
 
@@ -147,8 +153,8 @@ def process_unique_points(track_data):
     track_data["object_visibilities"] = object_visibilities[:, index]
     track_data["object_motions_valid"] = object_motions_valid[:, index]
     if SHAPE_PRIOR:
-        track_data["surface_points"] = np.array(final_surface_points)
-        track_data["interior_points"] = np.array(final_interior_points)
+        track_data["surface_points"] = np.array(final_surface_points) if len(final_surface_points) > 0 else np.zeros((0, 3))
+        track_data["interior_points"] = np.array(final_interior_points) if len(final_interior_points) > 0 else np.zeros((0, 3))
     else:
         track_data["surface_points"] = np.zeros((0, 3))
         track_data["interior_points"] = np.zeros((0, 3))
@@ -221,6 +227,7 @@ def visualize_track(track_data):
                 prev_center[j] = origin
             vis.poll_events()
             vis.update_renderer()
+
 
         frame = np.asarray(vis.capture_screen_float_buffer(do_render=True))
         frame = (frame * 255).astype(np.uint8)

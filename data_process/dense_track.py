@@ -125,7 +125,7 @@ if __name__ == "__main__":
         visibility_to_save = pred_visibility[0].cpu().numpy()
         
         # Rescale tracked points to match standard video resolution
-        if abs(scale_factor - 1.0) > 0.01:
+        if abs(scale_factor - 1.0) > 0.0001:
             print(f"  Rescaling tracked points by factor {scale_factor:.4f}")
             track_to_save = track_to_save * scale_factor
             track_to_save = np.round(track_to_save).astype(np.float32)
