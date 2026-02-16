@@ -71,6 +71,11 @@ class OptimizerCMA:
         else:
             raise ValueError(f"Data type {cfg.data_type} not supported")
 
+        # Debug: Print Z range for divergence detection
+        if self.object_points is not None:
+            obj_pts_np = self.object_points.cpu().numpy()
+            logger.info(f"[CMA Init] Object Z range (all frames): [{obj_pts_np[:, :, 2].min():.4f}, {obj_pts_np[:, :, 2].max():.4f}]")
+
     def _init_start(
         self,
         object_points,
@@ -406,6 +411,11 @@ class OptimizerCMA:
             if visualize == True:
                 x = wp.to_torch(self.simulator.wp_states[-1].wp_x, requires_grad=False)
                 vertices.append(x.cpu())
+                # Log Z range every 10 frames for divergence monitoring
+                if j % 10 == 0:
+                    frame_np = x.cpu().numpy()
+                    z_min, z_max = frame_np[:self.num_all_points, 2].min(), frame_np[:self.num_all_points, 2].max()
+                    logger.info(f"  Step {j:3d}: Z [{z_min:9.2f}, {z_max:9.2f}]")
 
             if cfg.data_type == "real":
                 if wp.to_torch(self.simulator.acc_count, requires_grad=False)[0] == 0:
@@ -428,6 +438,9 @@ class OptimizerCMA:
 
         if visualize == True:
             vertices = torch.stack(vertices, dim=0)
+            vert_np = vertices.cpu().numpy()
+            z_all = vert_np[:, :self.num_all_points, 2]
+            logger.info(f"[CMA] Final Z range: [{z_all.min():.2f}, {z_all.max():.2f}]")
             visualize_pc(
                 vertices[:, : self.num_all_points, :],
                 self.object_colors,

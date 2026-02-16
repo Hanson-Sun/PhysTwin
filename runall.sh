@@ -11,6 +11,9 @@ export WANDB_MODE=offline
 # Process the data
 python script_process_data.py
 
+# need to run calibrate_camera_extrinsics.py after
+python script_calibrate_camera_extrinsics.py
+
 # Further get the data for first-frame Gaussian
 python export_gaussian_data.py
 

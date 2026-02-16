@@ -113,7 +113,7 @@ def get_pcd_from_data(path, frame_idx, num_cam, intrinsics, c2ws):
         # Ensure color and depth have the same spatial resolution.
         # Resize color to match depth using bilinear interpolation for images.
         if color.shape[:2] != depth.shape:
-            color = cv2.resize(color, (depth.shape[1], depth.shape[0]), interpolation=cv2.INTER_LINEAR)
+            color = cv2.resize(color, (depth.shape[1], depth.shape[0]))
 
         color = color.astype(np.float32) / 255.0
 
@@ -121,7 +121,9 @@ def get_pcd_from_data(path, frame_idx, num_cam, intrinsics, c2ws):
             depth,
             intrinsic=intrinsics[i],
         )
-        masks = np.logical_and(points[:, :, 2] > 0.2, points[:, :, 2] < 1.5)
+        #TODO what is this
+        # print(np.max(points[:, :, 2]), np.min(points[:, :, 2]))
+        masks = np.logical_and(points[:, :, 2] > 0.02, points[:, :, 2] < 1.5)
         points_flat = points.reshape(-1, 3)
         # Transform points to world coordinates using homogeneous transformation
         homogeneous_points = np.hstack(
@@ -133,6 +135,11 @@ def get_pcd_from_data(path, frame_idx, num_cam, intrinsics, c2ws):
         total_colors.append(color)
         total_masks.append(masks)
 
+    # total_points = np.asarray(total_points)
+    # total_colors = np.asarray(total_colors)
+    # total_masks = np.asarray(total_masks)
+
+
     # pcd = o3d.geometry.PointCloud()
     # visualize_points = []
     # visualize_colors = []
@@ -143,24 +150,23 @@ def get_pcd_from_data(path, frame_idx, num_cam, intrinsics, c2ws):
     #     visualize_colors.append(
     #         total_colors[i][total_masks[i].astype(bool)].reshape(-1, 3)
     #     )
-    # visualize_points = np.concatenate(visualize_points)
-    # visualize_colors = np.concatenate(visualize_colors)
-    # coordinates = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.2)
-    # mask = np.logical_and(visualize_points[:, 2] > -0.15, visualize_points[:, 0] > -0.05)
-    # mask = np.logical_and(mask, visualize_points[:, 0] < 0.4)
-    # mask = np.logical_and(mask, visualize_points[:, 1] < 0.5)
-    # mask = np.logical_and(mask, visualize_points[:, 1] > -0.2)
-    # mask = np.logical_and(mask, visualize_points[:, 2] < 0.2)
-    # visualize_points = visualize_points[mask]
-    # visualize_colors = visualize_colors[mask]
-        
-    # pcd.points = o3d.utility.Vector3dVector(np.concatenate(visualize_points).reshape(-1, 3))
-    # pcd.colors = o3d.utility.Vector3dVector(np.concatenate(visualize_colors).reshape(-1, 3))
-    # o3d.visualization.draw_geometries([pcd])
+    
+    # if len(visualize_points) > 0 and any(len(p) > 0 for p in visualize_points):
+    #     visualize_points = np.concatenate(visualize_points)
+    #     visualize_colors = np.concatenate(visualize_colors)
+    #     coordinates = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.2)
+    #     mask = np.logical_and(visualize_points[:, 2] > -0.5, visualize_points[:, 0] > -0.5)
+    #     # mask = np.logical_and(mask, visualize_points[:, 0] < 0.4)
+    #     # mask = np.logical_and(mask, visualize_points[:, 1] < 0.5)
+    #     # mask = np.logical_and(mask, visualize_points[:, 1] > -0.2)
+    #     # mask = np.logical_and(mask, visualize_points[:, 2] < 0.2)
+    #     visualize_points = visualize_points[mask]
+    #     visualize_colors = visualize_colors[mask]
+            
+    #     pcd.points = o3d.utility.Vector3dVector(visualize_points.reshape(-1, 3))
+    #     pcd.colors = o3d.utility.Vector3dVector(visualize_colors.reshape(-1, 3))
+    #     o3d.visualization.draw_geometries([pcd])
 
-    # total_points = np.asarray(total_points)
-    # total_colors = np.asarray(total_colors)
-    # total_masks = np.asarray(total_masks)
 
     return np.asarray(total_points), np.asarray(total_colors), np.asarray(total_masks)
 

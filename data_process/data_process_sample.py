@@ -53,7 +53,8 @@ def process_unique_points(track_data):
     object_motions_valid = object_motions_valid[:, unique_idx]
 
     # Make sure all points are above the ground
-    # object_points[object_points[..., 2] > 0, 2] = 0  # COMMENTED OUT: This was flattening the object
+    # object_points[object_points[..., 2] > 0, 2] = 0
+    
 
     if SHAPE_PRIOR:
         shape_mesh_path = f"{base_path}/{case_name}/shape/matching/final_mesh.glb"
@@ -65,6 +66,12 @@ def process_unique_points(track_data):
         )
         # Sample the interior points
         interior_points = trimesh.sample.volume_mesh(trimesh_mesh, 10000)
+
+        print(f"Prior Surface points range: {surface_points[..., 2].min():.4f} to {surface_points[..., 2].max():.4f}")
+        if len(interior_points) > 0:
+            print(f"Prior Interior points range: {interior_points[..., 2].min():.4f} to {interior_points[..., 2].max():.4f}")
+        else:
+            print("No interior points sampled (mesh not watertight)")
 
     if SHAPE_PRIOR:
         all_points = np.concatenate(
@@ -117,6 +124,37 @@ def process_unique_points(track_data):
     else:
         all_points = object_points[0][index]
 
+    # Use outlier detection (3 standard deviations) to identify points that should be shifted
+    z_coords = all_points[..., 2]
+    z_mean = np.mean(z_coords)
+    z_std = np.std(z_coords)
+    
+    # Find points within 3 standard deviations (inliers)
+    z_threshold_lower = z_mean - 3 * z_std
+    z_threshold_upper = z_mean + 3 * z_std
+    inlier_mask = (z_coords >= z_threshold_lower) & (z_coords <= z_threshold_upper)
+    
+    # this technically breaks the visualizations 
+    # i think the better fix is to shift the camera extrinsics so the depths works out properly
+    # Calculate the minimum z value among inliers
+    # inlier_z = z_coords[inlier_mask]
+    # if len(inlier_z) > 0:
+    #     max_z_inlier = np.max(inlier_z)
+        
+    #     if max_z_inlier > 0:
+    #         shift_amount = abs(max_z_inlier) - 0.01 
+    #         all_points[..., 2] -= shift_amount
+    #         object_points[..., 2] -= shift_amount
+    #         controller_points[..., 2] -= shift_amount
+    #         if SHAPE_PRIOR:
+    #             final_surface_points = np.array(final_surface_points) - np.array([0, 0, shift_amount])
+    #             final_interior_points = np.array(final_interior_points) - np.array([0, 0, shift_amount])
+
+    # object_points[object_points[..., 2] > 0, 2] = 0
+
+    print(f"Adjusted object point range: {object_points[..., 2].min():.4f} to {object_points[..., 2].max():.4f}")
+    print(f"Adjusted controller point range: {controller_points[..., 2].min():.4f} to {controller_points[..., 2].max():.4f}")
+
     # Render the final pcd with interior filling as a turntable video
     all_pcd = o3d.geometry.PointCloud()
     all_pcd.points = o3d.utility.Vector3dVector(all_points)
@@ -152,6 +190,7 @@ def process_unique_points(track_data):
     track_data["object_colors"] = object_colors[:, index, :]
     track_data["object_visibilities"] = object_visibilities[:, index]
     track_data["object_motions_valid"] = object_motions_valid[:, index]
+    track_data["controller_points"] = controller_points
     if SHAPE_PRIOR:
         track_data["surface_points"] = np.array(final_surface_points) if len(final_surface_points) > 0 else np.zeros((0, 3))
         track_data["interior_points"] = np.array(final_interior_points) if len(final_interior_points) > 0 else np.zeros((0, 3))

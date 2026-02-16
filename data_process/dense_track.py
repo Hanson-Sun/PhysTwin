@@ -38,6 +38,86 @@ def exist_dir(dir):
         os.makedirs(dir)
 
 
+def bridge_mask_gaps(mask, base_path=None, case_name=None, camera_id=None):
+    """
+    Bridge gaps between disconnected mask regions while preserving edge quality.
+    
+    Args:
+        mask: Binary numpy array
+        base_path: Base path for saving visualization (optional)
+        case_name: Case name for saving visualization (optional)
+        camera_id: Camera ID for saving visualization (optional)
+        
+    Returns:
+        Processed mask with gaps bridged if multiple components exist, otherwise original mask
+    """
+    # Find connected components
+    num_components, labels = cv2.connectedComponents(mask.astype(np.uint8))
+    
+    # If only one connected component (plus background), no need to bridge
+    if num_components <= 2:  # 0 is background, 1 is the single object
+        return mask
+    
+    print(f"    Found {num_components - 1} disconnected regions, bridging gaps...")
+    original_mask = mask.copy()
+    
+    # Use minimal morphological closing to connect nearby components
+    # Use a small kernel to minimize edge quality loss
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    
+    # Apply closing iteratively, checking if components are now connected
+    bridged_mask = mask.copy()
+    for iteration in range(1, 4):
+        bridged_mask = cv2.morphologyEx(
+            bridged_mask.astype(np.uint8), 
+            cv2.MORPH_CLOSE, 
+            kernel, 
+            iterations=1
+        ).astype(bool)
+        
+        num_components_new, _ = cv2.connectedComponents(bridged_mask.astype(np.uint8))
+        
+        print(f"      Iteration {iteration}: {num_components_new - 1} components remaining")
+        
+        # Stop if all components are now connected
+        if num_components_new <= 2:
+            print(f"    Successfully bridged all gaps")
+            
+            # Save visualization if paths provided
+            if base_path and case_name and camera_id is not None:
+                vis_dir = f"{base_path}/{case_name}/mask_bridging_vis"
+                exist_dir(vis_dir)
+                
+                # Create side-by-side visualization
+                vis_image = np.zeros((original_mask.shape[0], original_mask.shape[1] * 2, 3), dtype=np.uint8)
+                vis_image[:, :original_mask.shape[1]] = (original_mask.astype(np.uint8) * 255)[:, :, np.newaxis]
+                vis_image[:, original_mask.shape[1]:] = (bridged_mask.astype(np.uint8) * 255)[:, :, np.newaxis]
+                
+                vis_path = f"{vis_dir}/camera_{camera_id}_bridged.png"
+                cv2.imwrite(vis_path, vis_image)
+                print(f"      Saved bridging visualization to {vis_path}")
+            
+            return bridged_mask
+    
+    # If still not fully connected after 3 iterations, return best effort
+    print(f"    Warning: Could not fully bridge all gaps after 3 iterations")
+    
+    # Save visualization of partially bridged result
+    if base_path and case_name and camera_id is not None:
+        vis_dir = f"{base_path}/{case_name}/mask_bridging_vis"
+        exist_dir(vis_dir)
+        
+        vis_image = np.zeros((original_mask.shape[0], original_mask.shape[1] * 2, 3), dtype=np.uint8)
+        vis_image[:, :original_mask.shape[1]] = (original_mask.astype(np.uint8) * 255)[:, :, np.newaxis]
+        vis_image[:, original_mask.shape[1]:] = (bridged_mask.astype(np.uint8) * 255)[:, :, np.newaxis]
+        
+        vis_path = f"{vis_dir}/camera_{camera_id}_bridged_partial.png"
+        cv2.imwrite(vis_path, vis_image)
+        print(f"      Saved partial bridging visualization to {vis_path}")
+    
+    return bridged_mask
+
+
 if __name__ == "__main__":
     exist_dir(f"{base_path}/{case_name}/cotracker")
 
@@ -67,9 +147,10 @@ if __name__ == "__main__":
         frames = iio.imread(video_path, plugin="FFMPEG")
         video_height, video_width = frames.shape[1:3]
         
+        # Keep video on CPU to avoid memory issues, convert to tensor but don't move to GPU yet
         video = (
-            torch.tensor(frames).permute(0, 3, 1, 2)[None].float().to(device)
-        )  # B T C H W
+            torch.tensor(frames).permute(0, 3, 1, 2)[None].float()
+        )  # B T C H W (on CPU)
         
         # Load the first-frame mask and scale it to match video resolution
         mask_paths = glob.glob(f"{base_path}/{case_name}/mask/{i}/*/0.png")
@@ -88,6 +169,9 @@ if __name__ == "__main__":
                 mask = current_mask
             else:
                 mask = np.logical_or(mask, current_mask)
+
+        # Bridge any gaps in the mask caused by occlusion
+        mask = bridge_mask_gaps(mask, base_path=base_path, case_name=case_name, camera_id=i)
 
         # Draw the mask
         query_pixels = np.argwhere(mask)
@@ -108,17 +192,19 @@ if __name__ == "__main__":
         cotracker = torch.hub.load(
             "facebookresearch/co-tracker", "cotracker3_online"
         ).to(device)
-        cotracker(video_chunk=video, is_first_step=True, queries=query_pixels[None])
+        cotracker(video_chunk=video[:, :].to(device), is_first_step=True, queries=query_pixels[None])
 
         # Process the video
         for ind in range(0, video.shape[1] - cotracker.step, cotracker.step):
             pred_tracks, pred_visibility = cotracker(
-                video_chunk=video[:, ind : ind + cotracker.step * 2]
+                video_chunk=video[:, ind : ind + cotracker.step * 2].to(device)
             )  # B T N 2,  B T N 1
+
+        torch.cuda.empty_cache()
         vis = Visualizer(
             save_dir=f"{base_path}/{case_name}/cotracker", pad_value=0, linewidth=3
         )
-        vis.visualize(video, pred_tracks, pred_visibility, filename=f"{i}")
+        vis.visualize(video.cpu(), pred_tracks.cpu(), pred_visibility.cpu(), filename=f"{i}")
         
         # Scale tracked points back to original resolution if upscaled
         track_to_save = pred_tracks[0].cpu().numpy()[:, :, ::-1]

@@ -44,13 +44,7 @@ class RealData:
         # z_min_object = np.min(object_points[:, :, 2])
         # z_min_controller = np.min(controller_points[:, :, 2])
         # z_min_all = min(z_min_struct, z_min_object, z_min_controller)
-        
-        # if z_min_all < 0.0:
-        #     z_shift = abs(z_min_all) + 0.1  # Add small offset above ground
-        #     logger.info(f"[DATA]: Shifting all points up by {z_shift:.4f} to avoid ground collision")
-        #     self.structure_points[:, 2] += z_shift
-        #     object_points[:, :, 2] += z_shift
-        #     controller_points[:, :, 2] += z_shift
+        # print(f"[DATA]: Minimum Z values - Structure: {z_min_struct:.4f}, Object: {z_min_object:.4f}, Controller: {z_min_controller:.4f}")
         
         self.structure_points = torch.tensor(
             self.structure_points, dtype=torch.float32, device=cfg.device
@@ -69,8 +63,14 @@ class RealData:
         rainbow_colors = torch.tensor(
             rainbow_colors, dtype=torch.float32, device=cfg.device
         )
-        # Make the same rainbow color for each frame
-        self.object_colors = rainbow_colors.repeat(self.object_points.shape[0], 1, 1)
+        # Extend colors to include surface and interior points (fill with gray)
+        extended_colors = torch.cat([
+            rainbow_colors,
+            torch.ones(self.num_surface_points - self.num_original_points, 3, device=cfg.device) * 0.7,  # Gray for surface
+            torch.ones(self.num_all_points - self.num_surface_points, 3, device=cfg.device) * 0.5,  # Darker gray for interior
+        ], dim=0)
+        # Make the same colors for each frame
+        self.object_colors = extended_colors.repeat(self.object_points.shape[0], 1, 1)
 
         # # Apply the first frame color to all frames
         # first_frame_colors = torch.tensor(

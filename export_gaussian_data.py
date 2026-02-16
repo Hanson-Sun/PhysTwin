@@ -87,27 +87,88 @@ with open("data_config.csv", newline="", encoding="utf-8") as csvfile:
             os.system(
                 f"cp {base_path}/{case_name}/shape/matching/final_mesh.glb {output_path}/{case_name}/shape_prior.glb"
             )
-        # Save the original pcd data into the world coordinate system
+        # Save the final tracked/refined point data (or fall back to original pcd)
         obs_points = []
         obs_colors = []
-        pcd_path = f"{base_path}/{case_name}/pcd/0.npz"
-        processed_mask_path = f"{base_path}/{case_name}/mask/processed_masks.pkl"
-        data = np.load(pcd_path)
-        with open(processed_mask_path, "rb") as f:
-            processed_masks = pickle.load(f)
-        for i in range(3):
-            points = data["points"][i]
-            colors = data["colors"][i]
-            mask = processed_masks[0][i]["object"]
-            obs_points.append(points[mask])
-            obs_colors.append(colors[mask])
 
-        obs_points = np.vstack(obs_points)
-        obs_colors = np.vstack(obs_colors)
+        # Try to load from final tracking data first (which includes all refinements)
+        final_data_candidates = [
+            f"{base_path}/{case_name}/final_data.pkl",
+        ]
 
-        pcd = o3d.geometry.PointCloud()
-        pcd.points = o3d.utility.Vector3dVector(obs_points)
-        pcd.colors = o3d.utility.Vector3dVector(obs_colors)
-        # coordinate = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
-        # o3d.visualization.draw_geometries([pcd, coordinate])
-        o3d.io.write_point_cloud(f"{output_path}/{case_name}/observation.ply", pcd)
+        track_data_loaded = False
+        for final_data_path in final_data_candidates:
+            if os.path.exists(final_data_path):
+                try:
+                    with open(final_data_path, "rb") as f:
+                        track_data = pickle.load(f)
+                    
+                    print(f"  Loading refined point data from {final_data_path}")
+                    
+                    # Extract object points and colors (main tracked object)
+                    if "object_points" in track_data:
+                        obj_pts = track_data["object_points"]  # shape: (frames, N_points, 3)
+                        if isinstance(obj_pts, np.ndarray) and obj_pts.size > 0:
+                            # Use only the first frame for initialization
+                            if obj_pts.ndim == 3:
+                                obs_points.append(obj_pts[0])
+                            elif obj_pts.ndim == 2:
+                                obs_points.append(obj_pts)
+                    
+                    # Extract colors if available
+                    if "object_colors" in track_data:
+                        obj_colors = track_data["object_colors"]  # shape: (frames, N_points, 3)
+                        if isinstance(obj_colors, np.ndarray) and obj_colors.size > 0:
+                            if obj_colors.ndim == 3:
+                                obs_colors.append(obj_colors[0])
+                            elif obj_colors.ndim == 2:
+                                obs_colors.append(obj_colors)
+                    else:
+                        # Default colors if not available
+                        if obs_points:
+                            obs_colors.append(np.ones((obs_points[-1].shape[0], 3)) * 0.5)
+                    
+                    # Also try to extract surface/interior points if they exist
+                    for key in ["surface_points", "interior_points"]:
+                        if key in track_data:
+                            pts = track_data[key]
+                            if isinstance(pts, np.ndarray) and pts.size > 0 and pts.ndim >= 2:
+                                if pts.shape[-1] >= 3:
+                                    obs_points.append(pts[..., :3].reshape(-1, 3))
+                                    obs_colors.append(np.ones((pts.shape[0], 3)) * 0.7)
+                    
+                    track_data_loaded = True
+                    total_pts = sum(len(p) for p in obs_points)
+                    print(f"  ✓ Loaded {total_pts} refined points from tracking data")
+                    break
+                except Exception as e:
+                    print(f"  Error loading {final_data_path}: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    continue
+
+        # Fall back to original pcd/0.npz if tracking data not found
+        if not track_data_loaded:
+            print(f"  Loading point data from original pcd/0.npz (tracking data not found)")
+            pcd_path = f"{base_path}/{case_name}/pcd/0.npz"
+            processed_mask_path = f"{base_path}/{case_name}/mask/processed_masks.pkl"
+            data = np.load(pcd_path)
+            with open(processed_mask_path, "rb") as f:
+                processed_masks = pickle.load(f)
+            for i in range(3):
+                points = data["points"][i]
+                colors = data["colors"][i]
+                mask = processed_masks[0][i]["object"]
+                obs_points.append(points[mask])
+                obs_colors.append(colors[mask])
+
+        if obs_points:
+            obs_points = np.vstack(obs_points)
+            obs_colors = np.vstack(obs_colors)
+
+            pcd = o3d.geometry.PointCloud()
+            pcd.points = o3d.utility.Vector3dVector(obs_points)
+            pcd.colors = o3d.utility.Vector3dVector(obs_colors)
+            # coordinate = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
+            # o3d.visualization.draw_geometries([pcd, coordinate])
+            o3d.io.write_point_cloud(f"{output_path}/{case_name}/observation.ply", pcd)

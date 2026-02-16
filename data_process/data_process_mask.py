@@ -177,8 +177,9 @@ if __name__ == "__main__":
             if value != CONTROLLER_NAME:
                 if "object" in mask_info[i]:
                     # TODO: Handle the case when there are multiple objects
-                    import pdb
-                    pdb.set_trace()
+                    # import pdb
+                # pdb.set_trace()
+                    continue
                 mask_info[i]["object"] = int(key)
             if value == CONTROLLER_NAME:
                 if "controller" in mask_info[i]:

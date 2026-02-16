@@ -740,6 +740,15 @@ def readQQTTSceneInfo(
 
     test_cam_infos = []
     test_c2ws = pickle.load(open(os.path.join(path, "interp_poses.pkl"), "rb"))
+    
+    # Get actual test image dimensions from the first training camera
+    test_H, test_W = H, W  # defaults
+    if len(cam_infos_unsorted) > 0:
+        test_H = cam_infos_unsorted[0].height
+        test_W = cam_infos_unsorted[0].width
+
+    print(f"Test camera resolution: {test_W}x{test_H} !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+    
     for cam_i, c2w in enumerate(test_c2ws):
         dummy_cam_id = 1
         K = intrinsics[dummy_cam_id]
@@ -752,8 +761,8 @@ def readQQTTSceneInfo(
         image_name = f"test_cam{cam_i}_0"
         focal_length_x = K[0, 0]
         focal_length_y = K[1, 1]
-        FovY = focal2fov(focal_length_y, H)
-        FovX = focal2fov(focal_length_x, W)
+        FovY = focal2fov(focal_length_y, test_H)
+        FovX = focal2fov(focal_length_x, test_W)
         test_cam_infos.append(
             CameraInfo(
                 uid=cam_i,
@@ -763,8 +772,8 @@ def readQQTTSceneInfo(
                 FovX=FovX,
                 image_path=image_path,
                 image_name=image_name,
-                width=W,
-                height=H,
+                width=test_W,
+                height=test_H,
                 depth_path="",
                 depth_params=None,
                 is_test=True,
@@ -783,27 +792,45 @@ def readQQTTSceneInfo(
 
     # read point cloud ('pcd', 'mesh', 'hybrid')
     all_xyz, all_rgb, all_normals = [], [], []
-    # if gs_init_opt in ["pcd", "hybrid"]:
-    #     print("Init points from pcd...")
-    #     pcd_path = os.path.join(path, "observation.ply")
-    #     if os.path.exists(pcd_path):
-    #         pcd = o3d.io.read_point_cloud(pcd_path)
-    #         xyz = np.asarray(pcd.points)
-    #         rgb = np.asarray(pcd.colors)
-    #         all_xyz.append(xyz)
-    #         all_rgb.append(rgb)
-    #         all_normals.append(np.zeros((xyz.shape[0], 3)))
+    if gs_init_opt in ["pcd", "hybrid"]:
+        print("Init points from pcd (observation.ply)...")
+        pcd_path = os.path.join(path, "observation.ply")
+        if os.path.exists(pcd_path):
+            pcd = o3d.io.read_point_cloud(pcd_path)
+            xyz = np.asarray(pcd.points)
+            rgb = np.asarray(pcd.colors)
+            all_xyz.append(xyz)
+            all_rgb.append(rgb)
+            all_normals.append(np.zeros((xyz.shape[0], 3)))
+            print(f"Loaded {xyz.shape[0]} points from observation.ply (calibrated tracked data)")
+        else:
+            print(f"Warning: observation.ply not found at {pcd_path}")
 
     if gs_init_opt in ["mesh", "hybrid"]:
         print("Init points from mesh...")
         mesh_path = os.path.join(path, "shape_prior.glb")
         if os.path.exists(mesh_path):
+
             xyz, rgb, normals = sample_pcd_from_mesh(
                 mesh_path, POINT_PER_TRIANGLE=pts_per_triangles
             )
             all_xyz.append(xyz)
             all_rgb.append(rgb)
             all_normals.append(normals)
+            print(f"Loaded {xyz.shape[0]} points from mesh")
+        else:
+            print(f"Warning: Mesh file not found at {mesh_path}")
+
+    # Fallback to random initialization if no points loaded
+    if len(all_xyz) == 0:
+        print("Warning: No point cloud or mesh found. Using random initialization.")
+        num_pts = 100_000
+        xyz = np.random.random((num_pts, 3)) * 2.6 - 1.3
+        rgb = np.random.random((num_pts, 3))
+        normals = np.zeros((num_pts, 3))
+        all_xyz.append(xyz)
+        all_rgb.append(rgb)
+        all_normals.append(normals)
 
     assert len(all_xyz) > 0, "No point cloud or mesh found for initialization"
 
@@ -838,13 +865,19 @@ def sample_pcd_from_mesh(mesh_path, POINT_PER_TRIANGLE=5):
     triangles = np.asarray(mesh.triangles)
 
     has_uv_texture = np.asarray(mesh.triangle_uvs).shape[0] != 0
+    has_vertex_colors = False
+    
     if has_uv_texture:
         uvs = np.asarray(mesh.triangle_uvs).reshape(-1, 3, 2)
         texture = np.asarray(mesh.textures[0])
     else:
         vertex_colors = np.asarray(mesh.vertex_colors)
-        if vertex_colors.shape[0] != vertices.shape[0]:
-            raise ValueError("Mesh has no texture or valid vertex colors.")
+        if vertex_colors.shape[0] == vertices.shape[0]:
+            has_vertex_colors = True
+        else:
+            # No texture or vertex colors available for non-watertight meshes
+            # Use default neutral color
+            vertex_colors = np.ones((vertices.shape[0], 3)) * 0.5
 
     mesh.compute_triangle_normals()
     triangles_normals = np.asarray(mesh.triangle_normals)

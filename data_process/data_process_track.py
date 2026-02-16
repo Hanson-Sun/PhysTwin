@@ -155,7 +155,7 @@ def filter_track(track_path, pcd_path, mask_path, frame_num, num_cam):
     return track_data
 
 
-def filter_motion(track_data, neighbor_dist=0.01):
+def filter_motion(track_data, neighbor_dist=0.01, min_neighbors=None):
     # Calculate the motion of each point
     object_points = track_data["object_points"]
     object_colors = track_data["object_colors"]
@@ -326,9 +326,17 @@ def filter_motion(track_data, neighbor_dist=0.01):
             neighbors = [
                 index for index in idx if controller_motions_valid[i, index] == 1
             ]
-            if len(neighbors) < 5:
+            # For sparse controller points (like in cloth lift), use fewer neighbor requirement
+            # Use adaptive neighbor threshold: if min_neighbors specified, use it; otherwise compute adaptively
+            if min_neighbors is None:
+                min_neighbors_required = max(2, min(5, num_points // 2))
+            else:
+                min_neighbors_required = min_neighbors
+            
+            if len(neighbors) < min_neighbors_required:
                 controller_motions_valid[i, j] = 0
                 mask[j] = 0
+                continue
 
             motion_diff = np.linalg.norm(
                 controller_motions[i, j] - controller_motions[i, neighbors], axis=1
@@ -373,26 +381,39 @@ def get_final_track_data(track_data, controller_threhsold=0.01):
     mask = track_data["controller_mask"]
 
     new_controller_points = controller_points[:, np.where(mask)[0], :]
-    assert len(new_controller_points[0]) >= 30
-    # Do farthest point sampling on the valid controller points to select the final controller points
-    valid_indices = np.arange(len(new_controller_points[0]))
-    points_map = {}
-    sample_points = []
-    for i in valid_indices:
-        points_map[tuple(new_controller_points[0, i])] = i
-        sample_points.append(new_controller_points[0, i])
-    sample_points = np.array(sample_points)
-    sample_pcd = o3d.geometry.PointCloud()
-    sample_pcd.points = o3d.utility.Vector3dVector(sample_points)
-    fps_pcd = sample_pcd.farthest_point_down_sample(30)
-    final_indices = []
-    for point in fps_pcd.points:
-        final_indices.append(points_map[tuple(point)])
+    print(f"Controller points after motion filtering: {len(new_controller_points[0])}")
+    
+    # If too few controller points remain, use all of them or relax the filtering
+    if len(new_controller_points[0]) < 5:
+        print(f"WARNING: Only {len(new_controller_points[0])} controller points after filtering!")
+        print("Using all original controller points instead of motion-filtered ones")
+        new_controller_points = controller_points
+        print(f"Total controller points available: {len(new_controller_points[0])}")
+    
+    if len(new_controller_points[0]) < 30:
+        # If we have fewer than 30, just use all of them without downsampling
+        print(f"INFO: Only {len(new_controller_points[0])} controller points available, using all without downsampling")
+        nearest_controller_points = new_controller_points
+    else:
+        # Do farthest point sampling on the valid controller points to select the final controller points
+        valid_indices = np.arange(len(new_controller_points[0]))
+        points_map = {}
+        sample_points = []
+        for i in valid_indices:
+            points_map[tuple(new_controller_points[0, i])] = i
+            sample_points.append(new_controller_points[0, i])
+        sample_points = np.array(sample_points)
+        sample_pcd = o3d.geometry.PointCloud()
+        sample_pcd.points = o3d.utility.Vector3dVector(sample_points)
+        fps_pcd = sample_pcd.farthest_point_down_sample(30)
+        final_indices = []
+        for point in fps_pcd.points:
+            final_indices.append(points_map[tuple(point)])
 
-    print(f"Controller Point Number: {len(final_indices)}")
+        print(f"Final controller point count after FPS: {len(final_indices)}")
 
-    # Get the nearest controller points and their colors
-    nearest_controller_points = new_controller_points[:, final_indices]
+        # Get the nearest controller points and their colors
+        nearest_controller_points = new_controller_points[:, final_indices]
 
     # object_pcd = o3d.geometry.PointCloud()
     # object_pcd.points = o3d.utility.Vector3dVector(valid_object_points)
@@ -485,10 +506,20 @@ if __name__ == "__main__":
     num_cam = len(glob.glob(f"{mask_path}/mask_info_*.json"))
     frame_num = len(glob.glob(f"{pcd_path}/*.npz"))
 
+    print(f"\n{'='*80}")
+    print(f"Processing tracking data for case: {case_name}")
+    print(f"Number of cameras: {num_cam}")
+    print(f"Number of frames: {frame_num}")
+    print(f"{'='*80}\n")
+
     # Filter the track data using the semantic mask of object and controller
     track_data = filter_track(track_path, pcd_path, mask_path, frame_num, num_cam)
-    # Filter motion
-    track_data = filter_motion(track_data)
+    print(f"After initial filtering: {track_data['controller_points'].shape[1]} controller points\n")
+    
+    # Filter motion - with adaptive min_neighbors for sparse controller points
+    track_data = filter_motion(track_data, neighbor_dist=0.01, min_neighbors=None)
+    print(f"After motion filtering: {np.sum(track_data['controller_mask'])} controller points remain\n")
+    
     # # Save the filtered track data
     # with open(f"test2.pkl", "wb") as f:
     #     pickle.dump(track_data, f)
@@ -497,8 +528,11 @@ if __name__ == "__main__":
     #     track_data = pickle.load(f)
 
     track_data = get_final_track_data(track_data)
+    print(f"Final controller points: {track_data['controller_points'].shape[1]}\n")
 
     with open(f"{base_path}/{case_name}/track_process_data.pkl", "wb") as f:
         pickle.dump(track_data, f)
+    
+    print(f"Saved to {base_path}/{case_name}/track_process_data.pkl\n")
 
     visualize_track(track_data)

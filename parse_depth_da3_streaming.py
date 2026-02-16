@@ -119,10 +119,7 @@ class ChunkAligner:
     """
     
     def __init__(self, blend_mode: str = "linear"):
-        """
-        Args:
-            blend_mode: How to blend overlapping regions ("linear", "avg", or "last")
-        """
+        """Initialize aligner with blend mode (linear, avg, or last)."""
         self.blend_mode = blend_mode
         self.prev_chunk_depths: Dict[int, List[np.ndarray]] = {}
         self.prev_chunk_overlap_start: int = 0
@@ -134,23 +131,7 @@ class ChunkAligner:
         overlap_size: int,
         is_first_chunk: bool = False
     ) -> Dict[int, List[np.ndarray]]:
-        """
-        Align current chunk with previous chunk in overlapping region.
-        
-        CRITICAL UNDERSTANDING:
-        - First chunk: Return as-is
-        - Later chunks: Blend overlap, then return FULL chunk (overlap + new)
-        - The save function handles skipping already-saved overlap frames
-        
-        Args:
-            chunk_depths: Depth maps for current chunk, per camera
-            chunk_start_idx: Global frame index where this chunk starts
-            overlap_size: Number of overlapping frames
-            is_first_chunk: Whether this is the first chunk
-            
-        Returns:
-            Aligned depth maps (full chunk with blended overlap)
-        """
+        """Blend overlapping region with previous chunk for temporal consistency."""
         if is_first_chunk or not self.prev_chunk_depths:
             # First chunk: no alignment needed, save everything
             self.prev_chunk_depths = {k: v.copy() for k, v in chunk_depths.items()}
@@ -280,17 +261,7 @@ class VideoWriterManager:
 # ═══════════════════════════════════════════════════════════════════════════
 
 def load_calibration(case_dir: Path, calib_path: Optional[Path] = None, meta_path: Optional[Path] = None) -> Optional[Tuple[List[CameraConfig], List[int]]]:
-    """
-    Load camera calibration data from files.
-    
-    Args:
-        case_dir: Case directory
-        calib_path: Path to calibrate.pkl (defaults to case_dir/calibrate.pkl)
-        meta_path: Path to metadata.json (defaults to case_dir/metadata.json)
-        
-    Returns:
-        Tuple of (configs, camera_ids) if files exist, None otherwise
-    """
+    """Load camera calibration from calibrate.pkl and metadata.json files."""
     if calib_path is None:
         calib_path = case_dir / "calibrate.pkl"
     if meta_path is None:
@@ -330,47 +301,44 @@ def load_calibration(case_dir: Path, calib_path: Optional[Path] = None, meta_pat
 
 def infer_calibration(
     model: DepthAnything3,
-    camera_configs: List[CameraConfig],
+    case_dir: Path,
     frame_names: List[str],
     num_frames: int = 3,
     device: torch.device = torch.device("cpu")
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Infer camera intrinsics and extrinsics from the first few frames.
+    """Infer intrinsics and extrinsics from sampled frames using DA3."""
+    print(f"\n[*] Inferring camera intrinsics and extrinsics from {num_frames} random frames...")
     
-    Args:
-        model: DepthAnything3 model
-        camera_configs: List of camera configs (with image paths but no calibration yet)
-        frame_names: List of all available frame names
-        num_frames: Number of frames to use for inference (default: 3)
-        device: Torch device
-        
-    Returns:
-        Tuple of (intrinsics_array, extrinsics_array) both shape (num_cameras, ...)
-    """
-    print(f"\n[*] Inferring camera intrinsics and extrinsics from first {num_frames} frames...")
+    # Sample num_frames random frames from all available frames
+    num_available = len(frame_names)
+    num_to_sample = min(num_frames, num_available)
+    sampled_indices = np.random.choice(num_available, size=num_to_sample, replace=False)
+    sampled_indices = np.sort(sampled_indices)
+    infer_frames = [frame_names[i] for i in sampled_indices]
     
-    # Use only first num_frames for inference
-    infer_frames = frame_names[:min(num_frames, len(frame_names))]
-    num_cams = len(camera_configs)
+    # Find all camera directories
+    color_dir = case_dir / "color"
+    camera_dirs = sorted([d for d in color_dir.iterdir() if d.is_dir()])
+    num_cams = len(camera_dirs)
     
     # Collect images (without calibration - let DA3 infer it)
     all_images = []
     for frame_name in infer_frames:
-        for config in camera_configs:
-            img_path = config.image_dir / frame_name
+        for cam_dir in camera_dirs:
+            img_path = cam_dir / frame_name
             if not img_path.exists():
                 raise FileNotFoundError(f"Image not found: {img_path}")
             all_images.append(str(img_path))
     
-    print(f"    Processing {len(infer_frames)} frames × {num_cams} cameras = {len(all_images)} images")
+    print(f"    Processing {len(infer_frames)} sampled frames × {num_cams} cameras = {len(all_images)} images")
+    if num_frames < num_available:
+        print(f"    Frame indices: {list(sampled_indices)}")
     
     # Run inference WITHOUT providing intrinsics/extrinsics
     # This makes DA3 infer them
     with torch.no_grad():
         prediction = model.inference(
             image=all_images,
-            # Note: NOT providing intrinsics/extrinsics - let DA3 infer them
         )
     
     # Extract inferred calibration
@@ -401,6 +369,20 @@ def infer_calibration(
         avg_intrinsics = np.mean(cam_intrinsics, axis=0)
         avg_extrinsics = np.mean(cam_extrinsics, axis=0)
         
+        # Check consistency of extrinsics across frames
+        ext_stds = np.std([e for e in cam_extrinsics], axis=0)
+        max_ext_std = np.max(ext_stds)
+        
+        # Log extrinsics quality
+        if max_ext_std > 0.1:
+            print(f"      ⚠ Camera {cam_id}: High extrinsic variance (std={max_ext_std:.4f}) - calibration may be unstable")
+        
+        # Log translation magnitude
+        trans = avg_extrinsics[:3, 3]
+        trans_mag = np.linalg.norm(trans)
+        if trans_mag < 0.01 or trans_mag > 100:
+            print(f"      ⚠ Camera {cam_id}: Extreme translation magnitude={trans_mag:.4f}")
+        
         inferred_intrinsics.append(avg_intrinsics)
         inferred_extrinsics.append(avg_extrinsics)
     
@@ -420,16 +402,7 @@ def save_calibration(
     calib_path: Optional[Path] = None,
     meta_path: Optional[Path] = None
 ):
-    """
-    Save inferred camera calibration for future use.
-    
-    Args:
-        case_dir: Case directory
-        intrinsics: Camera intrinsics array (N, 3, 3)
-        extrinsics: Camera extrinsics array (N, 4, 4) - world-to-camera
-        calib_path: Path to save calibrate.pkl (defaults to case_dir/calibrate.pkl)
-        meta_path: Path to save metadata.json (defaults to case_dir/metadata.json)
-    """
+    """Save calibration to calibrate.pkl and metadata.json files."""
     if calib_path is None:
         calib_path = case_dir / "calibrate.pkl"
     if meta_path is None:
@@ -464,17 +437,7 @@ def create_camera_configs_from_calibration(
     intrinsics: np.ndarray,
     extrinsics: np.ndarray
 ) -> Tuple[List[CameraConfig], List[int]]:
-    """
-    Create camera configs from calibration data.
-    
-    Args:
-        case_dir: Case directory
-        intrinsics: Camera intrinsics array (N, 3, 3)
-        extrinsics: Camera extrinsics array (N, 4, 4) - world-to-camera
-        
-    Returns:
-        Tuple of (configs, camera_ids)
-    """
+    """Create camera configs from intrinsics and extrinsics arrays."""
     num_cams = len(intrinsics)
     camera_ids = list(range(num_cams))
     
@@ -491,55 +454,31 @@ def create_camera_configs_from_calibration(
     return configs, camera_ids
 
 
-def find_synchronized_frames(camera_configs: List[CameraConfig]) -> List[str]:
-    """Find frame filenames that exist across all cameras."""
-    frame_sets = []
-    for config in camera_configs:
-        if not config.image_dir.exists():
-            raise FileNotFoundError(f"Image directory not found: {config.image_dir}")
-        
-        frames = {f.name for f in config.image_dir.iterdir() if f.suffix.lower() in {".png", ".jpg", ".jpeg"}}
-        frame_sets.append(frames)
-    
-    common_frames = set.intersection(*frame_sets)
-    
-    if not common_frames:
-        raise ValueError("No synchronized frames found across all cameras")
-    
-    return sorted(common_frames, key=extract_frame_number)
-
-
-def create_temp_camera_configs(case_dir: Path) -> List[CameraConfig]:
-    """
-    Create temporary camera configs for finding synchronized frames.
-    Used when calibration is not yet available.
-    
-    Args:
-        case_dir: Case directory
-        
-    Returns:
-        List of camera configs with image paths but dummy calibration
-    """
+def find_synchronized_frames_from_dir(case_dir: Path) -> List[str]:
+    """Find frame filenames synchronized across all camera directories."""
     color_dir = case_dir / "color"
     if not color_dir.exists():
         raise FileNotFoundError(f"Color directory not found: {color_dir}")
     
     # Find all camera directories
     camera_dirs = sorted([d for d in color_dir.iterdir() if d.is_dir()])
-    
     if not camera_dirs:
         raise ValueError("No camera directories found in color folder")
     
-    configs = []
+    # Find common frames across all cameras
+    frame_sets = []
     for cam_dir in camera_dirs:
-        cam_id = int(cam_dir.name)
-        configs.append(CameraConfig(
-            intrinsics=np.eye(3, dtype=np.float32),  # Dummy
-            extrinsics=np.eye(4, dtype=np.float32),  # Dummy
-            image_dir=cam_dir
-        ))
+        frames = {f.name for f in cam_dir.iterdir() if f.suffix.lower() in {".png", ".jpg", ".jpeg"}}
+        frame_sets.append(frames)
     
-    return configs
+    common_frames = set.intersection(*frame_sets)
+    if not common_frames:
+        raise ValueError("No synchronized frames found across all cameras")
+    
+    return sorted(common_frames, key=extract_frame_number)
+
+
+
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -551,14 +490,11 @@ def process_chunk(
     camera_configs: List[CameraConfig],
     camera_ids: List[int],
     frame_names: List[str],
-    device: torch.device
+    device: torch.device,
+    calib_source: str = "unknown",
+    chunk_idx: int = 0
 ) -> Dict[int, List[np.ndarray]]:
-    """
-    Process a single chunk of frames.
-    
-    Returns:
-        Dictionary mapping camera_id to list of depth maps
-    """
+    """Run depth inference on a chunk using consistent calibration across all cameras."""
     # Collect all images for this chunk
     all_images = []
     all_intrinsics = []
@@ -608,13 +544,7 @@ def process_chunk(
 
 
 def visualize_first_frame_3d(output_root: Path, verbose: bool = False):
-    """
-    Visualize the first frame's depth maps in 3D using Open3D.
-    
-    Args:
-        output_root: Output directory containing depth maps and calibration
-        verbose: Whether to print debug info
-    """
+    """Visualize first frame depth maps in 3D using Open3D."""
     try:
         from visualize_3d_scene import visualize_depth_scene
         
@@ -662,12 +592,7 @@ def save_chunk_results(
     visualize: bool = False,
     verbose: bool = False
 ):
-    """Save depth maps and update videos.
-    
-    CRITICAL: Only saves non-overlapping frames to avoid duplicates!
-    - First chunk: saves all frames
-    - Later chunks: skips the overlap region (already saved by previous chunk)
-    """
+    """Save depth maps and videos, avoiding duplicate overlap frames."""
     # Determine which frames to save
     if is_first_chunk:
         # First chunk: save everything
@@ -714,11 +639,10 @@ def process_multi_camera_streaming(
     camera_ids: List[int],
     frame_names: List[str],
     output_root: Path,
-    args: argparse.Namespace
+    args: argparse.Namespace,
+    calib_source: str = "unknown"
 ):
-    """
-    Main processing loop using chunk-based streaming.
-    """
+    """Process video in overlapping chunks with consistent calibration and blending."""
     chunk_config = ChunkConfig(
         chunk_size=args.chunk_size,
         overlap=args.overlap
@@ -726,6 +650,10 @@ def process_multi_camera_streaming(
     
     aligner = ChunkAligner(blend_mode=args.blend_mode)
     video_manager = VideoWriterManager(fps=args.fps)
+    
+    # Store reference calibration from first camera for validation
+    ref_intrinsics = camera_configs[0].intrinsics.copy()
+    ref_extrinsics = camera_configs[0].extrinsics.copy()
     
     num_frames = len(frame_names)
     stride = chunk_config.chunk_size - chunk_config.overlap
@@ -740,6 +668,7 @@ def process_multi_camera_streaming(
     
     print(f"\nProcessing {num_frames} frames in {num_chunks} chunks")
     print(f"Chunk size: {chunk_config.chunk_size}, Overlap: {chunk_config.overlap}, Stride: {stride}")
+    print(f"Calibration source: {calib_source} (CONSISTENT across all chunks)")
     print("")  # Blank line before progress bar
     
     try:
@@ -763,14 +692,29 @@ def process_multi_camera_streaming(
                 'count': len(chunk_frames)
             })
             
-            # Process chunk
+            # Process chunk with consistent calibration
             chunk_depths = process_chunk(
                 model=model,
                 camera_configs=camera_configs,
                 camera_ids=camera_ids,
                 frame_names=chunk_frames,
-                device=args.device
+                device=args.device,
+                calib_source=calib_source,
+                chunk_idx=chunk_idx
             )
+            
+            # Validate calibration consistency (critical for alignment)
+            calib_check_fail = False
+            if not np.allclose(camera_configs[0].intrinsics, ref_intrinsics, rtol=1e-5):
+                tqdm.write(f"  ⚠ WARNING: Intrinsics changed in chunk {chunk_idx}!")
+                calib_check_fail = True
+            if not np.allclose(camera_configs[0].extrinsics, ref_extrinsics, rtol=1e-5):
+                tqdm.write(f"  ⚠ WARNING: Extrinsics changed in chunk {chunk_idx}!")
+                calib_check_fail = True
+            
+            if calib_check_fail and args.verbose:
+                tqdm.write(f"     Ref intrinsics shape: {ref_intrinsics.shape}")
+                tqdm.write(f"     Current intrinsics shape: {camera_configs[0].intrinsics.shape}")
             
             # Align with previous chunk
             is_first = (chunk_idx == 0)
@@ -799,6 +743,12 @@ def process_multi_camera_streaming(
                 visualize=args.visualize,
                 verbose=args.verbose
             )
+            
+            # Visualize first frame in 3D as soon as it's generated
+            if is_first and args.visualize_3d:
+                if args.verbose:
+                    tqdm.write("  → Visualizing first frame in 3D...")
+                visualize_first_frame_3d(output_root=output_root, verbose=args.verbose)
             
             # Move to next chunk
             start_idx += stride
@@ -836,7 +786,7 @@ def main():
                        help="Path to calibrate.pkl (optional, defaults to case_dir/calibrate.pkl)")
     parser.add_argument("--metadata", type=Path, default=None,
                        help="Path to metadata.json (optional, defaults to case_dir/metadata.json)")
-    parser.add_argument("--infer_calib_frames", type=int, default=3,
+    parser.add_argument("--infer_calib_frames", type=int, default=10,
                        help="Number of frames to use for inferring camera calibration (if not provided)")
     
     # Model
@@ -881,21 +831,31 @@ def main():
     # Try to load calibration, infer if not found
     print("\n[1/5] Loading/inferring calibration...")
     calib_result = load_calibration(args.case_dir, args.calibration, args.metadata)
+    calib_source = ""
+    camera_configs = None
+    camera_ids = None
     
     if calib_result is not None:
         camera_configs, camera_ids = calib_result
         print(f"      ✓ Loaded calibration from files")
         print(f"      {len(camera_configs)} cameras")
+        
+        # Extract calibration from loaded configs to save to output_dir
+        loaded_intrinsics = np.stack([cfg.intrinsics for cfg in camera_configs], axis=0)
+        loaded_extrinsics = np.stack([cfg.extrinsics for cfg in camera_configs], axis=0)
+        save_calibration(output_dir, loaded_intrinsics, loaded_extrinsics)
+        
         has_calibration = True
         inferred = False
+        calib_source = "loaded"
     else:
         print(f"      ! No calibration files found")
-        print(f"      ! Will infer from first {args.infer_calib_frames} frames")
+        print(f"      ! Will infer from sampled {args.infer_calib_frames} frames")
+        calib_source = "inferred (will be used for all chunks)"
         
-        # Need to find frames first using temporary configs
+        # Need to find frames first
         print("\n[2/5] Finding synchronized frames...")
-        temp_configs = create_temp_camera_configs(args.case_dir)
-        frame_names = find_synchronized_frames(temp_configs)
+        frame_names = find_synchronized_frames_from_dir(args.case_dir)
         print(f"      {len(frame_names)} frames found")
         
         # Load model early for calibration inference
@@ -905,11 +865,11 @@ def main():
         model = model.to(args.device)
         model.eval()
         
-        # Infer calibration from first frames
+        # Infer calibration from random frames
         print(f"\n[4/5] Inferring camera calibration...")
         intrinsics, extrinsics = infer_calibration(
             model=model,
-            camera_configs=temp_configs,
+            case_dir=args.case_dir,
             frame_names=frame_names,
             num_frames=args.infer_calib_frames,
             device=args.device
@@ -931,7 +891,7 @@ def main():
     # Find synchronized frames (if not already done)
     if has_calibration:
         print("\n[2/5] Finding synchronized frames...")
-        frame_names = find_synchronized_frames(camera_configs)
+        frame_names = find_synchronized_frames_from_dir(args.case_dir)
         print(f"      {len(frame_names)} frames")
         
         print(f"\n[3/5] Loading model...")
@@ -945,13 +905,15 @@ def main():
         step = 5  # Model and frames already loaded
     
     print(f"\n[{step}/{step}] Processing chunks...")
+    print(f"      Using {calib_source} camera calibration for all chunks")
     process_multi_camera_streaming(
         model=model,
         camera_configs=camera_configs,
         camera_ids=camera_ids,
         frame_names=frame_names,
         output_root=output_dir,
-        args=args
+        args=args,
+        calib_source=calib_source
     )
     
     print("\n" + "=" * 80)
@@ -962,29 +924,6 @@ def main():
     if inferred:
         print(f"   (also saved to case_dir for future use)")
     print("=" * 80)
-    
-    # Visualize first frame in 3D if requested
-    if args.visualize_3d:
-        print("\n[Bonus] Visualizing first frame in 3D...")
-        try:
-            from visualize_3d_scene import visualize_depth_scene
-            # Get first frame name from sorted depths
-            first_frame = sorted(os.listdir(output_dir / "0"))[0]
-            frame_name = first_frame.replace(".npy", "")
-            visualize_depth_scene(
-                depth_root=str(output_dir),
-                calibrate_path=str(output_dir / "calibrate.pkl"),
-                metadata_path=str(output_dir / "metadata.json"),
-                frame_name=frame_name,
-                depth_scale=None,
-                auto_scale=True,
-                show_cameras=True,
-                frustum_scale=0.05,
-                axis_scale=0.01,
-                max_depth=100.0
-            )
-        except Exception as e:
-            print(f"✗ Error visualizing 3D: {e}")
 
 
 if __name__ == "__main__":

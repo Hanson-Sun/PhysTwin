@@ -507,40 +507,78 @@ if __name__ == "__main__":
     ).T
     mesh_matching_points_world = mesh_matching_points_world[:, :3]
 
-    # Do the ARAP based on the matching keypoints
-    # Convert the mesh to open3d to use the ARAP function
+    # Skip ARAP deformation if mesh is not watertight (can't do proper volume deformation)
+    SKIP_ARAP = not mesh.is_watertight
+    
+    # Convert the mesh to open3d format
     initial_mesh_world = o3d.geometry.TriangleMesh()
     initial_mesh_world.vertices = o3d.utility.Vector3dVector(np.asarray(mesh.vertices))
     initial_mesh_world.triangles = o3d.utility.Vector3iVector(np.asarray(mesh.faces))
-    # Need to remove the duplicated vertices to enable open3d, however, the duplicated points are important in trimesh for texture
-    initial_mesh_world = initial_mesh_world.remove_duplicated_vertices()
-    # Get the index from original vertices to the mesh vertices, mapping between trimesh and open3d
-    kdtree = KDTree(initial_mesh_world.vertices)
-    _, trimesh_indices = kdtree.query(np.asarray(mesh.vertices))
-    trimesh_indices = np.asarray(trimesh_indices, dtype=np.int32)
-    initial_mesh_world.transform(mesh2world)
+    
+    if SKIP_ARAP:
+        print("Skipping ARAP deformation for thin object - using matched points alignment")
+        print(f"Number of matched points: {len(mesh_matching_points_world)}")
+        
+        # Use the SuperGlue matched points for precise alignment
+        # Compute average translation from mesh matched points to observed matched points
+        if len(mesh_matching_points_world) > 0 and len(matching_points) > 0:
+            translation_vector = np.mean(matching_points - mesh_matching_points_world, axis=0)
+            print(f"Computed translation vector: {translation_vector}")
+            print(f"Translation magnitude: {np.linalg.norm(translation_vector)}")
+            
+            # Apply full transformation including scale (since scale optimization was done)
+            full_transform = np.dot(c2w, np.dot(scale_matrix, mesh2raw_camera))
+            initial_mesh_world.transform(full_transform)
+            
+            # Then apply the correction translation
+            translation_matrix = np.eye(4)
+            translation_matrix[:3, 3] = translation_vector
+            initial_mesh_world.transform(translation_matrix)
+        else:
+            print("Warning: No matched points found, using centroid alignment as fallback")
+            # Fallback to centroid alignment
+            mesh_centroid = np.mean(np.asarray(mesh.vertices), axis=0)
+            obs_centroid = np.mean(obs_points, axis=0)
+            translation = obs_centroid - mesh_centroid
+            print(f"Centroid translation: {translation}")
+            basic_transform = np.dot(c2w, mesh2raw_camera)
+            initial_mesh_world.transform(basic_transform)
+            translation_matrix = np.eye(4)
+            translation_matrix[:3, 3] = translation
+            initial_mesh_world.transform(translation_matrix)
+        
+        final_mesh_world = initial_mesh_world
+        trimesh_indices = np.arange(len(mesh.vertices))
+    else:
+        # Need to remove the duplicated vertices to enable open3d, however, the duplicated points are important in trimesh for texture
+        initial_mesh_world = initial_mesh_world.remove_duplicated_vertices()
+        # Get the index from original vertices to the mesh vertices, mapping between trimesh and open3d
+        kdtree = KDTree(initial_mesh_world.vertices)
+        _, trimesh_indices = kdtree.query(np.asarray(mesh.vertices))
+        trimesh_indices = np.asarray(trimesh_indices, dtype=np.int32)
+        initial_mesh_world.transform(mesh2world)
 
-    initial_mesh_world = initial_mesh_world.remove_duplicated_vertices()
-    initial_mesh_world = initial_mesh_world.remove_degenerate_triangles()
-    initial_mesh_world = initial_mesh_world.remove_unreferenced_vertices()
+        initial_mesh_world = initial_mesh_world.remove_duplicated_vertices()
+        initial_mesh_world = initial_mesh_world.remove_degenerate_triangles()
+        initial_mesh_world = initial_mesh_world.remove_unreferenced_vertices()
 
-    # ARAP based on the keypoints
-    deform_kp_mesh_world, mesh_points_indices = deform_ARAP(
-        initial_mesh_world, mesh_matching_points_world, matching_points
-    )
+        # ARAP based on the keypoints
+        deform_kp_mesh_world, mesh_points_indices = deform_ARAP(
+            initial_mesh_world, mesh_matching_points_world, matching_points
+        )
 
-    # Do the ARAP based on both the ray-casting matching and the keypoints
-    # Identify the vertex which blocks or blocked by the observation, then match them with the observation points on the ray
-    final_mesh_world = deform_ARAP_ray_registration(
-        deform_kp_mesh_world,
-        obs_points,
-        mesh,
-        trimesh_indices,
-        c2ws,
-        w2cs,
-        mesh_points_indices,
-        matching_points,
-    )
+        # Do the ARAP based on both the ray-casting matching and the keypoints
+        # Identify the vertex which blocks or blocked by the observation, then match them with the observation points on the ray
+        final_mesh_world = deform_ARAP_ray_registration(
+            deform_kp_mesh_world,
+            obs_points,
+            mesh,
+            trimesh_indices,
+            c2ws,
+            w2cs,
+            mesh_points_indices,
+            matching_points,
+        )
 
     if VIS:
         final_mesh_world.compute_vertex_normals()
