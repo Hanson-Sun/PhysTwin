@@ -215,7 +215,7 @@ def visualize_depth_scene(depth_root, calibrate_path=None, metadata_path=None,
             intrinsics = [np.array(intr) for intr in metadata['intrinsics']]
         else:
             raise ValueError(f"Unexpected intrinsics format: {type(metadata['intrinsics'])}")
-        
+
         # Convert c2w to w2c
         extrinsics = [np.linalg.inv(c2w if c2w.shape == (4,4) else np.vstack([c2w, [0,0,0,1]])) for c2w in c2ws]
     else:
@@ -249,20 +249,20 @@ def visualize_depth_scene(depth_root, calibrate_path=None, metadata_path=None,
         
         depth = np.load(depth_path).astype(np.float32)
         H, W = depth.shape
-        
+
         # Get camera parameters
         intrinsic = intrinsics[cam_idx]
         if isinstance(intrinsic, list):
             intrinsic = np.array(intrinsic)
-        
+
         c2w = c2ws[cam_idx]
-        
+
         # Ensure c2w is 4x4
         if c2w.shape == (3, 4):
             c2w_4x4 = np.eye(4)
             c2w_4x4[:3, :4] = c2w
             c2w = c2w_4x4
-        
+
         # Determine depth scale
         if depth_scale is not None:
             ds = depth_scale
@@ -314,11 +314,11 @@ def visualize_depth_scene(depth_root, calibrate_path=None, metadata_path=None,
             
             depth = np.load(depth_path).astype(np.float32)
             H, W = depth.shape
-            
+
             intrinsic = intrinsics[cam_idx]
             if isinstance(intrinsic, list):
                 intrinsic = np.array(intrinsic)
-            
+
             c2w = c2ws[cam_idx]
             if c2w.shape == (3, 4):
                 c2w_4x4 = np.eye(4)

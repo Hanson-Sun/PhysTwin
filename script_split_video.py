@@ -15,5 +15,5 @@ with open("data_config.csv", newline="", encoding="utf-8") as csvfile:
             continue
 
         os.system(
-            f"python camera_alignment/calibrate_camera_extrinsics.py --base_path {base_path} --case_name {case_name}"
+            f"python split_video.py --input_dir  {base_path}/{case_name}/color"
         )

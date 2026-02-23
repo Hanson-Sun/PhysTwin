@@ -18,12 +18,13 @@ parser.add_argument("--shape_prior", action="store_true", default=False)
 args = parser.parse_args()
 
 # Set the debug flags
-ALIGN_DATA = False
-PROCESS_SEG = False
+ALIGN_DATA = False # dont need this
+
+PROCESS_SEG = False 
 PROCESS_SHAPE_PRIOR = False
 PROCESS_TRACK = False
 PROCESS_3D = False
-PROCESS_ALIGN = False
+PROCESS_ALIGN = True
 PROCESS_FINAL = True
 
 USE_SD_UPSCALE = False
@@ -81,11 +82,11 @@ class Timer:
         )
 
 
-if ALIGN_DATA:
-    with Timer("Align depths and color"):
-        os.system(
-            f"python ./align_color_and_depth.py --depth_dir {base_path}/{case_name}/depth --color_dir {base_path}/{case_name}/color --output_dir {base_path}/{case_name}/color --overwrite"
-        )
+# if ALIGN_DATA:
+#     with Timer("Align depths and color"):
+#         os.system(
+#             f"python ./align_color_and_depth.py --depth_dir {base_path}/{case_name}/depth --color_dir {base_path}/{case_name}/color --output_dir {base_path}/{case_name}/color --overwrite"
+#         )
 
 
 if PROCESS_SEG:
@@ -116,8 +117,7 @@ if PROCESS_SHAPE_PRIOR and SHAPE_PRIOR:
                 f"python ./data_process/image_upscale.py --img_path {base_path}/{case_name}/color/0/0.png --mask_path {mask_path} --output_path {base_path}/{case_name}/shape/high_resolution_sd.png --category {category} --ultra_low_memory"
             )
         else:
-            # take first frame of 0.orig.mp4 if exists
-            orig_video_path = f"{base_path}/{case_name}/color/0.orig.mp4"
+            orig_video_path = f"{base_path}/{case_name}/color/0.mp4"
             if os.path.exists(orig_video_path):
                 os.system(
                     f'ffmpeg -i {orig_video_path} -vframes 1 {base_path}/{case_name}/shape/high_resolution.png -y'

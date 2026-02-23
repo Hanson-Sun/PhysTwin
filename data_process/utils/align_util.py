@@ -129,12 +129,19 @@ def project_2d_to_3d(image_points, depth, camera_intrinsics, camera_pose):
     return world_points_homogeneous[:, :3], valid_mask
 
 
-def sample_camera_poses(radius, num_samples, num_up_samples=4, device="cpu"):
+def sample_camera_poses(radius, num_samples, num_up_samples=4, device="cpu", center=None):
     """
     Generate camera poses around a sphere with a given radius.
     camera_poses: A list of 4x4 transformation matrices representing the camera poses.
     camera_view_coord = word_coord @ camera_pose
+
+    center: optional (3,) array; cameras orbit this world-space point instead of the
+            origin.  Use mesh.centroid so that a z-shifted mesh is still fully visible.
     """
+    if center is None:
+        center = np.zeros(3)
+    center = np.array(center, dtype=float)
+
     camera_poses = []
     phi = np.linspace(0, np.pi, num_samples)  # Elevation angle
     phi = phi[1:-1]  # Exclude poles
@@ -153,8 +160,8 @@ def sample_camera_poses(radius, num_samples, num_up_samples=4, device="cpu"):
                 x = radius * np.sin(p) * np.cos(t)
                 y = radius * np.sin(p) * np.sin(t)
                 z = radius * np.cos(p)
-                position = np.array([x, y, z])[None, :]
-                lookat = np.array([0, 0, 0])[None, :]
+                position = (np.array([x, y, z]) + center)[None, :]
+                lookat = center[None, :]
                 up = up[None, :]
                 R, T = look_at_view_transform(radius, t, p, False, position, lookat, up)
                 camera_pose = np.eye(4)
@@ -167,7 +174,7 @@ def sample_camera_poses(radius, num_samples, num_up_samples=4, device="cpu"):
 
 
 def render_image(mesh, camera_poses, width=640, height=480, fov=1, device="cpu"):
-    camera_poses = torch.tensor(camera_poses, device=device)
+    camera_poses = camera_poses.clone().detach().to(device)
     if len(camera_poses.shape) == 2:
         camera_poses = camera_poses[None, :]
 
@@ -234,9 +241,10 @@ def render_multi_images(
     num_samples=6,
     num_ups=2,
     device="cpu",
+    center=None,
 ):
-    # Sample camera poses
-    camera_poses = sample_camera_poses(radius, num_samples, num_ups, device)
+    # Sample camera poses, orbiting the mesh centroid so a z-shifted mesh stays visible
+    camera_poses = sample_camera_poses(radius, num_samples, num_ups, device, center=center)
 
     # Calculate intrinsics
     fx = 0.5 * width / np.tan(fov / 2)

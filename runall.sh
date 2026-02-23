@@ -1,43 +1,85 @@
 #!/usr/bin/env bash
 
-# Fail fast: exit on error, undefined var, or pipeline failure
-set -euo pipefail
+# Exit on:
+# - any error
+# - undefined variable
+# - pipeline failure
+# set -euo pipefail
 
-# Print a helpful message when any command fails
-trap 'rc=$?; echo "runall.sh failed on line ${LINENO} with exit code ${rc}" >&2; exit ${rc}' ERR
+# Print helpful error message
+# trap 'rc=$?; echo "runall.sh failed on line ${LINENO} with exit code ${rc}" >&2; exit ${rc}' ERR
+
+# Kill entire process group on Ctrl-C
+# trap 'echo; echo "Interrupted. Killing all child processes..."; kill 0' INT TERM
 
 export WANDB_MODE=offline
+export PYTHONUNBUFFERED=1
 
-# Process the data
-python script_process_data.py
+# ---- Load conda into this non-interactive shell ----
+source "$(conda info --base)/etc/profile.d/conda.sh"
 
-# need to run calibrate_camera_extrinsics.py after
-python script_calibrate_camera_extrinsics.py
+# Helper to print step headers
+step() {
+  echo
+  echo "========================================"
+  echo "STEP: $*"
+  echo "========================================"
+}
 
-# Further get the data for first-frame Gaussian
-python export_gaussian_data.py
+# =====================================================
+# STEP 1: Different environment
+# =====================================================
 
-# Get human mask data for visualization and rendering evaluation
-python export_video_human_mask.py
+step "Parse depth data"
+conda activate phystwin_data
+# python -u script_depth_inference.py
 
-# Zero-order Optimization
-python script_optimize.py
+# Switch back to main env
+conda activate phystwin
 
-# First-order Optimization
-python script_train.py
+# =====================================================
+# Main pipeline (sequential)
+# =====================================================
 
-# Inference with the constructed models
-python script_inference.py
+step "Process the data"
+python -u script_process_data.py
 
-# Train the Gaussian with the first-frame data
+step "Calibrate camera extrinsics"
+python -u script_calibrate_camera_extrinsics.py
+
+step "Export Gaussian data"
+python -u export_gaussian_data.py
+
+step "Export human mask data"
+python -u export_video_human_mask.py
+
+step "Zero-order Optimization"
+python -u script_optimize.py
+
+step "First-order Optimization"
+python -u script_train.py
+
+step "Inference"
+python -u script_inference.py
+
+step "Train Gaussian (first-frame)"
 bash gs_run.sh
 
-# Use LBS to render the dynamic videos (The final videos in ./gaussian_output_dynamic folder)
+step "LBS dynamic video rendering"
 bash gs_run_simulate.sh
-python export_render_eval_data.py
-# Get the quantative results
+
+step "Export render eval data"
+python -u export_render_eval_data.py
+
+step "Quantitative evaluation"
 bash evaluate.sh
 
-# Get the qualitative results
+step "Qualitative results"
 bash gs_run_simulate_white.sh
-python visualize_render_results.py
+
+python -u visualize_render_results.py
+
+echo
+echo "========================================"
+echo "ALL STEPS COMPLETED SUCCESSFULLY"
+echo "========================================"

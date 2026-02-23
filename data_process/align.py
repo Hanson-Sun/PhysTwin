@@ -45,23 +45,34 @@ def existDir(dir_path):
 
 
 def pose_selection_render_superglue(
-    raw_img, fov, mesh_path, mesh, crop_img, output_dir
+    raw_img, fov, mesh_path, mesh, crop_img, output_dir, render_w=None, render_h=None
 ):
     # Calculate suitable rendering radius
     bounding_box = mesh.bounds
     max_dimension = np.linalg.norm(bounding_box[1] - bounding_box[0])
     radius = 2 * (max_dimension / 2) / np.tan(fov / 2)
 
-    # Render multimle images and feature matching
+    # Orbit cameras around the mesh centroid so that a z-shifted mesh (after
+    # calibrate_camera_extrinsics.py) is still fully visible in each rendered view.
+    mesh_center = np.array(mesh.centroid, dtype=float)
+
+    # Render at depth/PCD resolution to avoid GPU OOM at full color resolution
+    if render_w is None:
+        render_w = raw_img.shape[1]
+    if render_h is None:
+        render_h = raw_img.shape[0]
+
+    # Render multiple images and feature matching
     colors, depths, camera_poses, camera_intrinsics = render_multi_images(
         mesh_path,
-        raw_img.shape[1],
-        raw_img.shape[0],
+        render_w,
+        render_h,
         fov,
         radius=radius,
         num_samples=8,
         num_ups=4,
         device="cuda",
+        center=mesh_center,
     )
     grays = [cv2.cvtColor(color, cv2.COLOR_BGR2GRAY) for color in colors]
     # Use superglue to match the features
@@ -109,7 +120,14 @@ def registration_pnp(mesh_matching_points, raw_matching_points, intrinsic):
 
 
 def registration_scale(mesh_matching_points_cam, matching_points_cam):
-    # After PNP, optimize the scale in the camera coordinate
+    # After PnP, optimize the scale in camera coordinate.
+    # Subtract centroids first so the regression fits object *size*, not depth offset.
+    # Without this, the large Z translation dominates and gives a wrong scale.
+    mesh_center = mesh_matching_points_cam.mean(axis=0)
+    real_center = matching_points_cam.mean(axis=0)
+    mesh_centered = mesh_matching_points_cam - mesh_center
+    real_centered = matching_points_cam - real_center
+
     def objective(scale, mesh_points, pcd_points):
         transformed_points = scale * mesh_points
         loss = np.sum(np.sum((transformed_points - pcd_points) ** 2, axis=1))
@@ -119,7 +137,7 @@ def registration_scale(mesh_matching_points_cam, matching_points_cam):
     result = minimize(
         objective,
         initial_scale,
-        args=(mesh_matching_points_cam, matching_points_cam),
+        args=(mesh_centered, real_centered),
         method="L-BFGS-B",
     )
     optimal_scale = result.x[0]
@@ -326,8 +344,29 @@ if __name__ == "__main__":
             interpolation=cv2.INTER_NEAREST,
         )
 
-    # Calculate camera parameters
-    fov = 2 * np.arctan(raw_img.shape[1] / (2 * intrinsic[0, 0]))
+    # The intrinsics stored in metadata are for the depth/PCD resolution (WH field).
+    # If the color image is at a higher resolution, scale the intrinsics accordingly so
+    # that fov computation and PnP registration use the correct pixel coordinates.
+    img_h, img_w = raw_img.shape[:2]
+    meta_w, meta_h = data["WH"]  # depth/PCD resolution, e.g. [504, 280]
+    if (img_h, img_w) != (meta_h, meta_w):
+        scale_x = img_w / meta_w
+        scale_y = img_h / meta_h
+        intrinsic_color = intrinsic.copy().astype(float)
+        intrinsic_color[0, 0] *= scale_x  # fx
+        intrinsic_color[0, 2] *= scale_x  # cx
+        intrinsic_color[1, 1] *= scale_y  # fy
+        intrinsic_color[1, 2] *= scale_y  # cy
+        print(f"Scaled intrinsics from ({meta_h}x{meta_w}) to ({img_h}x{img_w}): "
+              f"fx={intrinsic_color[0,0]:.1f}, fy={intrinsic_color[1,1]:.1f}, "
+              f"cx={intrinsic_color[0,2]:.1f}, cy={intrinsic_color[1,2]:.1f}")
+    else:
+        intrinsic_color = intrinsic
+        scale_x = 1.0
+        scale_y = 1.0
+
+    # Calculate camera parameters using the color-resolution intrinsics
+    fov = 2 * np.arctan(img_w / (2 * intrinsic_color[0, 0]))
 
     if not os.path.exists(f"{output_dir}/best_match.pkl"):
         # 2D feature Matching to get the best pose of the object
@@ -362,7 +401,21 @@ if __name__ == "__main__":
         crop_img = crop_img[bbox[1] : bbox[3], bbox[0] : bbox[2]]
         crop_img = cv2.cvtColor(crop_img, cv2.COLOR_RGB2GRAY)
 
-        # Render the object and match the features
+        # Downscale the crop to roughly match the render resolution (meta_h x meta_w).
+        # match_pairs.py does no internal resizing (resize=[-1]), so a large crop vs.
+        # small render causes SuperGlue to find too few matches.
+        crop_h, crop_w = crop_img.shape[:2]
+        max_render_dim = max(meta_w, meta_h)
+        crop_scale = max_render_dim / max(crop_w, crop_h)
+        if crop_scale < 1.0:
+            new_crop_w = max(1, int(crop_w * crop_scale))
+            new_crop_h = max(1, int(crop_h * crop_scale))
+            crop_img = cv2.resize(crop_img, (new_crop_w, new_crop_h), interpolation=cv2.INTER_AREA)
+        else:
+            crop_scale = 1.0
+
+        # Render the object and match the features.
+        # Render at depth/PCD resolution (meta_h x meta_w) to avoid GPU OOM.
         best_color, best_depth, best_pose, match_result, camera_intrinsics = (
             pose_selection_render_superglue(
                 raw_img,
@@ -371,6 +424,8 @@ if __name__ == "__main__":
                 mesh,
                 crop_img,
                 output_dir=output_dir,
+                render_w=meta_w,
+                render_h=meta_h,
             )
         )
         with open(f"{output_dir}/best_match.pkl", "wb") as f:
@@ -382,12 +437,13 @@ if __name__ == "__main__":
                     match_result,
                     camera_intrinsics,
                     bbox,
+                    crop_scale,
                 ],
                 f,
             )
     else:
         with open(f"{output_dir}/best_match.pkl", "rb") as f:
-            best_color, best_depth, best_pose, match_result, camera_intrinsics, bbox = (
+            best_color, best_depth, best_pose, match_result, camera_intrinsics, bbox, crop_scale = (
                 pickle.load(f)
             )
 
@@ -404,7 +460,8 @@ if __name__ == "__main__":
         match_result["matches"][valid_matches]
     ]
     raw_matching_points_box = raw_matching_points_box[valid_mask]
-    raw_matching_points = raw_matching_points_box + np.array([bbox[0], bbox[1]])
+    # Scale keypoints from downscaled crop space back to original color image space
+    raw_matching_points = raw_matching_points_box / crop_scale + np.array([bbox[0], bbox[1]])
 
     if VIS:
         # Do visualization for the matching
@@ -425,8 +482,9 @@ if __name__ == "__main__":
         )
 
     # Do PnP optimization to optimize the rotation between the 3D mesh keypoints and the 2D image keypoints
+    # Use intrinsic_color which is scaled to match the color image resolution
     mesh2raw_camera = registration_pnp(
-        mesh_matching_points, raw_matching_points, intrinsic
+        mesh_matching_points, raw_matching_points, intrinsic_color
     )
 
     if VIS:
@@ -435,7 +493,7 @@ if __name__ == "__main__":
         pnp_camera_pose[3, :3] = mesh2raw_camera[:3, 3]
         pnp_camera_pose[:, :2] = -pnp_camera_pose[:, :2]
         color, depth = render_image(
-            mesh_path, pnp_camera_pose, raw_img.shape[1], raw_img.shape[0], fov, "cuda"
+            mesh_path, torch.tensor(pnp_camera_pose), raw_img.shape[1], raw_img.shape[0], fov, "cuda"
         )
         vis_mask = depth > 0
         color[0][~vis_mask] = raw_img[~vis_mask]
@@ -471,9 +529,16 @@ if __name__ == "__main__":
     obs_points = np.vstack(obs_points)
     obs_colors = np.vstack(obs_colors)
 
-    # Find the cloest points for the raw_matching_points
+    # Find the closest points for the raw_matching_points.
+    # first_mask / first_points are at PCD/depth resolution (meta_h x meta_w).
+    # raw_matching_points are in color image space (img_h x img_w).
+    # Scale them down so the KD-tree search operates in the same coordinate space.
+    pcd_h, pcd_w = first_points.shape[:2]
+    raw_matching_points_pcd = raw_matching_points * np.array(
+        [pcd_w / img_w, pcd_h / img_h]
+    )
     new_match, matching_points = select_point(
-        first_points, raw_matching_points, first_mask
+        first_points, raw_matching_points_pcd, first_mask
     )
     matching_points_cam = np.dot(
         w2c, np.hstack((matching_points, np.ones((matching_points.shape[0], 1)))).T
@@ -481,18 +546,27 @@ if __name__ == "__main__":
     matching_points_cam = matching_points_cam[:, :3]
 
     if VIS:
-        # Draw the raw_matching_points and new matching points on the masked
+        # Draw the raw_matching_points and new matching points on the masked image.
+        # first_mask is at PCD resolution; resize to color image resolution for display.
+        first_mask_color = cv2.resize(
+            first_mask.astype(np.uint8),
+            (img_w, img_h),
+            interpolation=cv2.INTER_NEAREST,
+        ).astype(bool)
         vis_img = raw_img.copy()
-        vis_img[~first_mask] = 0
+        vis_img[~first_mask_color] = 0
+        # Scale new_match (PCD coords) back to color image space for display
+        new_match_color = new_match * np.array([img_w / pcd_w, img_h / pcd_h])
         plot_image_with_points(
             vis_img,
             raw_matching_points,
             f"{output_dir}/raw_matching_valid.png",
-            new_match,
+            new_match_color,
         )
 
-    # Use the matching points in the camera coordinate to optimize the scame between the mesh and the observation
+    # Use the matching points in the camera coordinate to optimize the scale between the mesh and the observation
     optimal_scale = registration_scale(mesh_matching_points_cam, matching_points_cam)
+    print(f"Optimal scale (model units → meters): {optimal_scale:.6f}")
 
     # Compute the rigid transformation from the original mesh to the final world coordinate
     scale_matrix = np.eye(4) * optimal_scale
@@ -507,68 +581,34 @@ if __name__ == "__main__":
     ).T
     mesh_matching_points_world = mesh_matching_points_world[:, :3]
 
-    # Skip ARAP deformation if mesh is not watertight (can't do proper volume deformation)
-    SKIP_ARAP = not mesh.is_watertight
-    
     # Convert the mesh to open3d format
     initial_mesh_world = o3d.geometry.TriangleMesh()
     initial_mesh_world.vertices = o3d.utility.Vector3dVector(np.asarray(mesh.vertices))
     initial_mesh_world.triangles = o3d.utility.Vector3iVector(np.asarray(mesh.faces))
-    
-    if SKIP_ARAP:
-        print("Skipping ARAP deformation for thin object - using matched points alignment")
-        print(f"Number of matched points: {len(mesh_matching_points_world)}")
-        
-        # Use the SuperGlue matched points for precise alignment
-        # Compute average translation from mesh matched points to observed matched points
-        if len(mesh_matching_points_world) > 0 and len(matching_points) > 0:
-            translation_vector = np.mean(matching_points - mesh_matching_points_world, axis=0)
-            print(f"Computed translation vector: {translation_vector}")
-            print(f"Translation magnitude: {np.linalg.norm(translation_vector)}")
-            
-            # Apply full transformation including scale (since scale optimization was done)
-            full_transform = np.dot(c2w, np.dot(scale_matrix, mesh2raw_camera))
-            initial_mesh_world.transform(full_transform)
-            
-            # Then apply the correction translation
-            translation_matrix = np.eye(4)
-            translation_matrix[:3, 3] = translation_vector
-            initial_mesh_world.transform(translation_matrix)
-        else:
-            print("Warning: No matched points found, using centroid alignment as fallback")
-            # Fallback to centroid alignment
-            mesh_centroid = np.mean(np.asarray(mesh.vertices), axis=0)
-            obs_centroid = np.mean(obs_points, axis=0)
-            translation = obs_centroid - mesh_centroid
-            print(f"Centroid translation: {translation}")
-            basic_transform = np.dot(c2w, mesh2raw_camera)
-            initial_mesh_world.transform(basic_transform)
-            translation_matrix = np.eye(4)
-            translation_matrix[:3, 3] = translation
-            initial_mesh_world.transform(translation_matrix)
-        
-        final_mesh_world = initial_mesh_world
-        trimesh_indices = np.arange(len(mesh.vertices))
-    else:
-        # Need to remove the duplicated vertices to enable open3d, however, the duplicated points are important in trimesh for texture
-        initial_mesh_world = initial_mesh_world.remove_duplicated_vertices()
-        # Get the index from original vertices to the mesh vertices, mapping between trimesh and open3d
-        kdtree = KDTree(initial_mesh_world.vertices)
-        _, trimesh_indices = kdtree.query(np.asarray(mesh.vertices))
-        trimesh_indices = np.asarray(trimesh_indices, dtype=np.int32)
-        initial_mesh_world.transform(mesh2world)
 
-        initial_mesh_world = initial_mesh_world.remove_duplicated_vertices()
-        initial_mesh_world = initial_mesh_world.remove_degenerate_triangles()
-        initial_mesh_world = initial_mesh_world.remove_unreferenced_vertices()
+    # Always run ARAP: keypoint-based ARAP works on any mesh.
+    # Ray-casting ARAP requires a watertight mesh for correct visibility, so skip that step only.
+    print(f"Mesh is_watertight: {mesh.is_watertight} — {'full ARAP' if mesh.is_watertight else 'keypoint-only ARAP (no ray registration)'}")
 
-        # ARAP based on the keypoints
-        deform_kp_mesh_world, mesh_points_indices = deform_ARAP(
-            initial_mesh_world, mesh_matching_points_world, matching_points
-        )
+    # Need to remove duplicated vertices for open3d, but keep trimesh mapping for texture
+    initial_mesh_world = initial_mesh_world.remove_duplicated_vertices()
+    # Get the index from original vertices to the mesh vertices, mapping between trimesh and open3d
+    kdtree = KDTree(initial_mesh_world.vertices)
+    _, trimesh_indices = kdtree.query(np.asarray(mesh.vertices))
+    trimesh_indices = np.asarray(trimesh_indices, dtype=np.int32)
+    initial_mesh_world.transform(mesh2world)
 
-        # Do the ARAP based on both the ray-casting matching and the keypoints
-        # Identify the vertex which blocks or blocked by the observation, then match them with the observation points on the ray
+    initial_mesh_world = initial_mesh_world.remove_duplicated_vertices()
+    initial_mesh_world = initial_mesh_world.remove_degenerate_triangles()
+    initial_mesh_world = initial_mesh_world.remove_unreferenced_vertices()
+
+    # ARAP based on the keypoints (works regardless of watertightness)
+    deform_kp_mesh_world, mesh_points_indices = deform_ARAP(
+        initial_mesh_world, mesh_matching_points_world, matching_points
+    )
+
+    if mesh.is_watertight:
+        # Full ARAP: additionally refine using ray-casting visibility matching
         final_mesh_world = deform_ARAP_ray_registration(
             deform_kp_mesh_world,
             obs_points,
@@ -579,6 +619,8 @@ if __name__ == "__main__":
             mesh_points_indices,
             matching_points,
         )
+    else:
+        final_mesh_world = deform_kp_mesh_world
 
     if VIS:
         final_mesh_world.compute_vertex_normals()

@@ -1,3 +1,4 @@
+import csv
 import numpy as np
 import scipy.interpolate
 import pickle
@@ -71,7 +72,9 @@ def generate_interpolated_path(poses: np.ndarray,
 
 if __name__ == '__main__':
     root_dir = "./data/gaussian_data"
-    for scene_name in sorted(os.listdir(root_dir)):
+    with open("data_config.csv", newline="", encoding="utf-8") as csvfile:
+        scene_names = [row[0] for row in csv.reader(csvfile) if row]
+    for scene_name in scene_names:
         scene_dir = os.path.join(root_dir, scene_name)
         print(f'Processing {scene_name}')
         camera_path = os.path.join(scene_dir, 'camera_meta.pkl')

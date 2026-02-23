@@ -21,10 +21,9 @@ single_clift_cloth_1,cloth,False
 single_clift_cloth_3,cloth,False
 double_lift_cloth_1,cloth,False
 
+double_stretch_sloth_da3, sloth, True
 
-double_bend_sloth_da3, sloth, True
-cloth_double_bend, grat-mat-pad, True
+cloth_double_bend, gray-mat-pad, True
 double_bend_monkey,red-monkey,True
 single_lift_pad, gray-mat-pad, True
-double_bend_monkey,red-monkey,True
 water_bottle_single,plastic-water-bottle,True

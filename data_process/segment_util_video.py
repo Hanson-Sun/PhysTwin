@@ -47,8 +47,8 @@ TEXT_THRESHOLD = 0.25
 PROMPT_TYPE_FOR_VIDEO = "box"  # choose from ["point", "box", "mask"]
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-VIDEO_PATH = f"{base_path}/{case_name}/color/{camera_idx}.orig.mp4"
-ALT_VIDEO_PATH = f"{base_path}/{case_name}/color/{camera_idx}.mp4"
+VIDEO_PATH = f"{base_path}/{case_name}/color/{camera_idx}.mp4"
+ALT_VIDEO_PATH = f"{base_path}/{case_name}/color/{camera_idx}.resized.mp4"
 DEPTH_PATH = f"{base_path}/{case_name}/depth/0/0.npy"
 
 existDir(f"{base_path}/{case_name}/tmp_data")

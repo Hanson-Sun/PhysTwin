@@ -643,6 +643,21 @@ def readQQTTSceneInfo(
         if image is not None:
             cam_W, cam_H = image.size  # PIL Image.size returns (width, height)
 
+        # Infer the resolution at which K was calibrated from the depth map for
+        # this camera. Intrinsics are saved at depth-map resolution (DA3 output
+        # resolution), which may differ from the (higher-res) training image.
+        # Reading the depth file is the most robust way to get that reference
+        # resolution without requiring any extra metadata field.
+        depth_file = os.path.join(path, str(cam_i) + "_depth.npy")
+        if os.path.exists(depth_file):
+            depth_arr = np.load(depth_file)
+            depth_H_ref, depth_W_ref = depth_arr.shape[:2]
+            if cam_W != depth_W_ref or cam_H != depth_H_ref:
+                K[0] *= cam_W / depth_W_ref  # scale fx and cx
+                K[1] *= cam_H / depth_H_ref  # scale fy and cy
+                print(f"  [dataset_readers] cam{cam_i}: rescaled K from "
+                      f"{depth_W_ref}x{depth_H_ref} to {cam_W}x{cam_H}")
+
         if use_high_res and image is not None:
             # If using high-res images, ensure intrinsics match actual image size
             upsample = 4
@@ -751,7 +766,17 @@ def readQQTTSceneInfo(
     
     for cam_i, c2w in enumerate(test_c2ws):
         dummy_cam_id = 1
-        K = intrinsics[dummy_cam_id]
+        K = intrinsics[dummy_cam_id].copy()
+        # Rescale K from depth-map resolution to test image resolution.
+        # Use the depth file for dummy_cam_id as the reference — same logic as
+        # the training camera loop above.
+        depth_file = os.path.join(path, str(dummy_cam_id) + "_depth.npy")
+        if os.path.exists(depth_file):
+            depth_arr = np.load(depth_file)
+            depth_H_ref, depth_W_ref = depth_arr.shape[:2]
+            if test_W != depth_W_ref or test_H != depth_H_ref:
+                K[0] *= test_W / depth_W_ref
+                K[1] *= test_H / depth_H_ref
         w2c = np.linalg.inv(c2w)
         R = np.transpose(
             w2c[:3, :3]

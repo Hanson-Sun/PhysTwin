@@ -13,6 +13,7 @@ with open("data_config.csv", newline="", encoding="utf-8") as csvfile:
         shape_prior = row[2]
 
         if not os.path.exists(f"{base_path}/{case_name}"):
+            print(f"Warning: Case '{case_name}' not found in {base_path}. Skipping.")
             continue
 
         if shape_prior.lower() == "true":

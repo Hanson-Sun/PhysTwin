@@ -79,15 +79,6 @@ def process_video_for_cam(depth_sub: Path, video_path: Path, out_root: Path, arg
 
     idx_map, ordered = build_depth_index(depth_files)
 
-    # Create backup BEFORE processing if it doesn't exist
-    orig_backup = video_path.with_name(video_path.stem + '.orig' + video_path.suffix)
-    if not orig_backup.exists():
-        try:
-            shutil.copy2(str(video_path), str(orig_backup))
-            print(f'Created backup: {orig_backup}')
-        except Exception as e:
-            print(f'Warning: failed to create backup {orig_backup}: {e}')
-
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         print('Failed to open video', video_path)
@@ -102,7 +93,7 @@ def process_video_for_cam(depth_sub: Path, video_path: Path, out_root: Path, arg
     if fps <= 0 or fps != fps:
         fps = 30.0
 
-    temp_video = video_path.with_suffix('.resized.mp4')
+    resized_video = video_path.with_suffix('.resized.mp4')
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     writer = None
 
@@ -134,7 +125,7 @@ def process_video_for_cam(depth_sub: Path, video_path: Path, out_root: Path, arg
 
         # initialize writer when we know target size
         if writer is None:
-            writer = cv2.VideoWriter(str(temp_video), fourcc, fps, (tw, th))
+            writer = cv2.VideoWriter(str(resized_video), fourcc, fps, (tw, th))
 
         # resize BGR frame to target (cv2 uses (w,h))
         try:
@@ -168,28 +159,6 @@ def process_video_for_cam(depth_sub: Path, video_path: Path, out_root: Path, arg
     cap.release()
     if writer is not None:
         writer.release()
-        # backup original and replace
-        try:
-            # create backup as <name>.orig<ext> (e.g., 0.orig.mp4)
-            orig_backup = video_path.with_name(video_path.stem + '.orig' + video_path.suffix)
-            # copy original to backup if it doesn't already exist
-            if not orig_backup.exists():
-                try:
-                    shutil.copy2(str(video_path), str(orig_backup))
-                    print(f'Created backup: {orig_backup}')
-                except Exception as e:
-                    print(f'Warning: failed to create backup {orig_backup}: {e}')
-
-            # atomically replace original with resized temp video
-            try:
-                os.replace(str(temp_video), str(video_path))
-                print(f'Replaced {video_path} with resized version')
-            except Exception as ex:
-                # fallback to pathlib replace if os.replace fails
-                temp_video.replace(video_path)
-                print(f'Replaced {video_path} with resized version')
-        except Exception as e:
-            print(f'Warning: failed to replace original video {video_path} with resized version: {e}')
 
     return n_total, n_written, n_errors
 

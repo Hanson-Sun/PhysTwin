@@ -9,6 +9,8 @@ base_path = "./data/different_types"
 output_path = "./data/gaussian_data"
 CONTROLLER_NAME = "hand"
 
+USE_SD_UPSCALE = False
+
 
 def existDir(dir_path):
     if not os.path.exists(dir_path):
@@ -49,9 +51,18 @@ with open("data_config.csv", newline="", encoding="utf-8") as csvfile:
             mask_path = f"{base_path}/{case_name}/mask/{i}/{obj_idx}/0.png"
             os.system(f"cp {mask_path} {output_path}/{case_name}/mask_{i}.png")
             # Prepare the high-resolution image
-            os.system(
-                f"python ./data_process/image_upscale.py --img_path {base_path}/{case_name}/color/{i}/0.png --output_path {output_path}/{case_name}/{i}_high.png --category {category} --ultra_low_memory"
-            )
+
+            if USE_SD_UPSCALE:
+                os.system(
+                    f"python ./data_process/image_upscale.py --img_path {base_path}/{case_name}/color/{i}/0.png --output_path {output_path}/{case_name}/{i}_high.png --category {category} --ultra_low_memory"
+                )
+            else:
+                orig_video_path = f"{base_path}/{case_name}/color/{i}.mp4"
+                if os.path.exists(orig_video_path):
+                    os.system(
+                        f'ffmpeg -i {orig_video_path} -vframes 1 {output_path}/{case_name}/{i}_high.png -y'
+                    )
+                    
             # Prepare the segmentation mask of the high-resolution image
             os.system(
                 f"python ./data_process/segment_util_image.py --img_path {output_path}/{case_name}/{i}_high.png --TEXT_PROMPT {category} --output_path {output_path}/{case_name}/mask_{i}_high.png"

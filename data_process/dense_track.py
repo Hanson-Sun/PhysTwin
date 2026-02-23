@@ -123,25 +123,21 @@ if __name__ == "__main__":
 
     for i in range(num_cam):
         print(f"Processing {i}th camera")
-        
-        # Try to load high-res original video if available, otherwise use standard video
-        orig_video_path = f"{base_path}/{case_name}/color/{i}.orig.mp4"
-        std_video_path = f"{base_path}/{case_name}/color/{i}.mp4"
-        
-        # Get scale factor from video resolutions
+
+        video_path = f"{base_path}/{case_name}/color/{i}.mp4"
+
+        # Determine target resolution from depth maps
+        depth_files = sorted(glob.glob(f"{base_path}/{case_name}/depth/{i}/*.npy"))
         scale_factor = 1.0
-        if os.path.exists(orig_video_path):
-            # Load just first frame of each to get resolutions
-            orig_frames = iio.imread(orig_video_path, plugin="FFMPEG", index=0)
-            std_frames = iio.imread(std_video_path, plugin="FFMPEG", index=0)
-            orig_width = orig_frames.shape[1]
-            std_width = std_frames.shape[1]
-            scale_factor = std_width / orig_width
-            video_path = orig_video_path
-            print(f"  Using high-res original video: {i}.orig.mp4 ({orig_width} → {std_width})")
+        if depth_files:
+            depth_sample = np.load(depth_files[0])
+            depth_height, depth_width = depth_sample.shape[:2]
+            first_frame = iio.imread(video_path, plugin="FFMPEG", index=0)
+            orig_width = first_frame.shape[1]
+            scale_factor = depth_width / orig_width
+            print(f"  Using video {i}.mp4, scale to depth res {depth_width}×{depth_height} (factor {scale_factor:.4f})")
         else:
-            video_path = std_video_path
-            print(f"  Using standard video: {i}.mp4")
+            print(f"  No depth files found for camera {i}; scale_factor=1.0")
         
         # Load the full video for tracking
         frames = iio.imread(video_path, plugin="FFMPEG")
