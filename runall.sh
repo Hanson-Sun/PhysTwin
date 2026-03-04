@@ -14,6 +14,7 @@
 
 export WANDB_MODE=offline
 export PYTHONUNBUFFERED=1
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 # ---- Load conda into this non-interactive shell ----
 source "$(conda info --base)/etc/profile.d/conda.sh"
@@ -32,7 +33,7 @@ step() {
 
 step "Parse depth data"
 conda activate phystwin_data
-# python -u script_depth_inference.py
+python -u script_depth_inference.py
 
 # Switch back to main env
 conda activate phystwin

@@ -35,8 +35,23 @@ def load_calibration(case_dir):
         c2ws = pickle.load(f)     # list of (4,4) arrays, one per camera
     with open(os.path.join(case_dir, "metadata.json")) as f:
         meta = json.load(f)
-    Ks   = meta["intrinsics"]      # list of [[fx,0,cx],[0,fy,cy],[0,0,1]]
-    WH   = meta["WH"]             # [W, H]
+    Ks  = [np.array(k, dtype=np.float64) for k in meta["intrinsics"]]
+    WH  = meta["WH"]             # [W, H] — image resolution (new convention)
+
+    # metadata.json stores K at original image resolution.
+    # Depth files and cotracker tracks are at depth-model resolution.
+    # Scale K down to match depth-map resolution for correct backprojection.
+    sample_depth = os.path.join(case_dir, "depth", "0", "0.npy")
+    if os.path.exists(sample_depth):
+        dH, dW = np.load(sample_depth).shape[:2]
+        img_W, img_H = int(WH[0]), int(WH[1])
+        if (dW, dH) != (img_W, img_H):
+            sx, sy = dW / img_W, dH / img_H
+            for K in Ks:
+                K[0, 0] *= sx;  K[0, 2] *= sx  # fx, cx
+                K[1, 1] *= sy;  K[1, 2] *= sy  # fy, cy
+            WH = [dW, dH]
+
     return c2ws, Ks, WH
 
 

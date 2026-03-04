@@ -638,25 +638,10 @@ def readQQTTSceneInfo(
         image_name = f"cam{cam_i}"
         image = Image.open(image_path) if os.path.exists(image_path) else None
 
-        # Get actual image dimensions and adjust intrinsics if needed
+        # Intrinsics are saved to match RGB input size. Use RGB resolution for camera.
         cam_H, cam_W = H, W
         if image is not None:
-            cam_W, cam_H = image.size  # PIL Image.size returns (width, height)
-
-        # Infer the resolution at which K was calibrated from the depth map for
-        # this camera. Intrinsics are saved at depth-map resolution (DA3 output
-        # resolution), which may differ from the (higher-res) training image.
-        # Reading the depth file is the most robust way to get that reference
-        # resolution without requiring any extra metadata field.
-        depth_file = os.path.join(path, str(cam_i) + "_depth.npy")
-        if os.path.exists(depth_file):
-            depth_arr = np.load(depth_file)
-            depth_H_ref, depth_W_ref = depth_arr.shape[:2]
-            if cam_W != depth_W_ref or cam_H != depth_H_ref:
-                K[0] *= cam_W / depth_W_ref  # scale fx and cx
-                K[1] *= cam_H / depth_H_ref  # scale fy and cy
-                print(f"  [dataset_readers] cam{cam_i}: rescaled K from "
-                      f"{depth_W_ref}x{depth_H_ref} to {cam_W}x{cam_H}")
+            cam_W, cam_H = image.size 
 
         if use_high_res and image is not None:
             # If using high-res images, ensure intrinsics match actual image size
@@ -679,14 +664,14 @@ def readQQTTSceneInfo(
             if len(mask.shape) == 3:
                 mask = mask[:, :, -1]  # take the alpha channel
 
-            # resize mask to match image size if needed
+            # resize mask to match RGB image resolution if needed
             if mask.shape[0] != cam_H or mask.shape[1] != cam_W:
                 mask = cv2.resize(mask, (cam_W, cam_H), interpolation=cv2.INTER_NEAREST)
                 
             image_rgba = np.concatenate([np.array(image), mask[:, :, None]], axis=-1)
             image = Image.fromarray(image_rgba)
 
-        # Calculate FOV using actual image dimensions and scaled intrinsics
+        # Calculate FOV using RGB image dimensions and intrinsics
         focal_length_x = K[0, 0]
         focal_length_y = K[1, 1]
         FovY = focal2fov(focal_length_y, cam_H)
@@ -697,12 +682,18 @@ def readQQTTSceneInfo(
         depth = (
             np.load(depth_path) / 1000.0 if os.path.exists(depth_path) else None
         )  # in mm, convert to m
+        # Resize depth to match RGB resolution
+        if depth is not None and (depth.shape[0] != cam_H or depth.shape[1] != cam_W):
+            depth = cv2.resize(depth, (cam_W, cam_H), interpolation=cv2.INTER_LINEAR)
 
         # load normal
         normal_path = os.path.join(path, str(cam_i) + "_normal_metric3d.png")
         normal = (
             np.array(Image.open(normal_path)) if os.path.exists(normal_path) else None
         )
+        # Resize normal to match RGB resolution
+        if normal is not None and (normal.shape[0] != cam_H or normal.shape[1] != cam_W):
+            normal = cv2.resize(normal, (cam_W, cam_H), interpolation=cv2.INTER_LINEAR)
 
         # load occ mask
         occ_mask_path = (
@@ -723,6 +714,9 @@ def readQQTTSceneInfo(
             occ_mask = cv2.dilate(
                 occ_mask, np.ones((kernel_size, kernel_size), np.uint8), iterations=1
             )  # dilate to avoid boundary artifacts
+            # Resize occ_mask to match RGB resolution
+            if occ_mask.shape[0] != cam_H or occ_mask.shape[1] != cam_W:
+                occ_mask = cv2.resize(occ_mask, (cam_W, cam_H), interpolation=cv2.INTER_LINEAR)
 
         if normal is not None:
             normal = normal.astype(np.float32) / 255.0  # normalize to [0, 1]
@@ -756,27 +750,19 @@ def readQQTTSceneInfo(
     test_cam_infos = []
     test_c2ws = pickle.load(open(os.path.join(path, "interp_poses.pkl"), "rb"))
     
-    # Get actual test image dimensions from the first training camera
+    # Use depth resolution from the first training camera for test cameras
     test_H, test_W = H, W  # defaults
     if len(cam_infos_unsorted) > 0:
         test_H = cam_infos_unsorted[0].height
         test_W = cam_infos_unsorted[0].width
 
-    print(f"Test camera resolution: {test_W}x{test_H} !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+    print(f"Test camera resolution: {test_W}x{test_H} (from depth maps)")
     
     for cam_i, c2w in enumerate(test_c2ws):
         dummy_cam_id = 1
         K = intrinsics[dummy_cam_id].copy()
-        # Rescale K from depth-map resolution to test image resolution.
-        # Use the depth file for dummy_cam_id as the reference — same logic as
-        # the training camera loop above.
-        depth_file = os.path.join(path, str(dummy_cam_id) + "_depth.npy")
-        if os.path.exists(depth_file):
-            depth_arr = np.load(depth_file)
-            depth_H_ref, depth_W_ref = depth_arr.shape[:2]
-            if test_W != depth_W_ref or test_H != depth_H_ref:
-                K[0] *= test_W / depth_W_ref
-                K[1] *= test_H / depth_H_ref
+        # K is already at depth resolution, don't rescale it
+        # The test cameras should use the same resolution as training cameras
         w2c = np.linalg.inv(c2w)
         R = np.transpose(
             w2c[:3, :3]

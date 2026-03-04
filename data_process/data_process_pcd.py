@@ -184,6 +184,22 @@ if __name__ == "__main__":
     frame_num = data["frame_num"]
     print(data["serial_numbers"])
 
+    # metadata.json stores K at original image resolution (WH = image dims).
+    # depth/ files are at depth-model resolution (typically smaller).
+    # Scale K down to match actual depth-map resolution for correct backprojection.
+    sample_depth_path = f"{base_path}/{case_name}/depth/0/0.npy"
+    if os.path.exists(sample_depth_path):
+        dH, dW = np.load(sample_depth_path).shape[:2]
+        img_W, img_H = int(WH[0]), int(WH[1])
+        if (dW, dH) != (img_W, img_H):
+            sx, sy = dW / img_W, dH / img_H
+            intrinsics = intrinsics.copy().astype(float)
+            intrinsics[:, 0, 0] *= sx  # fx
+            intrinsics[:, 0, 2] *= sx  # cx
+            intrinsics[:, 1, 1] *= sy  # fy
+            intrinsics[:, 1, 2] *= sy  # cy
+            print(f"  Scaled intrinsics: image {img_W}x{img_H} -> depth {dW}x{dH}")
+
     num_cam = len(intrinsics)
     c2ws = pickle.load(open(f"{base_path}/{case_name}/calibrate.pkl", "rb"))
 

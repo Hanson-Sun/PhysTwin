@@ -35,6 +35,20 @@ def load_calibration(case_dir):
     with open(os.path.join(case_dir, "metadata.json")) as f:
         meta = json.load(f)
     Ks = [np.asarray(k, dtype=np.float64) for k in meta["intrinsics"]]
+
+    # metadata.json stores K at original image resolution (WH = image dims).
+    # depth/ files are at depth-model resolution. Scale K down to match.
+    WH = meta.get("WH")
+    sample_depth = os.path.join(str(case_dir), "depth", "0", "0.npy")
+    if WH and os.path.exists(sample_depth):
+        dH, dW = np.load(sample_depth).shape[:2]
+        img_W, img_H = int(WH[0]), int(WH[1])
+        if (dW, dH) != (img_W, img_H):
+            sx, sy = dW / img_W, dH / img_H
+            for K in Ks:
+                K[0, 0] *= sx;  K[0, 2] *= sx  # fx, cx
+                K[1, 1] *= sy;  K[1, 2] *= sy  # fy, cy
+
     return c2ws, Ks, meta
 
 

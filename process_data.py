@@ -18,12 +18,12 @@ parser.add_argument("--shape_prior", action="store_true", default=False)
 args = parser.parse_args()
 
 # Set the debug flags
-ALIGN_DATA = False # dont need this
+ALIGN_DATA = False  # dont need this
 
-PROCESS_SEG = False 
-PROCESS_SHAPE_PRIOR = False
-PROCESS_TRACK = False
-PROCESS_3D = False
+PROCESS_SEG = True
+PROCESS_SHAPE_PRIOR = True
+PROCESS_TRACK = True
+PROCESS_3D = True
 PROCESS_ALIGN = True
 PROCESS_FINAL = True
 
@@ -112,7 +112,9 @@ if PROCESS_SHAPE_PRIOR and SHAPE_PRIOR:
     existDir(f"{base_path}/{case_name}/shape")
     # Get the high-resolution of the image to prepare for the trellis generation
     with Timer("Image Upscale"):
-        if USE_SD_UPSCALE and not os.path.isfile(f"{base_path}/{case_name}/shape/high_resolution.png"):
+        if USE_SD_UPSCALE and not os.path.isfile(
+            f"{base_path}/{case_name}/shape/high_resolution.png"
+        ):
             os.system(
                 f"python ./data_process/image_upscale.py --img_path {base_path}/{case_name}/color/0/0.png --mask_path {mask_path} --output_path {base_path}/{case_name}/shape/high_resolution_sd.png --category {category} --ultra_low_memory"
             )
@@ -120,7 +122,7 @@ if PROCESS_SHAPE_PRIOR and SHAPE_PRIOR:
             orig_video_path = f"{base_path}/{case_name}/color/0.mp4"
             if os.path.exists(orig_video_path):
                 os.system(
-                    f'ffmpeg -i {orig_video_path} -vframes 1 {base_path}/{case_name}/shape/high_resolution.png -y'
+                    f"ffmpeg -i {orig_video_path} -vframes 1 {base_path}/{case_name}/shape/high_resolution.png -y"
                 )
 
     # Get the masked image of the object
@@ -148,7 +150,7 @@ if PROCESS_3D:
             f"python ./data_process/data_process_pcd.py --base_path {base_path} --case_name {case_name}"
         )
 
-    # Further process and filter the noise of object and controller masks
+    # # Further process and filter the noise of object and controller masks
     with Timer("Mask Post-Processing"):
         os.system(
             f"python ./data_process/data_process_mask.py --base_path {base_path} --case_name {case_name} --controller_name {CONTROLLER_NAME}"

@@ -66,9 +66,6 @@ def filter_track(track_path, pcd_path, mask_path, frame_num, num_cam):
         # Locate the track points in the object mask of the first frame
         object_mask = processed_masks[0][i]["object"]
         track_object_idx = np.zeros((num_points), dtype=int)
-        print(object_mask.shape)
-        print(tracks.shape)
-        print(tracks[0])
         
         for j in range(num_points):
             if visibility[0, j] == 1:
@@ -137,6 +134,16 @@ def filter_track(track_path, pcd_path, mask_path, frame_num, num_cam):
         controller_colors.append(track_colors[:, np.where(track_controller_idx)[0], :])
         controller_visibilities.append(visibility[:, np.where(track_controller_idx)[0]])
 
+    # Truncate all per-camera arrays to the minimum frame count across cameras
+    # (tracks from different cameras may have slightly different frame counts)
+    min_frames = min(arr.shape[0] for arr in object_points)
+    object_points = [arr[:min_frames] for arr in object_points]
+    object_colors = [arr[:min_frames] for arr in object_colors]
+    object_visibilities = [arr[:min_frames] for arr in object_visibilities]
+    controller_points = [arr[:min_frames] for arr in controller_points]
+    controller_colors = [arr[:min_frames] for arr in controller_colors]
+    controller_visibilities = [arr[:min_frames] for arr in controller_visibilities]
+
     object_points = np.concatenate(object_points, axis=1)
     object_colors = np.concatenate(object_colors, axis=1)
     object_visibilities = np.concatenate(object_visibilities, axis=1)
@@ -155,7 +162,7 @@ def filter_track(track_path, pcd_path, mask_path, frame_num, num_cam):
     return track_data
 
 
-def filter_motion(track_data, neighbor_dist=0.01, min_neighbors=None):
+def filter_motion(track_data, neighbor_dist=0.02, min_neighbors=None):
     # Calculate the motion of each point
     object_points = track_data["object_points"]
     object_colors = track_data["object_colors"]

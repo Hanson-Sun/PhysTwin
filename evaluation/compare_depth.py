@@ -12,9 +12,9 @@ Metrics:
 - Ordinal Error: % of point pairs with incorrect depth ordering
 
 Usage:
-    python compare_depth.py --case_name double_stretch_sloth
-    python compare_depth.py --case_name double_stretch_sloth --camera 0
-    python compare_depth.py --case_name double_stretch_sloth --max_frames 50
+    python compare_depth.py --ref data/different_types/double_stretch_sloth/depth/ --pred data/vda_depth/double_stretch_sloth/
+    python compare_depth.py --ref data/different_types/double_stretch_sloth/depth/ --pred data/vda_depth/double_stretch_sloth/ --camera 0
+    python compare_depth.py --ref data/different_types/double_stretch_sloth/depth/ --pred data/vda_depth/double_stretch_sloth/ --max_frames 50
 """
 
 import argparse
@@ -566,78 +566,87 @@ def compare_camera(ref_dir, pred_dir, color_dir, output_dir, camera_id, max_fram
 
 def main():
     parser = argparse.ArgumentParser(description='Compare reference and predicted depth (relative metrics)')
-    parser.add_argument('--case_name', type=str, required=True, help='Case name to compare')
-    parser.add_argument('--depth_folder', type=str, required=False, default="vda_depth")
-    parser.add_argument('--camera', type=int, default=None, help='Specific camera to compare (0, 1, or 2). Default: all')
+    parser.add_argument('--ref', type=str, required=True, help='Base path to reference depth folder (e.g. data/different_types/case/depth/)')
+    parser.add_argument('--pred', type=str, required=True, help='Base path to predicted depth folder (e.g. data/vda_depth/case/)')
+    parser.add_argument('--color', type=str, default=None, help='Optional base path to color frames folder (e.g. data/different_types/case/color/)')
+    parser.add_argument('--camera', type=int, default=None, help='Camera index to compare (0, 1, 2). Default: all found')
+    parser.add_argument('--output', type=str, default=None, help='Output directory for video and plots (default: ./depth_comparison)')
     parser.add_argument('--max_frames', type=int, default=-1, help='Max frames to compare (-1 = all)')
     args = parser.parse_args()
-    
-    # Paths
-    script_dir = Path(__file__).parent.resolve()
-    ref_base = script_dir / 'data' / 'different_types' / args.case_name / 'depth'
-    pred_base = Path(__file__).parent.resolve() / args.depth_folder if args.depth_folder else 'data' / 'vda_depth' / args.case_name
-    color_base = script_dir / 'data' / 'different_types' / args.case_name / 'color'
-    output_dir = script_dir / 'depth_comparison' / args.case_name
-    
-    print(f"Comparing RELATIVE depths for case: {args.case_name}")
+
+    ref_base = Path(args.ref)
+    pred_base = Path(args.pred)
+    color_base = Path(args.color) if args.color else ref_base.parent / 'color'
+    output_dir = Path(args.output) if args.output else Path('./depth_comparison')
+
+    print(f"Comparing RELATIVE depths")
     print(f"Reference base: {ref_base}")
     print(f"Predicted base: {pred_base}")
-    
+
     if not ref_base.exists():
         print(f"Error: Reference depth directory not found: {ref_base}")
         return 1
     if not pred_base.exists():
         print(f"Error: Predicted depth directory not found: {pred_base}")
-        print("Run infer_depth.py first to generate predictions")
         return 1
-    
+
     # Determine which cameras to process
-    cameras = [args.camera] if args.camera is not None else [0, 1, 2]
-    
-    all_camera_metrics = {}
-    for camera_id in cameras:
-        ref_dir = ref_base / str(camera_id)
-        pred_dir = pred_base / str(camera_id)
-        color_dir = color_base / str(camera_id)
-        
-        if not ref_dir.exists():
-            print(f"\n  Camera {camera_id}: Reference directory not found, skipping")
-            continue
-        if not pred_dir.exists():
-            print(f"\n  Camera {camera_id}: Predicted directory not found, skipping")
-            continue
-        
-        metrics = compare_camera(ref_dir, pred_dir, color_dir, output_dir, camera_id, args.max_frames)
-        if metrics:
-            all_camera_metrics[camera_id] = metrics
-    
-    # Print summary
-    if all_camera_metrics:
+    if args.camera is not None:
+        cameras = [args.camera]
+    else:
+        # Auto-detect numeric subdirectories in ref base
+        cameras = sorted([int(d.name) for d in ref_base.iterdir() if d.is_dir() and d.name.isdigit()])
+        if not cameras:
+            # No subdirectories — treat the folder itself as the single source
+            cameras = None
+
+    if cameras is not None:
+        all_metrics = {}
+        for camera_id in cameras:
+            ref_dir = ref_base / str(camera_id)
+            pred_dir = pred_base / str(camera_id)
+            color_dir = color_base / str(camera_id)
+
+            if not ref_dir.exists():
+                print(f"\n  Camera {camera_id}: Reference directory not found, skipping")
+                continue
+            if not pred_dir.exists():
+                print(f"\n  Camera {camera_id}: Predicted directory not found, skipping")
+                continue
+
+            m = compare_camera(ref_dir, pred_dir, color_dir, output_dir, camera_id, args.max_frames)
+            if m:
+                all_metrics[camera_id] = m
+
+        metrics_list = list(all_metrics.values())
+    else:
+        # No camera subdirectories — compare directly
+        m = compare_camera(ref_base, pred_base, color_base, output_dir, camera_id=0, max_frames=args.max_frames)
+        metrics_list = [m] if m else []
+
+    if metrics_list:
         print(f"\n{'='*60}")
         print("SUMMARY - RELATIVE DEPTH QUALITY")
         print(f"{'='*60}")
-        
-        avg_spearman = np.mean([m['spearman'] for m in all_camera_metrics.values()])
-        avg_gradient = np.mean([m['gradient_corr'] for m in all_camera_metrics.values()])
-        avg_ordinal = np.mean([m['ordinal_error'] for m in all_camera_metrics.values()])
-        
+        avg_spearman = np.nanmean([m['spearman'] for m in metrics_list])
+        avg_gradient = np.nanmean([m['gradient_corr'] for m in metrics_list])
+        avg_ordinal = np.nanmean([m['ordinal_error'] for m in metrics_list])
         print(f"Avg Spearman Rank Corr:  {avg_spearman:.4f}")
         print(f"Avg Gradient Corr:       {avg_gradient:.4f}")
         print(f"Avg Ordinal Error:       {avg_ordinal*100:.1f}%")
-        
-        # Quality assessment
+
         print(f"\n--- Quality Assessment ---")
         if avg_spearman > 0.95 and avg_ordinal < 0.05:
-            print("✅ Excellent: Depth ordering very well preserved")
+            print("Excellent: Depth ordering very well preserved")
         elif avg_spearman > 0.9 and avg_ordinal < 0.1:
-            print("✅ Good: Depth ordering well preserved")
+            print("Good: Depth ordering well preserved")
         elif avg_spearman > 0.8 and avg_ordinal < 0.2:
-            print("⚠️ Fair: Some depth ordering errors")
+            print("Fair: Some depth ordering errors")
         else:
-            print("❌ Poor: Significant depth ordering errors")
-        
+            print("Poor: Significant depth ordering errors")
+
         print(f"\nOutput saved to: {output_dir}")
-    
+
     return 0
 
 

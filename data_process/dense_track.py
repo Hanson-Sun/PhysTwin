@@ -181,10 +181,10 @@ if __name__ == "__main__":
         query_pixels = query_pixels[torch.randperm(query_pixels.shape[0])[:5000]]
 
         # cotracker = torch.hub.load("facebookresearch/co-tracker", "cotracker3_offline").to(device)
-        # pred_tracks, pred_visibility = cotracker(video, queries=query_pixels[None], backward_tracking=True)
+        # pred_tracks, pred_visibility = cotracker(video.to(device), queries=query_pixels[None], backward_tracking=True)
         # pred_tracks, pred_visibility = cotracker(video, grid_query_frame=0)
 
-        # # Run Online CoTracker:
+        # Run Online CoTracker:
         cotracker = torch.hub.load(
             "facebookresearch/co-tracker", "cotracker3_online"
         ).to(device)

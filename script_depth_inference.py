@@ -13,12 +13,12 @@ import sys
 from pathlib import Path
 
 BASE_PATH      = Path("./data/different_types")
-TEMP_OUTPUT    = Path("./parsed_depth_DA3_streaming")
+TEMP_OUTPUT    = Path("./parsed_depth_output")
 CHUNK_SIZE     = 3
 OVERLAP        = 2
 BLEND_MODE     = "linear"
-MODEL          = "depth-anything/DA3NESTED-GIANT-LARGE"
-
+MODEL          = "DA3"
+POSE_CALIBRATION_MODEL = "DUSt3R"
 
 def run(cmd: str) -> int:
     import os
@@ -76,19 +76,20 @@ def main():
 
         # Run DA3 streaming into temp directory
         ret = run(
-            f"python depth_inference/parse_depth_da3_streaming_final.py"
+            f"python depth_inference/infer_depth.py"
             f" --case_dir {case_dir}"
             f" --output_root {TEMP_OUTPUT}"
             f" --model {MODEL}"
             f" --chunk_size {CHUNK_SIZE}"
             f" --overlap {OVERLAP}"
             f" --blend_mode {BLEND_MODE}"
+            f" --pose_calibration_model {POSE_CALIBRATION_MODEL}"
             f" --verbose"
             f" --visualize"
         )
 
         if ret != 0:
-            print(f"  ERROR: parse_depth_da3_streaming.py failed for {case_name} (exit {ret})")
+            print(f"  ERROR: parsing depth failed for {case_name} (exit {ret})")
             sys.exit(ret)
 
         # Swap old depth camera dirs for new ones

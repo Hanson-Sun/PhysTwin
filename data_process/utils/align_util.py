@@ -226,8 +226,12 @@ def render_image(mesh, camera_poses, width=640, height=480, fov=1, device="cpu")
     extended_mesh = mesh.extend(num_poses).to(device)
     fragments = renderer.rasterizer(extended_mesh)
     depth = fragments.zbuf.squeeze().cpu().numpy()
-    rendered_images = renderer(mesh.extend(num_poses))
+    rendered_images = renderer(extended_mesh)
     color = (rendered_images[..., :3].cpu().numpy() * 255).astype(np.uint8)
+    
+    # Clean up GPU memory after rendering
+    del extended_mesh, fragments, rendered_images, renderer
+    torch.cuda.empty_cache()
 
     return color, depth
 

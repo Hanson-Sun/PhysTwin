@@ -27,3 +27,7 @@ cloth_double_bend, gray-mat-pad, True
 double_bend_monkey,red-monkey,True
 single_lift_pad, gray-mat-pad, True
 water_bottle_single,plastic-water-bottle,True
+bottle_lift_single, water-bottle, True
+tshirt_lift_single, dark-cloth, True
+bottle_lift_single, water-bottle, True
+

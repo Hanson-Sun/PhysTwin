@@ -15,55 +15,64 @@ import open3d as o3d
 def create_point_cloud_from_depth(depth, intrinsic, c2w, depth_scale=1.0, max_depth=100.0):
     """
     Create a point cloud from a depth map using camera intrinsics and extrinsics.
+
+    Accepts two formats for *depth*:
+    - **(H, W)** — classic scalar depth; backprojects via ``intrinsic``.
+    - **(H, W, 3)** — Pi3-style ``local_points`` where channel 0/1/2 are the
+      camera-space X/Y/Z predicted by the network.  XY are used directly
+      (no intrinsic-based backprojection) so Pi3's own geometric model is
+      respected and cameras are correctly aligned across views.
     
     Args:
-        depth: (H, W) depth map array
-        intrinsic: (3, 3) camera intrinsic matrix
+        depth: (H, W) or (H, W, 3) array
+        intrinsic: (3, 3) camera intrinsic matrix (only used for the (H,W) path)
         c2w: (4, 4) camera-to-world transformation matrix
-        depth_scale: scale factor to convert depth values to meters (depth_in_meters = depth_value / depth_scale)
+        depth_scale: scale factor: depth_in_meters = depth_value / depth_scale
         max_depth: maximum depth threshold in meters
     
     Returns:
         o3d.geometry.PointCloud
     """
-    H, W = depth.shape
-    fx, fy = intrinsic[0, 0], intrinsic[1, 1]
-    cx, cy = intrinsic[0, 2], intrinsic[1, 2]
-    
-    # Create pixel grid
-    u, v = np.meshgrid(np.arange(W), np.arange(H))
-    u = u.flatten()
-    v = v.flatten()
-    z = depth.flatten()
-    
-    # Filter valid depths
-    valid_mask = np.isfinite(z) & (z > 0)
+    H, W = depth.shape[:2]
+    is_local_pts = depth.ndim == 3 and depth.shape[2] == 3
+
+    # Extract Z (depth) channel for filtering
+    z_raw = depth[:, :, 2].flatten() if is_local_pts else depth.flatten()
+
+    # Apply depth scale and filter
+    valid_mask = np.isfinite(z_raw) & (z_raw > 0)
     if depth_scale > 0:
-        z_meters = z / depth_scale
-        valid_mask &= (z_meters < max_depth)
+        z_m = z_raw / depth_scale
+        valid_mask &= (z_m < max_depth)
     else:
-        z_meters = z
-        valid_mask &= (z < max_depth)
-    
-    u = u[valid_mask]
-    v = v[valid_mask]
-    z = z_meters[valid_mask]
-    
-    # Backproject to camera coordinates
-    x = (u - cx) * z / fx
-    y = (v - cy) * z / fy
-    
-    # Stack into (N, 3) array
+        z_m = z_raw
+        valid_mask &= (z_raw < max_depth)
+
+    z = z_m[valid_mask]
+
+    if is_local_pts:
+        # Pi3 local_points: use network-predicted camera-space X and Y directly.
+        # Scaling matches what was done to Z above.
+        scale = (1.0 / depth_scale) if depth_scale > 0 else 1.0
+        x = depth[:, :, 0].flatten()[valid_mask] * scale
+        y = depth[:, :, 1].flatten()[valid_mask] * scale
+    else:
+        # Classic depth map: backproject via calibration intrinsics.
+        fx, fy = intrinsic[0, 0], intrinsic[1, 1]
+        cx, cy = intrinsic[0, 2], intrinsic[1, 2]
+        u, v = np.meshgrid(np.arange(W), np.arange(H))
+        u = u.flatten()[valid_mask]
+        v = v.flatten()[valid_mask]
+        x = (u - cx) * z / fx
+        y = (v - cy) * z / fy
+
+    # Stack into camera-space (N, 3) → world space via c2w
     pts_cam = np.stack([x, y, z], axis=-1)
-    
-    # Transform to world coordinates
     pts_cam_homo = np.concatenate([pts_cam, np.ones((pts_cam.shape[0], 1))], axis=1)
     pts_world = (c2w @ pts_cam_homo.T).T[:, :3]
-    
-    # Create point cloud
+
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(pts_world)
-    
     return pcd
 
 
@@ -150,6 +159,9 @@ def auto_detect_depth_scale(depth):
     
     Returns a scale such that depth_in_meters = depth_value / scale
     """
+    # For Pi3-style (H, W, 3) local_points, use the Z channel
+    if depth.ndim == 3 and depth.shape[2] == 3:
+        depth = depth[:, :, 2]
     valid = depth[np.isfinite(depth) & (depth > 0)]
     if valid.size == 0:
         return 1.0
@@ -218,11 +230,16 @@ def visualize_depth_scene(depth_root, calibrate_path=None, metadata_path=None,
 
         # Convert c2w to w2c
         extrinsics = [np.linalg.inv(c2w if c2w.shape == (4,4) else np.vstack([c2w, [0,0,0,1]])) for c2w in c2ws]
+
+        # metadata stores K at original image resolution (WH = image dims).
+        # Depth maps may be at a smaller resolution; scale K down per-camera below.
+        stored_wh = metadata.get('WH')  # [W, H] at image resolution
     else:
         cam_indices = list(range(len(intrinsics)))
         # Convert extrinsics (w2c) to c2w if needed
         c2ws = [np.linalg.inv(extrinsics[i] if extrinsics[i].shape == (4, 4) else np.vstack([extrinsics[i], [0,0,0,1]])) for i in range(len(extrinsics))]
         intrinsics = [np.array(intr) for intr in intrinsics]
+        stored_wh = None
     
     # Auto-select first frame if not specified
     if frame_name is None:
@@ -248,12 +265,22 @@ def visualize_depth_scene(depth_root, calibrate_path=None, metadata_path=None,
             continue
         
         depth = np.load(depth_path).astype(np.float32)
-        H, W = depth.shape
+        H, W = depth.shape[:2]
 
         # Get camera parameters
         intrinsic = intrinsics[cam_idx]
         if isinstance(intrinsic, list):
             intrinsic = np.array(intrinsic)
+
+        # Scale K from image resolution down to depth-map resolution if needed.
+        if stored_wh is not None:
+            img_W, img_H = int(stored_wh[0]), int(stored_wh[1])
+            if (W, H) != (img_W, img_H):
+                intrinsic = intrinsic.copy()
+                intrinsic[0, 0] *= W / img_W  # fx
+                intrinsic[0, 2] *= W / img_W  # cx
+                intrinsic[1, 1] *= H / img_H  # fy
+                intrinsic[1, 2] *= H / img_H  # cy
 
         c2w = c2ws[cam_idx]
 
@@ -313,11 +340,21 @@ def visualize_depth_scene(depth_root, calibrate_path=None, metadata_path=None,
                 continue
             
             depth = np.load(depth_path).astype(np.float32)
-            H, W = depth.shape
+            H, W = depth.shape[:2]
 
             intrinsic = intrinsics[cam_idx]
             if isinstance(intrinsic, list):
                 intrinsic = np.array(intrinsic)
+
+            # Scale K from image resolution down to depth-map resolution if needed.
+            if stored_wh is not None:
+                img_W, img_H = int(stored_wh[0]), int(stored_wh[1])
+                if (W, H) != (img_W, img_H):
+                    intrinsic = intrinsic.copy()
+                    intrinsic[0, 0] *= W / img_W
+                    intrinsic[0, 2] *= W / img_W
+                    intrinsic[1, 1] *= H / img_H
+                    intrinsic[1, 2] *= H / img_H
 
             c2w = c2ws[cam_idx]
             if c2w.shape == (3, 4):
@@ -340,13 +377,7 @@ def visualize_depth_scene(depth_root, calibrate_path=None, metadata_path=None,
     
     print(f"Scene extent: {scene_extent:.3f}")
     print(f"Scene center: {scene_center}")
-        
-    # Store point cloud info for later camera sizing
-    point_clouds.append(pcd)
-    
-    if not point_clouds:
-        raise RuntimeError("No point clouds created. Check depth file paths.")
-    
+
     # Create visualization window
     vis = o3d.visualization.Visualizer()
     vis.create_window(window_name=f'3D Depth Visualization - Frame: {frame_name}')

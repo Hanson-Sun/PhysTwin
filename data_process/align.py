@@ -344,11 +344,11 @@ if __name__ == "__main__":
             interpolation=cv2.INTER_NEAREST,
         )
 
-    # The intrinsics stored in metadata are for the depth/PCD resolution (WH field).
-    # If the color image is at a higher resolution, scale the intrinsics accordingly so
-    # that fov computation and PnP registration use the correct pixel coordinates.
+    # metadata.json stores K at original image resolution (WH = image dims).
+    # The block below is a no-op for current files but kept for safety so that
+    # legacy files with depth-res K are still handled correctly.
     img_h, img_w = raw_img.shape[:2]
-    meta_w, meta_h = data["WH"]  # depth/PCD resolution, e.g. [504, 280]
+    meta_w, meta_h = data["WH"]  # [W, H] — image resolution in new convention
     if (img_h, img_w) != (meta_h, meta_w):
         scale_x = img_w / meta_w
         scale_y = img_h / meta_h
@@ -492,12 +492,27 @@ if __name__ == "__main__":
         pnp_camera_pose[:3, :3] = np.linalg.inv(mesh2raw_camera[:3, :3])
         pnp_camera_pose[3, :3] = mesh2raw_camera[:3, 3]
         pnp_camera_pose[:, :2] = -pnp_camera_pose[:, :2]
+        # Render at depth/PCD resolution (meta_h x meta_w) to avoid GPU OOM
         color, depth = render_image(
-            mesh_path, torch.tensor(pnp_camera_pose), raw_img.shape[1], raw_img.shape[0], fov, "cuda"
+            mesh_path, torch.tensor(pnp_camera_pose), meta_w, meta_h, fov, "cuda"
         )
-        vis_mask = depth > 0
-        color[0][~vis_mask] = raw_img[~vis_mask]
-        plt.imsave(f"{output_dir}/pnp_results.png", color[0])
+        # Upsample to color resolution for visualization
+        # color[0] is already uint8 (0-255), just resize it
+        color_vis = cv2.resize(
+            color[0],
+            (raw_img.shape[1], raw_img.shape[0]),
+            interpolation=cv2.INTER_LINEAR
+        )
+        depth_vis = cv2.resize(
+            depth[0],
+            (raw_img.shape[1], raw_img.shape[0]),
+            interpolation=cv2.INTER_LINEAR
+        )
+        vis_mask = depth_vis > 0
+        color_vis[~vis_mask] = raw_img[~vis_mask]
+        # Save using cv2 to handle uint8 properly
+        cv2.imwrite(f"{output_dir}/pnp_results.png", cv2.cvtColor(color_vis, cv2.COLOR_RGB2BGR))
+        torch.cuda.empty_cache()
 
     # Transform the mesh into the real world coordinate
     mesh_matching_points_cam = np.dot(

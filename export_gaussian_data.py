@@ -42,12 +42,15 @@ with open("data_config.csv", newline="", encoding="utf-8") as csvfile:
             # Get the mask path for the image
             with open(f"{base_path}/{case_name}/mask/mask_info_{i}.json", "r") as f:
                 data = json.load(f)
+            print(f"  mask_info_{i}: {data}")
             obj_idx = None
             for key, value in data.items():
                 if value != CONTROLLER_NAME:
                     if obj_idx is not None:
+                        print(f"    Found multiple non-hand objects: {obj_idx}, {key}")
                         raise ValueError("More than one object detected.")
                     obj_idx = int(key)
+            print(f"  Selected object index: {obj_idx}")
             mask_path = f"{base_path}/{case_name}/mask/{i}/{obj_idx}/0.png"
             os.system(f"cp {mask_path} {output_path}/{case_name}/mask_{i}.png")
             # Prepare the high-resolution image
