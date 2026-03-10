@@ -17,11 +17,13 @@ class DA3PoseFinder(PoseFinder):
         frame_names: List[str],
         calib_frames: int,
     ) -> Tuple[np.ndarray, np.ndarray]:
+        """Infer camera calibration by averaging over multiple frames (with proper scaling)."""
         num_calib_frames = max(1, min(calib_frames, len(frame_names)))
         print(f"\n[*] Inferring camera calibration by averaging over {num_calib_frames} frame(s)...")
 
         color_dir = case_dir / "color"
-        camera_dirs = sorted([d for d in color_dir.iterdir() if d.is_dir()])
+        camera_dirs = sorted([d for d in color_dir.iterdir() if d.is_dir()], 
+                           key=lambda d: int(d.name))
         num_cams = len(camera_dirs)
 
         if not frame_names:
@@ -42,11 +44,18 @@ class DA3PoseFinder(PoseFinder):
 
         for frame_name in sampled_frames:
             all_images = []
+            image_shapes = []
             for cam_dir in camera_dirs:
                 img_path = cam_dir / frame_name
                 if not img_path.exists():
                     raise FileNotFoundError(f"Image not found: {img_path}")
                 all_images.append(str(img_path))
+                # Load image to get original resolution
+                import cv2
+                img = cv2.imread(str(img_path))
+                if img is not None:
+                    h, w = img.shape[:2]
+                    image_shapes.append((w, h))
 
             with torch.no_grad():
                 prediction = self.model.inference(image=all_images, use_ray_pose=True)
@@ -56,6 +65,19 @@ class DA3PoseFinder(PoseFinder):
                 continue
 
             K = np.asarray(prediction.intrinsics, dtype=np.float32)
+            
+            # Scale intrinsics from inference resolution back to original image resolution
+            if image_shapes and prediction.processed_images is not None:
+                # Get DA3's processed resolution from the returned images
+                processed_h, processed_w = prediction.processed_images.shape[1:3]
+                for i, (orig_w, orig_h) in enumerate(image_shapes):
+                    if i < len(K):
+                        # Scale from processed resolution to original image resolution
+                        K[i, 0, 0] *= orig_w / processed_w   # fx
+                        K[i, 1, 1] *= orig_h / processed_h   # fy
+                        K[i, 0, 2] *= orig_w / processed_w   # cx
+                        K[i, 1, 2] *= orig_h / processed_h   # cy
+            
             E = np.stack(
                 [ensure_4x4_matrix(prediction.extrinsics[i]) for i in range(num_cams)]
             ).astype(np.float32)

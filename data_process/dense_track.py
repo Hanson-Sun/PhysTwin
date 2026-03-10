@@ -127,7 +127,9 @@ if __name__ == "__main__":
         video_path = f"{base_path}/{case_name}/color/{i}.mp4"
 
         # Determine target resolution from depth maps
-        depth_files = sorted(glob.glob(f"{base_path}/{case_name}/depth/{i}/*.npy"))
+        depth_files = glob.glob(f"{base_path}/{case_name}/depth/{i}/*.npy")
+        # Sort by numeric filename, not alphabetically (0, 1, 2, ..., 10 not 0, 1, 10, 2, ...)
+        depth_files = sorted(depth_files, key=lambda x: int(os.path.splitext(os.path.basename(x))[0]))
         scale_factor = 1.0
         if depth_files:
             depth_sample = np.load(depth_files[0])

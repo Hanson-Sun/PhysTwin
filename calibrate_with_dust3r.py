@@ -19,6 +19,8 @@ import json
 import pickle
 import shutil
 import argparse
+from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import torch
@@ -94,61 +96,48 @@ def rescale_intrinsics(K_dust3r, dust3r_hw, orig_hw):
     K[1, 2] *= sy   # cy
     return K
 
-
-def calibrate(model, case_dir, frame=0, image_size=512, niter=300, device=None):
+def calibrate(model, case_dir, frames=None, image_size=512, niter=300, device=None):
     """
-    Run DUSt3R calibration on a single static frame.
+    Deprecated: Use DUSt3RPoseFinder.infer_calibration() instead.
+    
+    This function is kept for backward compatibility only.
     """
-    if device is None:
-        device = str(next(model.parameters()).device)
-
-    img_paths = get_frame_paths(case_dir, frame)
-    n_cams    = len(img_paths)
-
-    print(f"Using frame {frame} from {n_cams} cameras:")
-    for i, p in enumerate(img_paths):
-        print(f"  cam{i}: {p}")
-
-    imgs = load_images(img_paths, size=image_size, verbose=True)
+    import sys as _sys
+    _sys.path.insert(0, os.path.join(os.path.dirname(__file__), "depth_inference"))
+    from DUSt3RPoseFinder import DUSt3RPoseFinder
     
-    # use original image size for rescaling K, since DUSt3R operates on resized images internally
-    W_orig, H_orig = PIL.Image.open(img_paths[0]).size
+    # Handle backward compatibility
+    if frames is None:
+        frames = [0]
+    elif isinstance(frames, int):
+        frames = [frames]
     
-    pairs = make_pairs(imgs, scene_graph="complete", prefilter=None, symmetrize=True)
-    print(f"\nRunning inference on {len(pairs)} pairs...")
-    output = inference(pairs, model, device, batch_size=1, verbose=True)
-
-    print(f"\nRunning global alignment ({niter} iterations)...")
-    mode = GlobalAlignerMode.PointCloudOptimizer if n_cams > 2 else GlobalAlignerMode.PairViewer
-    scene = global_aligner(output, device=device, mode=mode, verbose=True)
-
-    if mode == GlobalAlignerMode.PointCloudOptimizer:
-        scene.compute_global_alignment(init="mst", niter=niter, schedule="cosine", lr=0.01)
-
-    K_dust3r  = to_numpy(scene.get_intrinsics())   # (N, 3, 3) at DUSt3R's resolution
-    c2ws_dust = to_numpy(scene.get_im_poses())      # (N, 4, 4) cam-to-world
-
-    dust3r_H = imgs[0]["true_shape"][0][0].item() if hasattr(imgs[0]["true_shape"][0], "item") else int(imgs[0]["true_shape"][0][0])
-    dust3r_W = imgs[0]["true_shape"][0][1].item() if hasattr(imgs[0]["true_shape"][0], "item") else int(imgs[0]["true_shape"][0][1])
-    print(f"\nDUSt3R processed at: {dust3r_W}x{dust3r_H}")
-
-    print(f"Original image size: {W_orig}x{H_orig}")
-    Ks = [rescale_intrinsics(K_dust3r[i], (dust3r_H, dust3r_W), (H_orig, W_orig)) for i in range(n_cams)]
-
-    c2ws = [c2ws_dust[i] for i in range(n_cams)]
-    return Ks, c2ws
+    # Create finder and perform inference on first frame
+    # Note: This is a simplified wrapper - full multi-frame support should use DUSt3RPoseFinder directly
+    finder = DUSt3RPoseFinder(model=model)
+    
+    # Get frame names matching the frame indices
+    frame_names = [f"{f:03d}.png" for f in frames]
+    
+    intrinsics, extrinsics = finder.infer_calibration(
+        case_dir=case_dir,
+        frame_names=frame_names,
+        calib_frames=len(frames)
+    )
+    
+    # Convert back to cam-to-world for backward compatibility
+    c2ws = np.linalg.inv(extrinsics)
+    
+    return intrinsics, [c2ws[i] for i in range(len(c2ws))]
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--case_dir", required=True)
-    parser.add_argument("--frame", type=int, default=0,
-                        help="Frame index to use for calibration (should be static/background)")
+    parser.add_argument("--frames", type=int, nargs="+", default=[0],
+                        help="Frame indices to use for calibration (space-separated, e.g., 0 10 20). Defaults to [0]")
     parser.add_argument("--weights", type=str, default=None,
                         help="Path to DUSt3R weights (.pth). If omitted, downloads from HuggingFace.")
-    parser.add_argument("--image_size", type=int, default=512, choices=[512, 224])
-    parser.add_argument("--niter", type=int, default=300,
-                        help="Global alignment iterations")
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--backup", action="store_true",
                         help="Backup calibrate.pkl and metadata.json before overwriting")
@@ -173,10 +162,32 @@ def main():
         ).to(args.device)
     model.eval()
 
-    Ks_new, c2ws_new = calibrate(
-        model, case_dir,
-        frame=args.frame, image_size=args.image_size, niter=args.niter, device=args.device,
+    # Import and use DUSt3RPoseFinder
+    import sys as _sys
+    _sys.path.insert(0, os.path.join(os.path.dirname(__file__), "depth_inference"))
+    from DUSt3RPoseFinder import DUSt3RPoseFinder
+
+    finder = DUSt3RPoseFinder(model=model)
+    
+    # Get all frame names from the first camera to determine available frames
+    color_dir = os.path.join(case_dir, "color")
+    cam_dirs = sorted(
+        [d for d in os.listdir(color_dir) if os.path.isdir(os.path.join(color_dir, d))],
+        key=lambda x: int(x)
     )
+    first_cam_dir = os.path.join(color_dir, cam_dirs[0])
+    all_frame_names = sorted([f for f in os.listdir(first_cam_dir) if f.endswith(".png")])
+    
+    # Run calibration
+    intrinsics_array, extrinsics_array = finder.infer_calibration(
+        case_dir=Path(case_dir),
+        frame_names=all_frame_names,
+        calib_frames=len(args.frames)
+    )
+
+    # Convert extrinsics (w2c) back to c2w for saving
+    c2ws = [np.linalg.inv(extrinsics_array[i]) for i in range(len(extrinsics_array))]
+    Ks_new = [intrinsics_array[i] for i in range(len(intrinsics_array))]
 
     # ── Report ────────────────────────────────────────────────────────────────
     meta = load_metadata(case_dir)
@@ -192,13 +203,13 @@ def main():
     for i in range(n_cams):
         dfx = Ks_new[i][0, 0] - old_Ks[i][0, 0]
         dfy = Ks_new[i][1, 1] - old_Ks[i][1, 1]
-        dt  = np.linalg.norm(c2ws_new[i][:3, 3] - np.asarray(old_c2ws[i])[:3, 3])
+        dt  = np.linalg.norm(c2ws[i][:3, 3] - np.asarray(old_c2ws[i])[:3, 3])
         print(f"  cam{i}:  fx={Ks_new[i][0,0]:.1f} (Δ{dfx:+.1f})  "
               f"fy={Ks_new[i][1,1]:.1f} (Δ{dfy:+.1f})  "
               f"cx={Ks_new[i][0,2]:.1f}  cy={Ks_new[i][1,2]:.1f}  "
               f"Δt={dt*100:.1f}cm")
 
-    save_calibration(case_dir, c2ws_new, Ks_new, meta)
+    save_calibration(case_dir, c2ws, Ks_new, meta)
     print("\nDone. Re-run data_process_pcd.py and data_process_track.py to rebuild object_points.")
 
 

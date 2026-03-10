@@ -764,7 +764,6 @@ class SpringMassSystemWarp:
             ),
             requires_grad=cfg.collision_learn,
         )
-
         # Create the CUDA graph to acclerate
         if cfg.use_graph:
             if cfg.data_type == "real":

@@ -15,14 +15,21 @@ parser.add_argument("--case_name", type=str, required=True)
 # The category of the object used for segmentation
 parser.add_argument("--category", type=str, required=True)
 parser.add_argument("--shape_prior", action="store_true", default=False)
+parser.add_argument(
+    "--track_method",
+    type=str,
+    choices=["cotracker", "mvtrack"],
+    default="cotracker",
+    help="Tracking method: 'cotracker' for CoTracker3-Online (fallback) or 'mvtrack' for MVTracker (multi-view)"
+)
 args = parser.parse_args()
 
 # Set the debug flags
 ALIGN_DATA = False  # dont need this
 
-PROCESS_SEG = True
-PROCESS_SHAPE_PRIOR = True
-PROCESS_TRACK = True
+PROCESS_SEG = False
+PROCESS_SHAPE_PRIOR = False
+PROCESS_TRACK = False
 PROCESS_3D = True
 PROCESS_ALIGN = True
 PROCESS_FINAL = True
@@ -96,7 +103,6 @@ if PROCESS_SEG:
             f"python ./data_process/segment.py --base_path {base_path} --case_name {case_name} --TEXT_PROMPT {TEXT_PROMPT}"
         )
 
-
 if PROCESS_SHAPE_PRIOR and SHAPE_PRIOR:
     # Get the mask path for the image
     with open(f"{base_path}/{case_name}/mask/mask_info_{0}.json", "r") as f:
@@ -137,11 +143,19 @@ if PROCESS_SHAPE_PRIOR and SHAPE_PRIOR:
         )
 
 if PROCESS_TRACK:
-    # Get the dense tracking of the object using Co-tracker
-    with Timer("Dense Tracking"):
-        os.system(
-            f"python ./data_process/dense_track.py --base_path {base_path} --case_name {case_name}"
-        )
+    # Get the dense tracking of the object using selected method (MVTracker or CoTracker)
+    if args.track_method == "mvtrack":
+        with Timer("Dense Tracking (MVTracker - Multi-View)"):
+            logger.info(f"Using MVTracker for multi-view consistent tracking")
+            os.system(
+                f"python ./data_process/mvtrack_dense_video.py --base_path {base_path} --case_name {case_name}"
+            )
+    else:
+        with Timer("Dense Tracking (CoTracker - Monocular)"):
+            logger.info(f"Using CoTracker for monocular fallback tracking")
+            os.system(
+                f"python ./data_process/dense_track.py --base_path {base_path} --case_name {case_name}"
+            )
 
 if PROCESS_3D:
     # Get the pcd in the world coordinate from the raw observations
@@ -150,7 +164,7 @@ if PROCESS_3D:
             f"python ./data_process/data_process_pcd.py --base_path {base_path} --case_name {case_name}"
         )
 
-    # # Further process and filter the noise of object and controller masks
+    # Further process and filter the noise of object and controller masks
     with Timer("Mask Post-Processing"):
         os.system(
             f"python ./data_process/data_process_mask.py --base_path {base_path} --case_name {case_name} --controller_name {CONTROLLER_NAME}"
@@ -159,7 +173,7 @@ if PROCESS_3D:
     # Process the data tracking
     with Timer("Data Tracking"):
         os.system(
-            f"python ./data_process/data_process_track.py --base_path {base_path} --case_name {case_name}"
+            f"python ./data_process/data_process_track.py --base_path {base_path} --case_name {case_name} --track_method {args.track_method}"
         )
 
 if PROCESS_ALIGN and SHAPE_PRIOR:

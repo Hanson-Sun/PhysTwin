@@ -9,6 +9,7 @@ import glob
 import pickle
 import matplotlib.pyplot as plt
 from argparse import ArgumentParser
+import json
 
 parser = ArgumentParser()
 parser.add_argument(
@@ -17,11 +18,12 @@ parser.add_argument(
     required=True,
 )
 parser.add_argument("--case_name", type=str, required=True)
+parser.add_argument("--track_method", type=str, required=False, choices=["cotracker", "mvtrack"], default="cotracker", help="Tracking method used: 'cotracker' or 'mvtrack'")
 args = parser.parse_args()
 
 base_path = args.base_path
 case_name = args.case_name
-
+track_method = args.track_method
 
 def exist_dir(dir):
     if not os.path.exists(dir):
@@ -34,24 +36,114 @@ def getSphereMesh(center, radius=0.1, color=[0, 0, 0]):
     return sphere
 
 
+def project_3d_to_2d(points_3d, intrinsics, extrinsics):
+    """
+    Project 3D world coordinates to 2D image coordinates.
+    
+    Args:
+        points_3d: [N, 3] 3D world coordinates
+        intrinsics: [3, 3] camera intrinsic matrix
+        extrinsics: [4, 4] camera extrinsic matrix (c2w format)
+    
+    Returns:
+        points_2d: [N, 2] 2D image coordinates (x, y)
+        valid_mask: [N] boolean indicating if projection is valid (in front of camera)
+    """
+    # Invert c2w to get w2c
+    c2w = extrinsics
+    w2c = np.linalg.inv(c2w)
+    
+    # Convert world coords to camera coords
+    # points_3d: [N, 3] -> add homogeneous coord -> [N, 4]
+    points_hom = np.concatenate([points_3d, np.ones((points_3d.shape[0], 1))], axis=1)
+    points_cam = (w2c @ points_hom.T).T  # [N, 4]
+    
+    # Check if points are in front of camera (z > 0)
+    valid_mask = points_cam[:, 2] > 0
+    points_cam = points_cam[:, :3]  # [N, 3]
+    
+    # Project to image plane
+    # K @ [x, y, z]^T -> [u, v, w]^T
+    points_proj = (intrinsics @ points_cam.T).T  # [N, 3]
+    points_2d = points_proj[:, :2] / (points_proj[:, 2:3] + 1e-6)  # [N, 2] divide by z
+    
+    return points_2d, valid_mask
+
+
 # Based on the valid mask, filter out the bad tracking data
-def filter_track(track_path, pcd_path, mask_path, frame_num, num_cam):
+def _load_mvtracker_separated(track_path, frame_num):
+    """Load pre-separated MVTracker object and controller tracks."""
+    obj_file, ctrl_file = f"{track_path}/object_tracks.npz", f"{track_path}/controller_tracks.npz"
+    
+    if not (os.path.exists(obj_file) and os.path.exists(ctrl_file)):
+        return None
+    
+    print(f"\n✓ Loading separated MVTracker tracks")
+    obj_data, ctrl_data = np.load(obj_file), np.load(ctrl_file)
+    
+    # Sync to frame_num
+    sync = lambda x: x[:min(x.shape[0], frame_num)]
+    tracks = {
+        "object_points": sync(obj_data["tracks"]),
+        "object_colors": np.ones_like(sync(obj_data["tracks"])) * 0.3,
+        "object_visibilities": sync(obj_data["visibility"]),
+        "controller_points": sync(ctrl_data["tracks"]),
+        "controller_colors": np.ones_like(sync(ctrl_data["tracks"])) * 0.7,
+        "controller_visibilities": sync(ctrl_data["visibility"]),
+    }
+    
+    print(f"  Object: {tracks['object_points'].shape[1]}, Controller: {tracks['controller_points'].shape[1]} points\n")
+    return tracks
+
+
+def _load_calibration(base_path, case_name):
+    """Load intrinsics and extrinsics for MVTracker projection."""
+    try:
+        with open(f"{base_path}/{case_name}/calibrate.pkl", "rb") as f:
+            c2w_list = pickle.load(f)
+            # calibrate.pkl is a list of c2w matrices, not a dictionary
+            extrinsics = np.array(c2w_list, dtype=np.float32) if isinstance(c2w_list, list) else c2w_list
+        with open(f"{base_path}/{case_name}/metadata.json") as f:
+            intrinsics = np.array(json.load(f).get("intrinsics", []))
+        return (intrinsics if intrinsics.size > 0 else None, extrinsics)
+    except Exception as e:
+        print(f"  Warning: Could not load calibration: {e}")
+        return None, None
+
+
+def filter_track(track_path, pcd_path, mask_path, frame_num, num_cam, is_mvtrack=False, base_path=None, case_name=None):
+    """Filter tracking data based on object and controller masks.
+    
+    For MVTracker: Combines separated tracks into single array per camera.
+    For CoTracker: Applies mask-based filtering to 2D pixels.
+    """
+    
+    # Load MVTracker separated tracks if available
+    mvtracker_data = None
+    if is_mvtrack:
+        mvtracker_data = _load_mvtracker_separated(track_path, frame_num)
+        if mvtracker_data is not None:
+            # Return MVTracker data directly - already in proper dict format
+            print(f"✓ Using MVTracker tracks in combined format")
+            return mvtracker_data
+    
+    # Load masks and calibration
     with open(f"{mask_path}/processed_masks.pkl", "rb") as f:
         processed_masks = pickle.load(f)
         print(processed_masks[0].keys())
-
-    # Filter out the points not valid in the first frame
-    object_points = []
-    object_colors = []
-    object_visibilities = []
-    controller_points = []
-    controller_colors = []
-    controller_visibilities = []
+    
+    intrinsics, extrinsics = ((_load_calibration(base_path, case_name)) if (is_mvtrack and base_path and case_name) else (None, None))
+    if is_mvtrack and intrinsics is None:
+        print("  Will use all visible points as object")
+    
+    # Process camera tracks
+    object_points, object_colors, object_visibilities = [], [], []
+    controller_points, controller_colors, controller_visibilities = [], [], []
+    
     for i in range(num_cam):
         current_track_data = np.load(f"{track_path}/{i}.npz")
         # Filter out the track data
         tracks = current_track_data["tracks"]
-        tracks = np.round(tracks).astype(int)
         visibility = current_track_data["visibility"]
         
         # Handle case where tracks have different number of frames than pcd data
@@ -62,70 +154,105 @@ def filter_track(track_path, pcd_path, mask_path, frame_num, num_cam):
             visibility = visibility[:actual_frame_num]
         
         num_points = np.shape(tracks)[1]
+        
+        # For CoTracker: convert pixel coordinates to integers, For MVTracker: already 3D
+        if not is_mvtrack:
+            tracks = np.round(tracks).astype(int)
 
         # Locate the track points in the object mask of the first frame
         object_mask = processed_masks[0][i]["object"]
         track_object_idx = np.zeros((num_points), dtype=int)
         
-        for j in range(num_points):
-            if visibility[0, j] == 1:
-                y, x = tracks[0, j, 0], tracks[0, j, 1]
-                if 0 <= y < object_mask.shape[0] and 0 <= x < object_mask.shape[1]:
-                    track_object_idx[j] = object_mask[y, x]
-                else:
-                    visibility[0, j] = 0
         # Locate the controller points in the controller mask of the first frame
         controller_mask = processed_masks[0][i]["controller"]
         track_controller_idx = np.zeros((num_points), dtype=int)
-        for j in range(num_points):
-            if visibility[0, j] == 1:
-                y, x = tracks[0, j, 0], tracks[0, j, 1]
-                if 0 <= y < controller_mask.shape[0] and 0 <= x < controller_mask.shape[1]:
-                    track_controller_idx[j] = controller_mask[y, x]
-                else:
+        
+        if is_mvtrack and intrinsics is not None and extrinsics is not None:
+            # For MVTracker: project 3D world coords to 2D image space
+            points_3d = tracks[0]  # [N, 3] world coordinates at frame 0
+            points_2d, valid_3d = project_3d_to_2d(points_3d, intrinsics[i], extrinsics[i])
+            
+            for j in range(num_points):
+                if visibility[0, j] == 1 and valid_3d[j]:
+                    x, y = points_2d[j]
+                    y, x = int(np.round(y)), int(np.round(x))
+                    
+                    # Check bounds
+                    if 0 <= y < object_mask.shape[0] and 0 <= x < object_mask.shape[1]:
+                        track_object_idx[j] = object_mask[y, x]
+                        track_controller_idx[j] = controller_mask[y, x]
+                    else:
+                        visibility[0, j] = 0
+                elif visibility[0, j] == 1:
+                    # Point not in valid 3D projection
                     visibility[0, j] = 0
+        else:
+            # For CoTracker or MVTracker without calibration
+            for j in range(num_points):
+                if visibility[0, j] == 1:
+                    if is_mvtrack:
+                        # Without calibration, mark visible points as object but no controller
+                        track_object_idx[j] = 1
+                        track_controller_idx[j] = 0
+                    else:
+                        # For CoTracker: use pixel-based mask
+                        y, x = int(tracks[0, j, 0]), int(tracks[0, j, 1])
+                        if 0 <= y < object_mask.shape[0] and 0 <= x < object_mask.shape[1]:
+                            track_object_idx[j] = object_mask[y, x]
+                            track_controller_idx[j] = controller_mask[y, x]
+                        else:
+                            visibility[0, j] = 0
 
-        # Filter out bad tracking in other frames
-        for frame_idx in range(1, actual_frame_num):
-            # Filter based on object_mask
-            object_mask = processed_masks[frame_idx][i]["object"]
-            for j in range(num_points):
-                try:
-                    if track_object_idx[j] == 1 and visibility[frame_idx, j] == 1:
-                        if not object_mask[
-                            tracks[frame_idx, j, 0], tracks[frame_idx, j, 1]
-                        ]:
-                            visibility[frame_idx, j] = 0
-                except:
-                    # Sometimes the track coordinate is out of image
-                    visibility[frame_idx, j] = 0
-            # Filter based on controller_mask
-            controller_mask = processed_masks[frame_idx][i]["controller"]
-            for j in range(num_points):
-                if track_controller_idx[j] == 1 and visibility[frame_idx, j] == 1:
-                    if not controller_mask[
-                        tracks[frame_idx, j, 0], tracks[frame_idx, j, 1]
-                    ]:
+        # Filter out bad tracking in other frames (only for CoTracker)
+        if not is_mvtrack:
+            # Only do pixel-based filtering for CoTracker
+            for frame_idx in range(1, actual_frame_num):
+                # Filter based on object_mask
+                object_mask = processed_masks[frame_idx][i]["object"]
+                for j in range(num_points):
+                    try:
+                        if track_object_idx[j] == 1 and visibility[frame_idx, j] == 1:
+                            y, x = int(tracks[frame_idx, j, 0]), int(tracks[frame_idx, j, 1])
+                            if not object_mask[y, x]:
+                                visibility[frame_idx, j] = 0
+                    except:
+                        # Sometimes the track coordinate is out of image
                         visibility[frame_idx, j] = 0
+                # Filter based on controller_mask
+                controller_mask = processed_masks[frame_idx][i]["controller"]
+                for j in range(num_points):
+                    if track_controller_idx[j] == 1 and visibility[frame_idx, j] == 1:
+                        try:
+                            y, x = int(tracks[frame_idx, j, 0]), int(tracks[frame_idx, j, 1])
+                            if not controller_mask[y, x]:
+                                visibility[frame_idx, j] = 0
+                        except:
+                            visibility[frame_idx, j] = 0
 
         # Get the track point cloud
-        track_points = np.zeros((actual_frame_num, num_points, 3))
-        track_colors = np.zeros((actual_frame_num, num_points, 3))
-        for frame_idx in range(actual_frame_num):
-            data = np.load(f"{pcd_path}/{frame_idx}.npz")
-            points = data["points"]
-            colors = data["colors"]
+        if is_mvtrack:
+            # MVTracker already gives 3D coordinates directly
+            track_points = tracks.copy()  # Already [T, N, 3]
+            track_colors = np.ones((actual_frame_num, num_points, 3)) * 0.5  # Default gray color
+        else:
+            # CoTracker: need to lift 2D pixels to 3D using depth + pcd
+            track_points = np.zeros((actual_frame_num, num_points, 3))
+            track_colors = np.zeros((actual_frame_num, num_points, 3))
+            for frame_idx in range(actual_frame_num):
+                data = np.load(f"{pcd_path}/{frame_idx}.npz")
+                points = data["points"]
+                colors = data["colors"]
 
-            visible_indices = np.where(visibility[frame_idx])[0]
-            for idx in visible_indices:
-                y, x = tracks[frame_idx, idx, 0], tracks[frame_idx, idx, 1]
-                # Check bounds before indexing
-                if 0 <= y < points[i].shape[0] and 0 <= x < points[i].shape[1]:
-                    track_points[frame_idx, idx] = points[i][y, x]
-                    track_colors[frame_idx, idx] = colors[i][y, x]
-                else:
-                    # Mark as not visible if out of bounds
-                    visibility[frame_idx, idx] = 0
+                visible_indices = np.where(visibility[frame_idx])[0]
+                for idx in visible_indices:
+                    y, x = int(tracks[frame_idx, idx, 0]), int(tracks[frame_idx, idx, 1])
+                    # Check bounds before indexing
+                    if 0 <= y < points[i].shape[0] and 0 <= x < points[i].shape[1]:
+                        track_points[frame_idx, idx] = points[i][y, x]
+                        track_colors[frame_idx, idx] = colors[i][y, x]
+                    else:
+                        # Mark as not visible if out of bounds
+                        visibility[frame_idx, idx] = 0
 
         object_points.append(track_points[:, np.where(track_object_idx)[0], :])
         object_colors.append(track_colors[:, np.where(track_object_idx)[0], :])
@@ -401,6 +528,8 @@ def get_final_track_data(track_data, controller_threhsold=0.01):
         # If we have fewer than 30, just use all of them without downsampling
         print(f"INFO: Only {len(new_controller_points[0])} controller points available, using all without downsampling")
         nearest_controller_points = new_controller_points
+        nearest_controller_colors = track_data["controller_colors"][:, np.where(mask)[0]]
+        nearest_controller_visibilities = track_data["controller_visibilities"][:, np.where(mask)[0]]
     else:
         # Do farthest point sampling on the valid controller points to select the final controller points
         valid_indices = np.arange(len(new_controller_points[0]))
@@ -419,8 +548,10 @@ def get_final_track_data(track_data, controller_threhsold=0.01):
 
         print(f"Final controller point count after FPS: {len(final_indices)}")
 
-        # Get the nearest controller points and their colors
+        # Get the nearest controller points, colors, and preserve visibility
         nearest_controller_points = new_controller_points[:, final_indices]
+        nearest_controller_colors = track_data["controller_colors"][:, final_indices]
+        nearest_controller_visibilities = track_data["controller_visibilities"][:, final_indices]
 
     # object_pcd = o3d.geometry.PointCloud()
     # object_pcd.points = o3d.utility.Vector3dVector(valid_object_points)
@@ -441,6 +572,8 @@ def get_final_track_data(track_data, controller_threhsold=0.01):
     track_data.pop("controller_colors")
     track_data.pop("controller_visibilities")
     track_data["controller_points"] = nearest_controller_points
+    track_data["controller_colors"] = nearest_controller_colors
+    track_data["controller_visibilities"] = nearest_controller_visibilities
 
     return track_data
 
@@ -508,7 +641,21 @@ def visualize_track(track_data):
 if __name__ == "__main__":
     pcd_path = f"{base_path}/{case_name}/pcd"
     mask_path = f"{base_path}/{case_name}/mask"
-    track_path = f"{base_path}/{case_name}/cotracker"
+    
+    # Detect which tracking method was used (MVTracker preferred, CoTracker fallback)
+    mvtrack_path = f"{base_path}/{case_name}/mvtrack"
+    cotracker_path = f"{base_path}/{case_name}/cotracker"
+    
+    if track_method == "mvtrack":
+        track_path = mvtrack_path
+        print(f"✓ Using MVTracker outputs from {mvtrack_path}")
+        use_mvtrack = True
+    elif track_method == "cotracker":
+        track_path = cotracker_path
+        print(f"✓ Using CoTracker outputs from {cotracker_path}")
+        use_mvtrack = False
+    else:
+        raise FileNotFoundError(f"Invalid tracking method: {track_method}")
 
     num_cam = len(glob.glob(f"{mask_path}/mask_info_*.json"))
     frame_num = len(glob.glob(f"{pcd_path}/*.npz"))
@@ -517,10 +664,11 @@ if __name__ == "__main__":
     print(f"Processing tracking data for case: {case_name}")
     print(f"Number of cameras: {num_cam}")
     print(f"Number of frames: {frame_num}")
+    print(f"Tracking method: {'MVTracker (multi-view)' if use_mvtrack else 'CoTracker (monocular)'}")
     print(f"{'='*80}\n")
 
     # Filter the track data using the semantic mask of object and controller
-    track_data = filter_track(track_path, pcd_path, mask_path, frame_num, num_cam)
+    track_data = filter_track(track_path, pcd_path, mask_path, frame_num, num_cam, is_mvtrack=use_mvtrack)
     print(f"After initial filtering: {track_data['controller_points'].shape[1]} controller points\n")
     
     # Filter motion - with adaptive min_neighbors for sparse controller points

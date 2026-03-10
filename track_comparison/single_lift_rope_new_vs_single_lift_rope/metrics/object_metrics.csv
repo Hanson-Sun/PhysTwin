@@ -1,0 +1,12 @@
+Metric,Value
+com_mae,0.249114
+com_rmse,0.249230
+com_corr,0.822443
+velocity_mae,0.003813
+visibility_diff,646.340000
+visibility_relative_diff,71.539730
+spread_diff,0.012455
+spread_relative_diff,15.421261
+density_corr,0.965619
+num_points_1,703
+num_points_2,1630

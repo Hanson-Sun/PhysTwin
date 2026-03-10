@@ -586,8 +586,8 @@ def main():
                        help="Overlapping frames between chunks")
     parser.add_argument("--blend_mode", choices=["linear", "avg", "last"], default="linear",
                        help="How to blend overlapping regions")
-    parser.add_argument("--calib_frames", type=int, default=5,
-                       help="Number of evenly-spaced frames to average when inferring calibration "
+    parser.add_argument("--calib_frames", type=int, default=3,
+                       help="Number of frames to average when inferring calibration "
                             "(only used when no calibrate.pkl is found)")
     parser.add_argument("--camera_baseline", type=float, default=1.0,
                        help="Target metric distance (metres) between the two furthest cameras "

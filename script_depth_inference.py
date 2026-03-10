@@ -18,7 +18,7 @@ CHUNK_SIZE     = 3
 OVERLAP        = 2
 BLEND_MODE     = "linear"
 MODEL          = "DA3"
-POSE_CALIBRATION_MODEL = "DUSt3R"
+POSE_CALIBRATION_MODEL = "DA3" #"DUSt3R"
 
 def run(cmd: str) -> int:
     import os

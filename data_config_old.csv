@@ -31,3 +31,14 @@ bottle_lift_single, water-bottle, True
 tshirt_lift_single, dark-cloth, True
 bottle_lift_single, water-bottle, True
 
+
+single_lift_rope_new,twine,True
+double_lift_cloth_1_new,cloth,False
+double_lift_zebra_new,toy,True
+double_stretch_sloth_new,sloth,True
+single_lift_rope_new,twine,True
+double_bend_monkey_new,red-monkey,True
+
+double_lift_cloth_1_new,cloth,False
+single_lift_cloth_3_new,cloth,False
+double_bend_monkey_new,red-monkey,True

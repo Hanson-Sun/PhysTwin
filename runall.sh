@@ -4,10 +4,10 @@
 # - any error
 # - undefined variable
 # - pipeline failure
-# set -euo pipefail
+set -euo pipefail
 
 # Print helpful error message
-# trap 'rc=$?; echo "runall.sh failed on line ${LINENO} with exit code ${rc}" >&2; exit ${rc}' ERR
+trap 'rc=$?; echo "runall.sh failed on line ${LINENO} with exit code ${rc}" >&2; exit ${rc}' ERR
 
 # Kill entire process group on Ctrl-C
 # trap 'echo; echo "Interrupted. Killing all child processes..."; kill 0' INT TERM
@@ -46,7 +46,13 @@ step "Process the data"
 python -u script_process_data.py
 
 step "Calibrate camera extrinsics"
-python -u script_calibrate_camera_extrinsics.py
+# python -u script_calibrate_camera_extrinsics.py
+
+step "Detect environment planes"
+python script_detect_environment_planes.py
+
+step "Align extrinsics to detected plane (delete .aligned_to_plane to run again)"
+python -u script_align_to_plane.py
 
 step "Export Gaussian data"
 python -u export_gaussian_data.py

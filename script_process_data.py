@@ -8,9 +8,12 @@ os.system("rm -f timer.log")
 with open("data_config.csv", newline="", encoding="utf-8") as csvfile:
     reader = csv.reader(csvfile)
     for row in reader:
+        if len(row) < 3:
+            print(f"Warning: Skipping malformed row: {row}")
+            continue
         case_name = row[0]
         category = row[1]
-        shape_prior = row[2]
+        shape_prior = row[2].strip()
 
         if not os.path.exists(f"{base_path}/{case_name}"):
             print(f"Warning: Case '{case_name}' not found in {base_path}. Skipping.")
