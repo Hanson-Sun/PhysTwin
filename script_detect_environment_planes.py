@@ -23,11 +23,9 @@ with open("data_config.csv", newline="", encoding="utf-8") as csvfile:
             print(f"[SKIP] {case_name}: final_data.pkl not found")
             continue
         
-        # Create output directory
-        output_dir = f"experiments_optimization/{case_name}"
+        # Create output directory (save with the data)
+        output_dir = f"{base_path}/{case_name}"
         output_path = f"{output_dir}/environment_planes.json"
-        
-        os.makedirs(output_dir, exist_ok=True)
         
         print(f"[PROCESS] {case_name}")
         

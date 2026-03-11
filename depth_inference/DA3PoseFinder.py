@@ -1,15 +1,23 @@
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+import cv2
 import numpy as np
 import torch
-
+from da3_camera_config import (
+    CameraConfig,
+    average_extrinsics,
+    average_intrinsics,
+    ensure_4x4_matrix,
+)
+from depth_anything_3.api import DepthAnything3
 from depth_inference_classes import PoseFinder
-from da3_camera_config import CameraConfig, ensure_4x4_matrix, average_intrinsics, average_extrinsics
 
 
 class DA3PoseFinder(PoseFinder):
     """PoseFinder implementation for Depth Anything 3 model."""
+
+    model: DepthAnything3
 
     def infer_calibration(
         self,
@@ -17,13 +25,17 @@ class DA3PoseFinder(PoseFinder):
         frame_names: List[str],
         calib_frames: int,
     ) -> Tuple[np.ndarray, np.ndarray]:
-        """Infer camera calibration by averaging over multiple frames (with proper scaling)."""
+        """Infer camera calibration by averaging over multiple frames."""
         num_calib_frames = max(1, min(calib_frames, len(frame_names)))
-        print(f"\n[*] Inferring camera calibration by averaging over {num_calib_frames} frame(s)...")
+        print(
+            f"\n[*] Inferring camera calibration by averaging over {num_calib_frames} frame(s)..."
+        )
 
         color_dir = case_dir / "color"
-        camera_dirs = sorted([d for d in color_dir.iterdir() if d.is_dir()], 
-                           key=lambda d: int(d.name))
+        camera_dirs = sorted(
+            [d for d in color_dir.iterdir() if d.is_dir()],
+            key=lambda d: int(d.name),
+        )
         num_cams = len(camera_dirs)
 
         if not frame_names:
@@ -50,8 +62,6 @@ class DA3PoseFinder(PoseFinder):
                 if not img_path.exists():
                     raise FileNotFoundError(f"Image not found: {img_path}")
                 all_images.append(str(img_path))
-                # Load image to get original resolution
-                import cv2
                 img = cv2.imread(str(img_path))
                 if img is not None:
                     h, w = img.shape[:2]
@@ -65,19 +75,17 @@ class DA3PoseFinder(PoseFinder):
                 continue
 
             K = np.asarray(prediction.intrinsics, dtype=np.float32)
-            
+
             # Scale intrinsics from inference resolution back to original image resolution
             if image_shapes and prediction.processed_images is not None:
-                # Get DA3's processed resolution from the returned images
                 processed_h, processed_w = prediction.processed_images.shape[1:3]
                 for i, (orig_w, orig_h) in enumerate(image_shapes):
                     if i < len(K):
-                        # Scale from processed resolution to original image resolution
-                        K[i, 0, 0] *= orig_w / processed_w   # fx
-                        K[i, 1, 1] *= orig_h / processed_h   # fy
-                        K[i, 0, 2] *= orig_w / processed_w   # cx
-                        K[i, 1, 2] *= orig_h / processed_h   # cy
-            
+                        K[i, 0, 0] *= orig_w / processed_w  # fx
+                        K[i, 1, 1] *= orig_h / processed_h  # fy
+                        K[i, 0, 2] *= orig_w / processed_w  # cx
+                        K[i, 1, 2] *= orig_h / processed_h  # cy
+
             E = np.stack(
                 [ensure_4x4_matrix(prediction.extrinsics[i]) for i in range(num_cams)]
             ).astype(np.float32)
@@ -86,7 +94,9 @@ class DA3PoseFinder(PoseFinder):
             all_extrinsics.append(E)
 
         if not all_intrinsics:
-            raise RuntimeError("DA3 failed to infer camera intrinsics/extrinsics for all sampled frames")
+            raise RuntimeError(
+                "DA3 failed to infer camera intrinsics/extrinsics for all sampled frames"
+            )
 
         K_stack = np.stack(all_intrinsics, axis=0)  # (S, C, 3, 3)
         E_stack = np.stack(all_extrinsics, axis=0)  # (S, C, 4, 4)
@@ -99,7 +109,9 @@ class DA3PoseFinder(PoseFinder):
         )  # (num_cams, 4, 4)
 
         print(f"    ✓ Averaged over {len(all_intrinsics)}/{num_calib_frames} frame(s)")
-        print(f"    ✓ intrinsics: {intrinsics_array.shape}, extrinsics: {extrinsics_array.shape}")
+        print(
+            f"    ✓ intrinsics: {intrinsics_array.shape}, extrinsics: {extrinsics_array.shape}"
+        )
         return intrinsics_array, extrinsics_array
 
     def align_intrinsics(
@@ -126,5 +138,3 @@ class DA3PoseFinder(PoseFinder):
         except Exception as e:
             print(f"      ! DA3PoseFinder.align_intrinsics failed: {e}")
             return None, None
-
-

@@ -148,7 +148,7 @@ def visualize_depth_with_plane(case_name, depth_root=None, calibrate_path=None, 
         print(f"Camera {cam_id}: frustum and axes added")
     
     # Load and add plane
-    plane_path = f"experiments_optimization/{case_name}/environment_planes.json"
+    plane_path = f"./data/different_types/{case_name}/environment_planes.json"
     if os.path.exists(plane_path):
         with open(plane_path, 'r') as f:
             plane_data = json.load(f)

@@ -43,25 +43,26 @@ conda activate phystwin
 # =====================================================
 
 step "Process the data"
-python -u script_process_data.py
+# python -u script_process_data.py
+
+
+step "Detect environment planes"
+# python script_detect_environment_planes.py
+
+step "Align extrinsics to detected plane (delete .aligned_to_plane to run again)"
+# python -u script_align_to_plane.py
 
 step "Calibrate camera extrinsics"
 # python -u script_calibrate_camera_extrinsics.py
 
-step "Detect environment planes"
-python script_detect_environment_planes.py
+# step "Export Gaussian data"
+# python -u export_gaussian_data.py
 
-step "Align extrinsics to detected plane (delete .aligned_to_plane to run again)"
-python -u script_align_to_plane.py
+# step "Export human mask data"
+# python -u export_video_human_mask.py
 
-step "Export Gaussian data"
-python -u export_gaussian_data.py
-
-step "Export human mask data"
-python -u export_video_human_mask.py
-
-step "Zero-order Optimization"
-python -u script_optimize.py
+# step "Zero-order Optimization"
+# python -u script_optimize.py
 
 step "First-order Optimization"
 python -u script_train.py

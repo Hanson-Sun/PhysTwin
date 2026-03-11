@@ -187,8 +187,8 @@ def align_to_plane(base_path: str, case_name: str, planes_json: Optional[str] = 
     
     # Save aligned data back
     # First, create backups of original files
-    calib_backup = f"{calib_path}.old"
-    pkl_backup = f"{pkl_path}.old"
+    calib_backup = f"{calib_path}.unaligned"
+    pkl_backup = f"{pkl_path}.unaligned"
     
     if os.path.exists(calib_path) and not os.path.exists(calib_backup):
         shutil.copy2(calib_path, calib_backup)

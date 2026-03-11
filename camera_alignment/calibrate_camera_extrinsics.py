@@ -8,6 +8,7 @@ import numpy as np
 from argparse import ArgumentParser
 import pickle
 import os
+import shutil
 
 
 def calculate_z_shift(points: np.ndarray, method: str = "inlier", 
@@ -155,6 +156,18 @@ if __name__ == "__main__":
     
     c2ws = [np.array(c2w) for c2w in c2ws]
     print(f"Loaded {len(c2ws)} c2w matrices from {calib_path}")
+    
+    # Save uncalibrated backups before any transformations
+    calib_uncalib = f"{calib_path}.uncalib"
+    pkl_uncalib = f"{pkl_path}.uncalib"
+    
+    if not os.path.exists(calib_uncalib):
+        shutil.copy2(calib_path, calib_uncalib)
+        print(f"Saved uncalibrated extrinsics backup to {calib_uncalib}")
+    
+    if not os.path.exists(pkl_uncalib):
+        shutil.copy2(pkl_path, pkl_uncalib)
+        print(f"Saved uncalibrated object data backup to {pkl_uncalib}")
     
     track_data, shift, info = calibrate_track_data(
         track_data, shift_amount=args.shift_amount, method=args.method, 

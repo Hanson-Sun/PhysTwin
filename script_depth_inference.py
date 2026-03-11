@@ -1,10 +1,5 @@
 """
 Batch depth estimation with DA3 streaming for all cases in data_config.csv.
-
-For each case:
-  1. Runs parse_depth_da3_streaming.py (outputs to a temp directory)
-  2. Clears the case's existing depth/ camera subdirectories
-  3. Moves the new depth maps into data/different_types/<case_name>/depth/
 """
 
 import csv

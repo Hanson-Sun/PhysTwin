@@ -33,7 +33,7 @@ def visualize_planes(case_name):
         print(f"[VIS] Loaded object with {len(obj_pts)} points")
     
     # Load planes
-    planes_path = f"experiments_optimization/{case_name}/environment_planes.json"
+    planes_path = f"./data/different_types/{case_name}/environment_planes.json"
     with open(planes_path, "r") as f:
         planes_data = json.load(f)
     
