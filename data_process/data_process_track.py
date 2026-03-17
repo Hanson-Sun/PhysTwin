@@ -18,7 +18,7 @@ parser.add_argument(
     required=True,
 )
 parser.add_argument("--case_name", type=str, required=True)
-parser.add_argument("--track_method", type=str, required=False, choices=["cotracker", "mvtrack"], default="cotracker", help="Tracking method used: 'cotracker' or 'mvtrack'")
+parser.add_argument("--track_method", type=str, required=False, choices=["cotracker", "mvtrack", "spatracker"], default="cotracker", help="Tracking method used: 'cotracker', 'mvtrack', or 'spatracker'")
 args = parser.parse_args()
 
 base_path = args.base_path
@@ -96,6 +96,63 @@ def _load_mvtracker_separated(track_path, frame_num):
     return tracks
 
 
+def _load_spatracker_separated(base_path, case_name, num_cam, frame_num):
+    """Load pre-separated SpaTrackerV2 object and controller tracks from camera-wise storage."""
+    print(f"\n✓ Loading separated SpaTrackerV2 tracks")
+    
+    object_all_cams = []
+    controller_all_cams = []
+    object_vis_all_cams = []
+    controller_vis_all_cams = []
+    
+    for cam_id in range(num_cam):
+        cam_dir = f"{base_path}/{case_name}/spatracker/camera_{cam_id}"
+        obj_file = f"{cam_dir}/object_tracks.npz"
+        ctrl_file = f"{cam_dir}/controller_tracks.npz"
+        
+        if not (os.path.exists(obj_file) and os.path.exists(ctrl_file)):
+            print(f"  Warning: Camera {cam_id} tracks not found, skipping")
+            continue
+        
+        obj_data = np.load(obj_file)
+        ctrl_data = np.load(ctrl_file)
+        
+        # Sync to frame_num
+        sync = lambda x: x[:min(x.shape[0], frame_num)]
+        
+        object_all_cams.append(sync(obj_data["tracks"]))
+        controller_all_cams.append(sync(ctrl_data["tracks"]))
+        
+        # Load and squeeze visibility (might have extra dimensions)
+        obj_vis = sync(obj_data["visibility"])
+        obj_vis = np.squeeze(obj_vis, axis=-1) if obj_vis.ndim > 2 else obj_vis
+        object_vis_all_cams.append(obj_vis)
+        
+        ctrl_vis = sync(ctrl_data["visibility"])
+        ctrl_vis = np.squeeze(ctrl_vis, axis=-1) if ctrl_vis.ndim > 2 else ctrl_vis
+        controller_vis_all_cams.append(ctrl_vis)
+    
+    # Concatenate across cameras
+    object_points = np.concatenate(object_all_cams, axis=1) if object_all_cams else np.array([])
+    controller_points = np.concatenate(controller_all_cams, axis=1) if controller_all_cams else np.array([])
+    object_vis = np.concatenate(object_vis_all_cams, axis=1) if object_vis_all_cams else np.array([])
+    controller_vis = np.concatenate(controller_vis_all_cams, axis=1) if controller_vis_all_cams else np.array([])
+    
+    tracks = {
+        "object_points": object_points,
+        "object_colors": np.ones_like(object_points) * 0.3,
+        "object_visibilities": object_vis,
+        "controller_points": controller_points,
+        "controller_colors": np.ones_like(controller_points) * 0.7,
+        "controller_visibilities": controller_vis,
+    }
+    
+    if object_points.size > 0:
+        print(f"  Object: {object_points.shape[1]}, Controller: {controller_points.shape[1]} points\n")
+    
+    return tracks if object_points.size > 0 else None
+
+
 def _load_calibration(base_path, case_name):
     """Load intrinsics and extrinsics for MVTracker projection."""
     try:
@@ -111,11 +168,11 @@ def _load_calibration(base_path, case_name):
         return None, None
 
 
-def filter_track(track_path, pcd_path, mask_path, frame_num, num_cam, is_mvtrack=False, base_path=None, case_name=None):
+def filter_track(track_path, pcd_path, mask_path, frame_num, num_cam, is_mvtrack=False, is_spatracker=False, base_path=None, case_name=None):
     """Filter tracking data based on object and controller masks.
     
-    For MVTracker: Combines separated tracks into single array per camera.
-    For CoTracker: Applies mask-based filtering to 2D pixels.
+    For MVTracker/SpaTracker: Loads pre-separated 3D tracks.
+    For CoTracker: Applies mask-based filtering to 2D pixels then lifts to 3D.
     """
     
     # Load MVTracker separated tracks if available
@@ -127,13 +184,22 @@ def filter_track(track_path, pcd_path, mask_path, frame_num, num_cam, is_mvtrack
             print(f"✓ Using MVTracker tracks in combined format")
             return mvtracker_data
     
+    # Load SpaTrackerV2 separated tracks if available
+    spatracker_data = None
+    if is_spatracker:
+        spatracker_data = _load_spatracker_separated(base_path, case_name, num_cam, frame_num)
+        if spatracker_data is not None:
+            # Return SpaTrackerV2 data directly - already in proper dict format
+            print(f"✓ Using SpaTrackerV2 tracks in combined format")
+            return spatracker_data
+    
     # Load masks and calibration
     with open(f"{mask_path}/processed_masks.pkl", "rb") as f:
         processed_masks = pickle.load(f)
         print(processed_masks[0].keys())
     
-    intrinsics, extrinsics = ((_load_calibration(base_path, case_name)) if (is_mvtrack and base_path and case_name) else (None, None))
-    if is_mvtrack and intrinsics is None:
+    intrinsics, extrinsics = ((_load_calibration(base_path, case_name)) if ((is_mvtrack or is_spatracker) and base_path and case_name) else (None, None))
+    if (is_mvtrack or is_spatracker) and intrinsics is None:
         print("  Will use all visible points as object")
     
     # Process camera tracks
@@ -155,8 +221,8 @@ def filter_track(track_path, pcd_path, mask_path, frame_num, num_cam, is_mvtrack
         
         num_points = np.shape(tracks)[1]
         
-        # For CoTracker: convert pixel coordinates to integers, For MVTracker: already 3D
-        if not is_mvtrack:
+        # For CoTracker: convert pixel coordinates to integers, For MVTracker/SpaTracker: already 3D
+        if not (is_mvtrack or is_spatracker):
             tracks = np.round(tracks).astype(int)
 
         # Locate the track points in the object mask of the first frame
@@ -167,8 +233,8 @@ def filter_track(track_path, pcd_path, mask_path, frame_num, num_cam, is_mvtrack
         controller_mask = processed_masks[0][i]["controller"]
         track_controller_idx = np.zeros((num_points), dtype=int)
         
-        if is_mvtrack and intrinsics is not None and extrinsics is not None:
-            # For MVTracker: project 3D world coords to 2D image space
+        if (is_mvtrack or is_spatracker) and intrinsics is not None and extrinsics is not None:
+            # For MVTracker/SpaTracker: project 3D world coords to 2D image space
             points_3d = tracks[0]  # [N, 3] world coordinates at frame 0
             points_2d, valid_3d = project_3d_to_2d(points_3d, intrinsics[i], extrinsics[i])
             
@@ -187,10 +253,10 @@ def filter_track(track_path, pcd_path, mask_path, frame_num, num_cam, is_mvtrack
                     # Point not in valid 3D projection
                     visibility[0, j] = 0
         else:
-            # For CoTracker or MVTracker without calibration
+            # For CoTracker or MVTracker/SpaTracker without calibration
             for j in range(num_points):
                 if visibility[0, j] == 1:
-                    if is_mvtrack:
+                    if is_mvtrack or is_spatracker:
                         # Without calibration, mark visible points as object but no controller
                         track_object_idx[j] = 1
                         track_controller_idx[j] = 0
@@ -204,7 +270,7 @@ def filter_track(track_path, pcd_path, mask_path, frame_num, num_cam, is_mvtrack
                             visibility[0, j] = 0
 
         # Filter out bad tracking in other frames (only for CoTracker)
-        if not is_mvtrack:
+        if not (is_mvtrack or is_spatracker):
             # Only do pixel-based filtering for CoTracker
             for frame_idx in range(1, actual_frame_num):
                 # Filter based on object_mask
@@ -230,8 +296,8 @@ def filter_track(track_path, pcd_path, mask_path, frame_num, num_cam, is_mvtrack
                             visibility[frame_idx, j] = 0
 
         # Get the track point cloud
-        if is_mvtrack:
-            # MVTracker already gives 3D coordinates directly
+        if is_mvtrack or is_spatracker:
+            # MVTracker/SpaTracker already gives 3D coordinates directly
             track_points = tracks.copy()  # Already [T, N, 3]
             track_colors = np.ones((actual_frame_num, num_points, 3)) * 0.5  # Default gray color
         else:
@@ -352,14 +418,12 @@ def filter_motion(track_data, neighbor_dist=0.02, min_neighbors=None):
                 # new_points.append(object_points[i + 1, j])
 
         motion_pcd = o3d.geometry.PointCloud()
+        valid_idx = np.where(object_motions_valid[i])[0]
         motion_pcd.points = o3d.utility.Vector3dVector(
-            object_points[i][np.where(object_motions_valid[i])]
+            object_points[i][valid_idx]
         )
         motion_pcd.colors = o3d.utility.Vector3dVector(
-            object_colors[i][np.where(object_motions_valid[i])]
-        )
-        motion_pcd.colors = o3d.utility.Vector3dVector(
-            rainbow_colors[np.where(object_motions_valid[i])]
+            rainbow_colors[valid_idx].astype(np.float64)
         )
 
         # modified_pcd = o3d.geometry.PointCloud()
@@ -480,11 +544,13 @@ def filter_motion(track_data, neighbor_dist=0.02, min_neighbors=None):
                 mask[j] = 0
 
         motion_pcd = o3d.geometry.PointCloud()
+        # Use boolean indexing consistently
+        valid_idx = np.where(mask)[0]  # Get actual indices from np.where()
         motion_pcd.points = o3d.utility.Vector3dVector(
-            controller_points[i][np.where(mask)]
+            controller_points[i][valid_idx].astype(np.float64)
         )
         motion_pcd.colors = o3d.utility.Vector3dVector(
-            controller_colors[i][np.where(controller_motions_valid[i])]
+            controller_colors[i][valid_idx].astype(np.float64)
         )
 
         if i == 0:
@@ -642,18 +708,25 @@ if __name__ == "__main__":
     pcd_path = f"{base_path}/{case_name}/pcd"
     mask_path = f"{base_path}/{case_name}/mask"
     
-    # Detect which tracking method was used (MVTracker preferred, CoTracker fallback)
+    # Detect which tracking method was used
     mvtrack_path = f"{base_path}/{case_name}/mvtrack"
     cotracker_path = f"{base_path}/{case_name}/cotracker"
+    spatracker_path = f"{base_path}/{case_name}/spatracker"
+    
+    use_mvtrack = False
+    use_spatracker = False
     
     if track_method == "mvtrack":
         track_path = mvtrack_path
         print(f"✓ Using MVTracker outputs from {mvtrack_path}")
         use_mvtrack = True
+    elif track_method == "spatracker":
+        track_path = spatracker_path
+        print(f"✓ Using SpaTrackerV2 outputs from {spatracker_path}")
+        use_spatracker = True
     elif track_method == "cotracker":
         track_path = cotracker_path
         print(f"✓ Using CoTracker outputs from {cotracker_path}")
-        use_mvtrack = False
     else:
         raise FileNotFoundError(f"Invalid tracking method: {track_method}")
 
@@ -664,11 +737,12 @@ if __name__ == "__main__":
     print(f"Processing tracking data for case: {case_name}")
     print(f"Number of cameras: {num_cam}")
     print(f"Number of frames: {frame_num}")
-    print(f"Tracking method: {'MVTracker (multi-view)' if use_mvtrack else 'CoTracker (monocular)'}")
+    method_str = "MVTracker (multi-view)" if use_mvtrack else ("SpaTrackerV2 (3D)" if use_spatracker else "CoTracker (monocular)")
+    print(f"Tracking method: {method_str}")
     print(f"{'='*80}\n")
 
     # Filter the track data using the semantic mask of object and controller
-    track_data = filter_track(track_path, pcd_path, mask_path, frame_num, num_cam, is_mvtrack=use_mvtrack)
+    track_data = filter_track(track_path, pcd_path, mask_path, frame_num, num_cam, is_mvtrack=use_mvtrack, is_spatracker=use_spatracker, base_path=base_path, case_name=case_name)
     print(f"After initial filtering: {track_data['controller_points'].shape[1]} controller points\n")
     
     # Filter motion - with adaptive min_neighbors for sparse controller points

@@ -258,14 +258,23 @@ def render_multi_images(
 
     num_cameras = camera_poses.shape[0]
 
-    # Render two times to avoid memory overflow
-    split = num_cameras // 2
-    color1, depth1 = render_image(
-        mesh, camera_poses[:split], width, height, fov, device
-    )
-    color2, depth2 = render_image(
-        mesh, camera_poses[split:], width, height, fov, device
-    )
-    color = np.concatenate([color1, color2], axis=0)
-    depth = np.concatenate([depth1, depth2], axis=0)
+    # Render in smaller batches to avoid memory overflow
+    # Split into thirds for better memory management
+    colors_list = []
+    depths_list = []
+    batch_size = max(1, num_cameras // 4)
+    
+    for i in range(0, num_cameras, batch_size):
+        batch_end = min(i + batch_size, num_cameras)
+        print(f"  Rendering batch {i//batch_size + 1}: cameras {i}-{batch_end}")
+        color_batch, depth_batch = render_image(
+            mesh, camera_poses[i:batch_end], width, height, fov, device
+        )
+        colors_list.append(color_batch)
+        depths_list.append(depth_batch)
+        # Aggressive memory cleanup between batches
+        torch.cuda.empty_cache()
+    
+    color = np.concatenate(colors_list, axis=0)
+    depth = np.concatenate(depths_list, axis=0)
     return color, depth, camera_poses, camera_intrinsics

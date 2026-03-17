@@ -18,9 +18,9 @@ parser.add_argument("--shape_prior", action="store_true", default=False)
 parser.add_argument(
     "--track_method",
     type=str,
-    choices=["cotracker", "mvtrack"],
-    default="cotracker",
-    help="Tracking method: 'cotracker' for CoTracker3-Online (fallback) or 'mvtrack' for MVTracker (multi-view)"
+    choices=["cotracker", "mvtrack", "spatracker"],
+    default="spatracker",
+    help="Tracking method: 'cotracker' (2D→3D), 'mvtrack' (multi-view 3D), 'spatracker' (per-camera 3D)"
 )
 args = parser.parse_args()
 
@@ -29,10 +29,10 @@ ALIGN_DATA = False  # dont need this
 
 PROCESS_SEG = False
 PROCESS_SHAPE_PRIOR = False
-PROCESS_TRACK = False
+PROCESS_TRACK = True
 PROCESS_3D = True
-PROCESS_ALIGN = True
-PROCESS_FINAL = True
+PROCESS_ALIGN = False
+PROCESS_FINAL = False
 
 USE_SD_UPSCALE = False
 
@@ -143,16 +143,19 @@ if PROCESS_SHAPE_PRIOR and SHAPE_PRIOR:
         )
 
 if PROCESS_TRACK:
-    # Get the dense tracking of the object using selected method (MVTracker or CoTracker)
+    # Get the dense tracking of the object using selected method
     if args.track_method == "mvtrack":
-        with Timer("Dense Tracking (MVTracker - Multi-View)"):
-            logger.info(f"Using MVTracker for multi-view consistent tracking")
+        with Timer("Dense Tracking (MVTracker)"):
             os.system(
                 f"python ./data_process/mvtrack_dense_video.py --base_path {base_path} --case_name {case_name}"
             )
+    elif args.track_method == "spatracker":
+        with Timer("Dense Tracking (SpaTrackerV2)"):
+            os.system(
+                f"python ./data_process/spatracker_dense_video.py --base_path {base_path} --case_name {case_name}"
+            )
     else:
-        with Timer("Dense Tracking (CoTracker - Monocular)"):
-            logger.info(f"Using CoTracker for monocular fallback tracking")
+        with Timer("Dense Tracking (CoTracker)"):
             os.system(
                 f"python ./data_process/dense_track.py --base_path {base_path} --case_name {case_name}"
             )

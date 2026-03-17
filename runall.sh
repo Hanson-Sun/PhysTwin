@@ -31,38 +31,37 @@ step() {
 # STEP 1: Different environment
 # =====================================================
 
-step "Parse depth data"
-conda activate phystwin_data
-python -u script_depth_inference.py
+# step "Parse depth data"
+# conda activate phystwin_data
+# python -u script_depth_inference.py
 
-# Switch back to main env
-conda activate phystwin
+# # Switch back to main env
+# conda activate phystwin
 
-# =====================================================
-# Main pipeline (sequential)
-# =====================================================
+# # =====================================================
+# # Main pipeline (sequential)
+# # =====================================================
 
-step "Process the data"
+# step "Process the data"
 # python -u script_process_data.py
 
-
-step "Detect environment planes"
+# # step "Detect environment planes"
 # python script_detect_environment_planes.py
 
-step "Align extrinsics to detected plane (delete .aligned_to_plane to run again)"
+# # step "Align extrinsics to detected plane (delete .aligned_to_plane to run again)"
 # python -u script_align_to_plane.py
 
-step "Calibrate camera extrinsics"
-# python -u script_calibrate_camera_extrinsics.py
+# # step "Calibrate camera extrinsics"
+# python -u script_calibrate_camera_extrinsics.py 
 
 # step "Export Gaussian data"
-# python -u export_gaussian_data.py
+python -u export_gaussian_data.py
 
 # step "Export human mask data"
-# python -u export_video_human_mask.py
+python -u export_video_human_mask.py
 
 # step "Zero-order Optimization"
-# python -u script_optimize.py
+python -u script_optimize.py
 
 step "First-order Optimization"
 python -u script_train.py

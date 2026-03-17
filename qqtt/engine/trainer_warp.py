@@ -40,6 +40,7 @@ import copy
 import time
 import threading
 import time
+import yaml
 
 
 class InvPhyTrainerWarp:
@@ -58,6 +59,8 @@ class InvPhyTrainerWarp:
         cfg.device = device
         cfg.run_name = base_dir.split("/")[-1]
         cfg.train_frame = train_frame
+        with open(f"{cfg.base_dir}/config_used.yml", "w") as f:
+            yaml.dump(cfg.to_dict(), f)
 
         self.init_masks = None
         self.init_velocities = None
@@ -484,7 +487,7 @@ class InvPhyTrainerWarp:
 
             assert (
                 len(spring_Y) == self.simulator.n_springs
-            ), "Check if the loaded checkpoint match the config file to connect the springs"
+            ), f"Check if the loaded checkpoint match the config file to connect the springs {len(spring_Y)} vs {self.simulator.n_springs}"
 
             self.simulator.set_spring_Y(torch.log(spring_Y).detach().clone())
             self.simulator.set_collide(
