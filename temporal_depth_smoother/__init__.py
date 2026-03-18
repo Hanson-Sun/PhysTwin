@@ -4,11 +4,10 @@ from .model import TemporalDepthSmoother
 from .config import Config, get_default_config, ModelConfig, TrainingConfig, DataConfig
 from .losses import (
     total_loss,
-    l_temporal,
+    l_flicker,
     l_geometric,
     l_smooth,
     compute_motion_mask,
-    compute_background_mask,
 )
 from .data import (
     TemporalDepthDataset,
@@ -35,11 +34,10 @@ __all__ = [
     'TrainingConfig',
     'DataConfig',
     'total_loss',
-    'l_temporal',
+    'l_flicker',
     'l_geometric',
     'l_smooth',
     'compute_motion_mask',
-    'compute_background_mask',
     'TemporalDepthDataset',
     'create_dataloaders',
     'normalize_depth_clip',

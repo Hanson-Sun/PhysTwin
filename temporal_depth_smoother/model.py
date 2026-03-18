@@ -119,6 +119,8 @@ class TemporalDepthSmoother(nn.Module):
         if config is None:
             config = ModelConfig()
 
+        self.config = config
+
         B  = config.base_channels
         Rd = config.rgb_encoder_channels
         Dd = config.depth_encoder_channels

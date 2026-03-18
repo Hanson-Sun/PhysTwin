@@ -29,7 +29,7 @@ def split_clips(clips: list, val_fraction: float = 0.2, seed: int = 42) -> Tuple
     rng = np.random.default_rng(seed)
     idx = rng.permutation(len(clips))
     n_val = max(1, int(len(clips) * val_fraction))
-    val_idx   = set(idx[:n_val].tolist())
+    val_idx     = set(idx[:n_val].tolist())
     train_clips = [c for i, c in enumerate(clips) if i not in val_idx]
     val_clips   = [c for i, c in enumerate(clips) if i in val_idx]
     return train_clips, val_clips
@@ -42,28 +42,24 @@ def variable_size_collate(batch: List[Dict]) -> Dict:
     """
     keys = batch[0].keys()
     result = {}
-    
+
     for key in keys:
         tensors = [item[key] for item in batch]
-        shapes = [t.shape for t in tensors]
-        
-        # Find max dimensions for this batch
+        shapes  = [t.shape for t in tensors]
+
         max_shape = tuple(max(s[i] for s in shapes) for i in range(len(shapes[0])))
-        
-        # Pad all to max and stack
+
         padded = []
         for t in tensors:
             if t.shape != max_shape:
-                # Create padding for this tensor
                 padding = []
                 for i in range(len(t.shape) - 1, -1, -1):
-                    pad_amount = max_shape[i] - t.shape[i]
-                    padding.extend([0, pad_amount])
+                    padding.extend([0, max_shape[i] - t.shape[i]])
                 t = F.pad(t, padding, mode='constant', value=0)
             padded.append(t)
-        
+
         result[key] = torch.stack(padded, dim=0)
-    
+
     return result
 
 
@@ -72,26 +68,34 @@ class TemporalDepthDataset(Dataset):
     Sliding window dataset over depth/rgb/vda clips.
 
     Each sample is a [temporal_window, H, W] chunk extracted from a clip.
-    Stride controls overlap: temporal_window//2 for train, temporal_window for val.
+    Stride controls overlap between windows:
+      - stride < temporal_window  → overlapping windows (more samples, more augmentation)
+      - stride = temporal_window  → non-overlapping windows (fewer samples, no overlap)
+
+    For training, stride = temporal_window // 2 gives 50% overlap.
+    For validation, stride = temporal_window gives non-overlapping windows.
     """
 
     def __init__(self,
                  data_dir: str,
                  clips: list,
                  temporal_window: int = 16,
-                 stride: int = 8,
+                 stride: int = None,
                  target_height: int = None,
                  target_width: int = None,
                  max_samples: Optional[int] = None):
-        self.data_dir       = Path(data_dir)
+        self.data_dir        = Path(data_dir)
         self.temporal_window = temporal_window
+        self.stride          = stride if stride is not None else temporal_window
+        self.target_height   = target_height
+        self.target_width    = target_width
 
         self.samples = self._generate_samples(clips)
         if max_samples is not None:
             self.samples = self.samples[:max_samples]
 
         print(f"  {len(clips)} clips → {len(self.samples)} samples "
-              f"(window={temporal_window}, stride={stride}, variable resolution)", flush=True)
+              f"(window={temporal_window}, stride={self.stride})", flush=True)
 
     def _generate_samples(self, clips: list) -> list:
         samples = []
@@ -99,7 +103,8 @@ class TemporalDepthDataset(Dataset):
             try:
                 T = np.load(self.data_dir / f"{clip_id}_depth_raw.npy",
                             mmap_mode='r').shape[0]
-                for start in range(0, T - self.temporal_window + 1, self.temporal_window):
+                # Use self.stride — this was the bug before (was hardcoded to temporal_window)
+                for start in range(0, T - self.temporal_window + 1, self.stride):
                     samples.append((clip_id, start))
             except Exception as e:
                 print(f"  Warning: skipping {clip_id}: {e}", flush=True)
@@ -111,32 +116,57 @@ class TemporalDepthDataset(Dataset):
     def _get_mmap(self, clip_id: str):
         """
         Return mmap handles for a clip, opening them lazily on first access.
-        mmap_mode='r' means only the requested slice is read from disk —
-        the full array is never loaded into RAM.
-        Worker-safe: each DataLoader worker gets its own copy of the dict
-        since Dataset is forked per worker.
+        mmap_mode='r' means only the requested slice is read from disk.
+        Worker-safe: each DataLoader worker gets its own forked copy.
         """
         if not hasattr(self, '_mmaps'):
             self._mmaps = {}
         if clip_id not in self._mmaps:
             self._mmaps[clip_id] = {
-                'depth_raw': np.load(self.data_dir / f"{clip_id}_depth_raw.npy",       mmap_mode='r'),
-                'rgb':       np.load(self.data_dir / f"{clip_id}_rgb.npy",             mmap_mode='r'),
-                'depth_vda': np.load(self.data_dir / f"{clip_id}_depth_vda_aligned.npy", mmap_mode='r'),
+                'depth_raw': np.load(self.data_dir / f"{clip_id}_depth_raw.npy",          mmap_mode='r'),
+                'rgb':       np.load(self.data_dir / f"{clip_id}_rgb.npy",                mmap_mode='r'),
+                'depth_vda': np.load(self.data_dir / f"{clip_id}_depth_vda_aligned.npy",  mmap_mode='r'),
             }
         return self._mmaps[clip_id]
+
+    def _resize(self, depth: torch.Tensor, is_rgb: bool = False) -> torch.Tensor:
+        """
+        Resize spatial dimensions to target_height x target_width if set.
+        depth: [T, H, W] or [T, H, W, 3]
+        """
+        if self.target_height is None or self.target_width is None:
+            return depth
+
+        if is_rgb:
+            # [T, H, W, 3] → [T, 3, H, W] for interpolate → back
+            x = depth.permute(0, 3, 1, 2).float()
+            x = F.interpolate(x, size=(self.target_height, self.target_width),
+                              mode='bilinear', align_corners=False)
+            return x.permute(0, 2, 3, 1)
+        else:
+            # [T, H, W] → [T, 1, H, W] for interpolate → back
+            x = depth.unsqueeze(1).float()
+            x = F.interpolate(x, size=(self.target_height, self.target_width),
+                              mode='bilinear', align_corners=False)
+            return x.squeeze(1)
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         clip_id, start = self.samples[idx]
         end = start + self.temporal_window
 
-        mmaps = self._get_mmap(clip_id)
+        mmaps     = self._get_mmap(clip_id)
         depth_raw = torch.from_numpy(mmaps['depth_raw'][start:end].astype(np.float32))
         rgb       = torch.from_numpy(mmaps['rgb'][start:end].astype(np.float32))
         depth_vda = torch.from_numpy(mmaps['depth_vda'][start:end].astype(np.float32))
 
+        # Normalize RGB to [0, 1]
         if rgb.max() > 1.0:
             rgb = rgb / 255.0
+
+        # Resize if target resolution is set
+        depth_raw = self._resize(depth_raw, is_rgb=False)
+        depth_vda = self._resize(depth_vda, is_rgb=False)
+        rgb       = self._resize(rgb,       is_rgb=True)
 
         return {
             'depth_raw':         depth_raw,
@@ -151,16 +181,13 @@ def create_dataloaders(data_dir: str,
                        val_fraction: float = 0.2,
                        num_workers: int = 2,
                        pin_memory: bool = True,
-                       target_height: int = 434,
-                       target_width: int = 756) -> Tuple[DataLoader, DataLoader]:
+                       target_height: int = None,
+                       target_width: int = None) -> Tuple[DataLoader, DataLoader]:
     """
     Clip-level train/val split — no val clip frames appear in training.
-
-    Args:
-        val_fraction: fraction of clips held out for validation
     """
     data_dir = Path(data_dir)
-    clips = scan_clips(data_dir)
+    clips    = scan_clips(data_dir)
     assert clips, f"No complete clips found in {data_dir}"
 
     train_clips, val_clips = split_clips(clips, val_fraction=val_fraction)
@@ -176,7 +203,7 @@ def create_dataloaders(data_dir: str,
     val_dataset = TemporalDepthDataset(
         data_dir, val_clips,
         temporal_window=temporal_window,
-        stride=temporal_window,
+        stride=temporal_window,   
         target_height=target_height,
         target_width=target_width,
     )

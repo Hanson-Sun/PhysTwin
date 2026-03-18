@@ -20,10 +20,10 @@ from .utils import save_checkpoint, load_checkpoint
 # Train / val epochs
 # ---------------------------------------------------------------------------
 
-def train_epoch(model, loader, optimizer, config, device, epoch, scaler=None):
+def train_epoch(model, loader, optimizer, config, device, epoch, scaler=None, global_step=0):
     model.train()
     total, counts = 0.0, 0
-    loss_dict = {'temporal': 0.0, 'geometric': 0.0, 'smooth': 0.0}
+    loss_dict = {'flicker': 0.0, 'geometric': 0.0, 'smooth': 0.0}
 
     pbar = tqdm(loader, desc=f"  Train", leave=False, unit="batch",
                 bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]{postfix}")
@@ -35,16 +35,14 @@ def train_epoch(model, loader, optimizer, config, device, epoch, scaler=None):
 
         optimizer.zero_grad()
 
-        # Use automatic mixed precision if enabled
         if scaler is not None:
             with autocast('cuda', dtype=torch.float16):
                 depth_smooth = model(depth_raw, rgb)
                 losses = total_loss(
                     depth_smooth, depth_raw, depth_vda_aligned, rgb,
-                    lambda_temporal=config.training.lambda_temporal,
+                    lambda_flicker=config.training.lambda_flicker,
                     lambda_geometric=config.training.lambda_geometric,
                     lambda_smooth=config.training.lambda_smooth,
-                    motion_threshold=config.training.motion_threshold,
                 )
             scaler.scale(losses['total']).backward()
             scaler.unscale_(optimizer)
@@ -55,10 +53,9 @@ def train_epoch(model, loader, optimizer, config, device, epoch, scaler=None):
             depth_smooth = model(depth_raw, rgb)
             losses = total_loss(
                 depth_smooth, depth_raw, depth_vda_aligned, rgb,
-                lambda_temporal=config.training.lambda_temporal,
+                lambda_flicker=config.training.lambda_flicker,
                 lambda_geometric=config.training.lambda_geometric,
                 lambda_smooth=config.training.lambda_smooth,
-                motion_threshold=config.training.motion_threshold,
             )
             losses['total'].backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -67,21 +64,20 @@ def train_epoch(model, loader, optimizer, config, device, epoch, scaler=None):
         total += losses['total'].item()
         for k in loss_dict: loss_dict[k] += losses[k].item()
         counts += 1
+        global_step += 1
 
-        # Update tqdm postfix with running averages
         pbar.set_postfix(
             loss=f"{total/counts:.4f}",
-            temp=f"{loss_dict['temporal']/counts:.4f}",
+            flicker=f"{loss_dict['flicker']/counts:.4f}",
             geom=f"{loss_dict['geometric']/counts:.4f}",
             smooth=f"{loss_dict['smooth']/counts:.4f}",
         )
 
-        # Per-batch logging every log_interval steps
-        global_step = epoch * len(loader) + i
+        # Per-batch logging
         if (i + 1) % config.training.log_interval == 0:
             wandb.log({
                 'batch/loss':      losses['total'].item(),
-                'batch/temporal':  losses['temporal'].item(),
+                'batch/flicker':   losses['flicker'].item(),
                 'batch/geometric': losses['geometric'].item(),
                 'batch/smooth':    losses['smooth'].item(),
             }, step=global_step)
@@ -90,19 +86,13 @@ def train_epoch(model, loader, optimizer, config, device, epoch, scaler=None):
     avg = total / n
     for k in loss_dict: loss_dict[k] /= n
 
-    wandb.log({
-        'train/loss':      avg,
-        'train/temporal':  loss_dict['temporal'],
-        'train/geometric': loss_dict['geometric'],
-        'train/smooth':    loss_dict['smooth'],
-    }, step=epoch)
-
-    return avg, loss_dict
+    return avg, loss_dict, global_step
 
 
-def val_epoch(model, loader, config, device, epoch):
+def val_epoch(model, loader, config, device):
     model.eval()
     total, counts = 0.0, 0
+    loss_dict = {'flicker': 0.0, 'geometric': 0.0, 'smooth': 0.0}
 
     with torch.no_grad():
         for batch in tqdm(loader, desc=f"  Val  ", leave=False, unit="batch"):
@@ -113,17 +103,18 @@ def val_epoch(model, loader, config, device, epoch):
             depth_smooth = model(depth_raw, rgb)
             losses = total_loss(
                 depth_smooth, depth_raw, depth_vda_aligned, rgb,
-                lambda_temporal=config.training.lambda_temporal,
+                lambda_flicker=config.training.lambda_flicker,
                 lambda_geometric=config.training.lambda_geometric,
                 lambda_smooth=config.training.lambda_smooth,
-                motion_threshold=config.training.motion_threshold,
             )
             total += losses['total'].item()
+            for k in loss_dict: loss_dict[k] += losses[k].item()
             counts += 1
 
-    avg = total / max(counts, 1)
-    wandb.log({'val/loss': avg}, step=epoch)
-    return avg
+    n = max(counts, 1)
+    avg = total / n
+    for k in loss_dict: loss_dict[k] /= n
+    return avg, loss_dict
 
 
 # ---------------------------------------------------------------------------
@@ -131,24 +122,20 @@ def val_epoch(model, loader, config, device, epoch):
 # ---------------------------------------------------------------------------
 
 def main():
+    torch.set_float32_matmul_precision('high')
+
     p = argparse.ArgumentParser(description='Train temporal depth smoothing network')
-    p.add_argument('--data-dir',           required=True,
-                   help='Path to preprocessed data directory')
-    p.add_argument('--output-dir',         default='./outputs',
-                   help='Directory to save checkpoints and logs')
-    p.add_argument('--device',             default='cuda',
-                   help='Device to use (cuda or cpu)')
-    p.add_argument('--resume',             default=None,
-                   help='Path to checkpoint to resume from')
-    p.add_argument('--wandb-run-id',       default=None,
-                   help='W&B run ID to resume (leave blank to start a new run)')
+    p.add_argument('--data-dir',     required=True)
+    p.add_argument('--output-dir',   default='./outputs')
+    p.add_argument('--device',       default='cuda')
+    p.add_argument('--resume',       default=None)
+    p.add_argument('--wandb-run-id', default=None)
     args = p.parse_args()
 
     device     = torch.device(args.device if torch.cuda.is_available() else 'cpu')
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Load config from config.py (source of truth for all hyperparameters)
     config = get_default_config()
 
     print(f"Device: {device}", flush=True)
@@ -177,18 +164,20 @@ def main():
     print(f"Data resolution: {config.data.target_height}x{config.data.target_width}", flush=True)
 
     model = TemporalDepthSmoother(config=config.model).to(device)
+    model = torch.compile(model)
     print(f"Parameters: {sum(p.numel() for p in model.parameters()):,}", flush=True)
 
     optimizer = optim.Adam(model.parameters(), lr=config.training.learning_rate,
                            weight_decay=config.training.weight_decay)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5, factor=0.5)
+    scaler    = GradScaler('cuda') if config.training.use_amp else None
 
-    scaler = GradScaler('cuda') if config.training.use_amp else None
-
-    start_epoch = 0
+    start_epoch  = 0
+    global_step  = 0
     if args.resume:
         print(f"Resuming from {args.resume}", flush=True)
         start_epoch = load_checkpoint(model, optimizer, args.resume)
+        global_step = start_epoch * len(train_loader)  # approximate
 
     wandb.init(
         project='temporal-depth-smoother',
@@ -198,24 +187,38 @@ def main():
     )
     best_val = float('inf')
 
-    # Outer epoch progress bar
     epoch_pbar = tqdm(range(start_epoch, config.training.num_epochs),
                       desc="Epochs", unit="epoch",
                       bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]{postfix}")
 
     for epoch in epoch_pbar:
-        train_loss, loss_dict = train_epoch(model, train_loader, optimizer, config, device, epoch, scaler)
-        val_loss              = val_epoch(  model, val_loader,             config, device, epoch)
+        train_loss, train_loss_dict, global_step = train_epoch(
+            model, train_loader, optimizer, config, device, epoch, scaler, global_step
+        )
+        val_loss, val_loss_dict = val_epoch(model, val_loader, config, device)
 
         scheduler.step(val_loss)
-        wandb.log({'lr': optimizer.param_groups[0]['lr']}, step=epoch)
+        current_lr = optimizer.param_groups[0]['lr']
 
-        # Summarise epoch in the outer bar's postfix
+        # Log everything at the same global_step so train and val align on the x-axis
+        wandb.log({
+            'epoch':              epoch + 1,
+            'train/loss':         train_loss,
+            'train/flicker':      train_loss_dict['flicker'],
+            'train/geometric':    train_loss_dict['geometric'],
+            'train/smooth':       train_loss_dict['smooth'],
+            'val/loss':           val_loss,
+            'val/flicker':        val_loss_dict['flicker'],
+            'val/geometric':      val_loss_dict['geometric'],
+            'val/smooth':         val_loss_dict['smooth'],
+            'lr':                 current_lr,
+        }, step=global_step)
+
         is_best = val_loss < best_val
         epoch_pbar.set_postfix(
             train=f"{train_loss:.4f}",
             val=f"{val_loss:.4f}",
-            lr=f"{optimizer.param_groups[0]['lr']:.1e}",
+            lr=f"{current_lr:.1e}",
             best="✓" if is_best else "",
         )
 
