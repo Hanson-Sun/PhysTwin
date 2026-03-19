@@ -218,6 +218,8 @@ def main():
     parser.add_argument('--save-smoothed',    action='store_true')
     parser.add_argument('--visualize',        action='store_true')
     parser.add_argument('--device',           default='cuda')
+    parser.add_argument('--window-size',      type=int, default=16,
+                        help='Chunk size for inference (frames). Use smaller values for limited VRAM.')
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -236,7 +238,7 @@ def main():
 
     print("\nRunning inference...")
     smoother     = DepthSmoother(args.checkpoint, device=args.device)
-    depth_smooth = smoother.smooth(depth_raw, rgb)
+    depth_smooth = smoother.smooth(depth_raw, rgb, window_size=args.window_size, overlap=4)
 
     print("\nEvaluating...")
     metrics = evaluate_smoothing(

@@ -23,7 +23,7 @@ from .utils import save_checkpoint, load_checkpoint
 def train_epoch(model, loader, optimizer, config, device, epoch, scaler=None, global_step=0):
     model.train()
     total, counts = 0.0, 0
-    loss_dict = {'flicker': 0.0, 'geometric': 0.0, 'smooth': 0.0}
+    loss_dict = {'fidelity': 0.0, 'flicker': 0.0, 'geometric': 0.0, 'tgm': 0.0, 'tv': 0.0}
 
     pbar = tqdm(loader, desc=f"  Train", leave=False, unit="batch",
                 bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]{postfix}")
@@ -40,9 +40,10 @@ def train_epoch(model, loader, optimizer, config, device, epoch, scaler=None, gl
                 depth_smooth = model(depth_raw, rgb)
                 losses = total_loss(
                     depth_smooth, depth_raw, depth_vda_aligned, rgb,
+                    lambda_fidelity=config.training.lambda_fidelity, 
                     lambda_flicker=config.training.lambda_flicker,
                     lambda_geometric=config.training.lambda_geometric,
-                    lambda_smooth=config.training.lambda_smooth,
+                    lambda_tgm=config.training.lambda_tgm,
                 )
             scaler.scale(losses['total']).backward()
             scaler.unscale_(optimizer)
@@ -53,9 +54,11 @@ def train_epoch(model, loader, optimizer, config, device, epoch, scaler=None, gl
             depth_smooth = model(depth_raw, rgb)
             losses = total_loss(
                 depth_smooth, depth_raw, depth_vda_aligned, rgb,
+                lambda_fidelity=config.training.lambda_fidelity,
                 lambda_flicker=config.training.lambda_flicker,
                 lambda_geometric=config.training.lambda_geometric,
-                lambda_smooth=config.training.lambda_smooth,
+                lambda_tgm=config.training.lambda_tgm,
+                lambda_tv=config.training.lambda_tv,
             )
             losses['total'].backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -68,18 +71,22 @@ def train_epoch(model, loader, optimizer, config, device, epoch, scaler=None, gl
 
         pbar.set_postfix(
             loss=f"{total/counts:.4f}",
+            fid=f"{loss_dict['fidelity']/counts:.4f}", 
             flicker=f"{loss_dict['flicker']/counts:.4f}",
             geom=f"{loss_dict['geometric']/counts:.4f}",
-            smooth=f"{loss_dict['smooth']/counts:.4f}",
+            tgm=f"{loss_dict['tgm']/counts:.4f}",
+            tv=f"{loss_dict['tv']/counts:.4f}",
         )
 
         # Per-batch logging
         if (i + 1) % config.training.log_interval == 0:
             wandb.log({
                 'batch/loss':      losses['total'].item(),
+                'batch/fidelity':  losses['fidelity'].item(), 
                 'batch/flicker':   losses['flicker'].item(),
                 'batch/geometric': losses['geometric'].item(),
-                'batch/smooth':    losses['smooth'].item(),
+                'batch/tgm':       losses['tgm'].item(),
+                'batch/tv':        losses['tv'].item(),
             }, step=global_step)
 
     n = max(counts, 1)
@@ -92,7 +99,7 @@ def train_epoch(model, loader, optimizer, config, device, epoch, scaler=None, gl
 def val_epoch(model, loader, config, device):
     model.eval()
     total, counts = 0.0, 0
-    loss_dict = {'flicker': 0.0, 'geometric': 0.0, 'smooth': 0.0}
+    loss_dict = {'fidelity': 0.0, 'flicker': 0.0, 'geometric': 0.0, 'tgm': 0.0, 'tv': 0.0}
 
     with torch.no_grad():
         for batch in tqdm(loader, desc=f"  Val  ", leave=False, unit="batch"):
@@ -103,9 +110,11 @@ def val_epoch(model, loader, config, device):
             depth_smooth = model(depth_raw, rgb)
             losses = total_loss(
                 depth_smooth, depth_raw, depth_vda_aligned, rgb,
+                lambda_fidelity=config.training.lambda_fidelity, 
                 lambda_flicker=config.training.lambda_flicker,
                 lambda_geometric=config.training.lambda_geometric,
-                lambda_smooth=config.training.lambda_smooth,
+                lambda_tgm=config.training.lambda_tgm,
+                lambda_tv=config.training.lambda_tv,
             )
             total += losses['total'].item()
             for k in loss_dict: loss_dict[k] += losses[k].item()
@@ -200,17 +209,20 @@ def main():
         scheduler.step(val_loss)
         current_lr = optimizer.param_groups[0]['lr']
 
-        # Log everything at the same global_step so train and val align on the x-axis
         wandb.log({
             'epoch':              epoch + 1,
             'train/loss':         train_loss,
+            'train/fidelity':     train_loss_dict['fidelity'], 
             'train/flicker':      train_loss_dict['flicker'],
             'train/geometric':    train_loss_dict['geometric'],
-            'train/smooth':       train_loss_dict['smooth'],
+            'train/tgm':          train_loss_dict['tgm'],
+            'train/tv':           train_loss_dict['tv'],
             'val/loss':           val_loss,
+            'val/fidelity':       val_loss_dict['fidelity'],   
             'val/flicker':        val_loss_dict['flicker'],
             'val/geometric':      val_loss_dict['geometric'],
-            'val/smooth':         val_loss_dict['smooth'],
+            'val/tgm':            val_loss_dict['tgm'],
+            'val/tv':             val_loss_dict['tv'],
             'lr':                 current_lr,
         }, step=global_step)
 

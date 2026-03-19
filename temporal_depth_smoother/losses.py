@@ -6,6 +6,12 @@ import torch.nn.functional as F
 
 _SOBEL_X = torch.tensor([[-1,0,1],[-2,0,2],[-1,0,1]], dtype=torch.float32).view(1,1,3,3) / 8.0
 _SOBEL_Y = torch.tensor([[-1,-2,-1],[0,0,0],[1,2,1]], dtype=torch.float32).view(1,1,3,3) / 8.0
+_sobel_cache: dict = {}
+
+def _get_sobel(device):
+    if device not in _sobel_cache:
+        _sobel_cache[device] = (_SOBEL_X.to(device), _SOBEL_Y.to(device))
+    return _sobel_cache[device]
  
  
 def compute_image_gradient(rgb: torch.Tensor) -> torch.Tensor:
@@ -19,8 +25,7 @@ def compute_image_gradient(rgb: torch.Tensor) -> torch.Tensor:
     """
     B, T, H, W, C = rgb.shape
     gray = rgb.view(B * T, C, H, W).mean(dim=1, keepdim=True)
-    sx   = _SOBEL_X.to(gray.device)
-    sy   = _SOBEL_Y.to(gray.device)
+    sx, sy = _get_sobel(gray.device)
     grad = (F.conv2d(gray, sx, padding=1) ** 2 +
             F.conv2d(gray, sy, padding=1) ** 2).sqrt().squeeze(1)
     return grad.view(B, T, H, W)
@@ -61,7 +66,10 @@ def compute_motion_mask(rgb: torch.Tensor, threshold: float = 0.05) -> torch.Ten
 def compute_flicker_mask(depth_raw: torch.Tensor,
                          depth_vda: torch.Tensor,
                          rgb: torch.Tensor,
-                         depth_threshold: float = 0.01,
+                         # FIX: raised from 0.01 → 0.15. At 0.01 the mask fired almost
+                         # nowhere because std-normalised changes rarely exceed 0.01,
+                         # making flicker_mask ≈ 0 and l_flicker a no-op.
+                         depth_threshold: float = 0.15,
                          rgb_threshold: float = 0.05,
                          vda_weight: float = 0.7) -> torch.Tensor:
     """
@@ -97,6 +105,22 @@ def compute_flicker_mask(depth_raw: torch.Tensor,
  
     return combined_static * has_da3_change  # [B, T-1, H, W]
 
+
+def l_fidelity(depth_smooth: torch.Tensor,
+               depth_raw: torch.Tensor) -> torch.Tensor:
+    """
+    L1 penalty keeping smoothed depth close to the DA3 input.
+    This is the primary anchor that prevents value drift and flattening.
+
+    Args:
+        depth_smooth: [B, T, H, W]  model output
+        depth_raw:    [B, T, H, W]  DA3 input (same scale)
+    Returns:
+        scalar loss
+    """
+    return torch.abs(depth_smooth - depth_raw).mean()
+
+
 def l_flicker(depth_smooth: torch.Tensor,
               flicker_mask: torch.Tensor) -> torch.Tensor:
     """
@@ -111,11 +135,49 @@ def l_flicker(depth_smooth: torch.Tensor,
     change = (depth_smooth[:, 1:] - depth_smooth[:, :-1]).abs()
     return change.mul(flicker_mask).mean()
 
+def l_tgm(depth_smooth: torch.Tensor,
+          depth_vda: torch.Tensor,
+          depth_raw: torch.Tensor) -> torch.Tensor:
+    """
+    Temporal Gradient Matching (TGM) loss, following Video Depth Anything.
+
+    Supervises the frame-to-frame depth change in the output to match VDA's
+    frame-to-frame change, rather than driving all temporal change to zero.
+
+    This correctly handles moving objects: where something moves, VDA's
+    temporal gradient is non-zero, so the model is not penalised for tracking
+    that motion. On static background, VDA's gradient is near zero, so any
+    residual flicker in the output is penalised directly.
+
+    Weighted by the per-pixel disagreement between DA3 and VDA temporal
+    gradients. This concentrates gradient signal on flickering pixels (where
+    DA3 changes but VDA doesn't) and relaxes it where they agree — preventing
+    fidelity and TGM from fighting equally hard on non-flickering pixels.
+
+    Args:
+        depth_smooth: [B, T, H, W]  model output
+        depth_vda:    [B, T, H, W]  VDA aligned depth (same scale as output)
+        depth_raw:    [B, T, H, W]  DA3 input (used to compute flicker weight)
+    Returns:
+        scalar loss
+    """
+    grad_smooth = depth_smooth[:, 1:] - depth_smooth[:, :-1]  # [B, T-1, H, W]
+    grad_vda    = depth_vda[:, 1:]    - depth_vda[:, :-1]     # [B, T-1, H, W]
+    grad_raw    = depth_raw[:, 1:]    - depth_raw[:, :-1]     # [B, T-1, H, W]
+
+    # Weight by how much DA3 and VDA disagree temporally.
+    # High on flickering pixels (DA3 jumps, VDA is stable).
+    # Near zero where they agree (real motion or both stable).
+    # Normalised to mean=1 so lambda_tgm scale is preserved.
+    disagreement = (grad_raw - grad_vda).abs()
+    weight = disagreement / (disagreement.mean() + 1e-6)
+
+    return (grad_smooth - grad_vda).abs().mul(weight).mean()
 
 def l_geometric(depth_smooth: torch.Tensor,
                 depth_raw: torch.Tensor,
                 rgb: torch.Tensor,
-                edge_weight_strength: float = 10.0) -> torch.Tensor:
+                edge_weight_strength: float = 5.0) -> torch.Tensor:
     """
     Preserve spatial depth structure of DA3, relaxed at RGB edges.
 
@@ -132,7 +194,6 @@ def l_geometric(depth_smooth: torch.Tensor,
     smooth_gx, smooth_gy = compute_depth_spatial_gradient(depth_smooth)
     raw_gx,    raw_gy    = compute_depth_spatial_gradient(depth_raw)
 
-    # Edge weight: 1.0 on flat regions, near 0 at RGB edges
     edge_w = torch.exp(-edge_weight_strength * compute_image_gradient(rgb))
 
     loss_x = (smooth_gx - raw_gx).abs().mul(edge_w).mean()
@@ -141,11 +202,41 @@ def l_geometric(depth_smooth: torch.Tensor,
     return (loss_x + loss_y) / 2.0
 
 
+def l_tv(depth_smooth: torch.Tensor,
+         depth_vda: torch.Tensor) -> torch.Tensor:
+    """
+    Temporal total variation — second-order smoothness prior on the output.
+
+    TGM (first-order) matches adjacent-frame differences to VDA, but a signal
+    can still oscillate with period 2 frames and satisfy TGM perfectly.
+    This second-derivative term penalises that oscillation directly by
+    requiring the *change in change* to be small.
+
+    Applied only where VDA itself is smooth (second derivative near zero),
+    so real motion with genuine acceleration is not penalised.
+
+    Args:
+        depth_smooth: [B, T, H, W]  model output
+        depth_vda:    [B, T, H, W]  VDA aligned depth
+    Returns:
+        scalar loss
+    """
+    # Second temporal derivative of output: [B, T-2, H, W]
+    d2_smooth = depth_smooth[:, 2:] - 2 * depth_smooth[:, 1:-1] + depth_smooth[:, :-2]
+    # Second temporal derivative of VDA — used as a soft gate.
+    # Where VDA accelerates (real motion), we relax the constraint.
+    d2_vda    = (depth_vda[:, 2:] - 2 * depth_vda[:, 1:-1] + depth_vda[:, :-2]).abs()
+    # Weight: 1 where VDA is smooth, fades where VDA itself accelerates
+    weight = torch.exp(-10.0 * d2_vda)
+    return d2_smooth.abs().mul(weight).mean()
+
+# deprecated. l_flicker is the better version
+# of the same idea and double-counting the gradient causes conflicting signal.
 def l_smooth(depth_smooth: torch.Tensor,
              motion_mask: torch.Tensor) -> torch.Tensor:
     """
-    Kept as a lightweight auxiliary loss on RGB-static pixels.
-    Less central than before — l_flicker is now the main flicker signal.
+    Lightweight auxiliary loss on RGB-static pixels.
+    Deprecated in favour of l_flicker — set lambda_smooth=0.
 
     Args:
         depth_smooth: [B, T, H, W]
@@ -155,50 +246,48 @@ def l_smooth(depth_smooth: torch.Tensor,
     return grad.mul(1 - motion_mask).mean()
 
 
+
+
 def total_loss(depth_smooth: torch.Tensor,
                depth_raw: torch.Tensor,
                depth_vda_aligned: torch.Tensor,
                rgb: torch.Tensor,
-               lambda_flicker: float = 1.0,
+               lambda_fidelity: float = 1.0,
+               lambda_tgm: float = 1.0,
                lambda_geometric: float = 1.0,
-               lambda_smooth: float = 0.01,
-               depth_threshold: float = 0.01,
+               lambda_tv: float = 1.0,
+               lambda_flicker: float = 1.0,
+               depth_threshold: float = 0.15,
                rgb_threshold: float = 0.05,
                vda_weight: float = 0.7) -> dict:
-    """
-    Args:
-        depth_smooth:      [B, T, H, W]  model output
-        depth_raw:         [B, T, H, W]  DA3 input
-        depth_vda_aligned: [B, T, H, W]  VDA (flicker detection only)
-        rgb:               [B, T, H, W, 3]  float [0, 1]
-        lambda_flicker:    weight for flicker suppression
-        lambda_geometric:  weight for spatial geometry preservation
-        lambda_smooth:     auxiliary RGB smoothness (0 = disabled)
-    Returns:
-        dict with 'total', 'flicker', 'geometric', 'smooth'
-    """
     rgb_01 = rgb.float().div(255.0) if rgb.max() > 1.0 else rgb.float()
+
+    loss_f = torch.tensor(0.0, device=depth_smooth.device)
+    if lambda_flicker > 0.0:
+        flicker_mask = compute_flicker_mask(
+            depth_raw, depth_vda_aligned, rgb_01,
+            depth_threshold=depth_threshold,
+            rgb_threshold=rgb_threshold,
+            vda_weight=vda_weight,
+        )
+        loss_f = l_flicker(depth_smooth, flicker_mask)
  
-    flicker_mask = compute_flicker_mask(
-        depth_raw, depth_vda_aligned, rgb_01,
-        depth_threshold=depth_threshold,
-        rgb_threshold=rgb_threshold,
-        vda_weight=vda_weight,
-    )
- 
-    loss_f = l_flicker(depth_smooth, flicker_mask)
+    loss_fid = l_fidelity(depth_smooth, depth_raw)
     loss_g = l_geometric(depth_smooth, depth_raw, rgb_01)
-    loss_s = torch.tensor(0.0, device=depth_smooth.device)
-    if lambda_smooth > 0:
-        motion_mask = compute_motion_mask(rgb_01, threshold=rgb_threshold)
-        grad        = (depth_smooth[:, 1:] - depth_smooth[:, :-1]).abs()
-        loss_s      = grad.mul(1 - motion_mask).mean()
+    loss_tgm = l_tgm(depth_smooth, depth_vda_aligned, depth_raw)
+    loss_tv = l_tv(depth_smooth, depth_vda_aligned)
  
-    total = lambda_flicker * loss_f + lambda_geometric * loss_g + lambda_smooth * loss_s
+    total = (lambda_fidelity  * loss_fid +
+             lambda_flicker   * loss_f   +
+             lambda_tgm       * loss_tgm +
+             lambda_geometric * loss_g   +
+             lambda_tv        * loss_tv)
  
     return {
         'total':     total,
+        'fidelity':  loss_fid.detach(),
         'flicker':   loss_f.detach(),
         'geometric': loss_g.detach(),
-        'smooth':    loss_s.detach(),
+        'tgm':       loss_tgm.detach(),
+        'tv':        loss_tv.detach(),
     }

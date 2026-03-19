@@ -96,7 +96,12 @@ class DepthSmoother:
             config = get_default_config().model
 
         self.model = TemporalDepthSmoother(config=config).to(self.device)
-        self.model.load_state_dict(checkpoint['model_state'])
+        
+        state_dict = checkpoint['model_state']
+        if all(k.startswith('_orig_mod.') for k in state_dict.keys()):
+            state_dict = {k.replace('_orig_mod.', ''): v for k, v in state_dict.items()}
+        
+        self.model.load_state_dict(state_dict)
         self.model.eval()
         print(f"Loaded model  dilations={config.temporal_dilations}  "
               f"device={self.device}", flush=True)

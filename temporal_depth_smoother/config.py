@@ -5,24 +5,26 @@ from typing import List
 
 @dataclass
 class ModelConfig:
-    T: int = 16  
-    base_channels: int = 32  
-    rgb_encoder_channels: int = 16  
-    depth_encoder_channels: int = 16  
-    temporal_dilations: List[int] = field(default_factory=lambda: [1, 2, 4]) 
+    T: int = 16
+    base_channels: int = 48
+    rgb_encoder_channels: int = 16
+    depth_encoder_channels: int = 16
+    temporal_dilations: List[int] = field(default_factory=lambda: [1, 2, 4])
 
 
 @dataclass
 class TrainingConfig:
-    batch_size: int = 1  
+    batch_size: int = 2
     learning_rate: float = 3e-3
     num_epochs: int = 50
     weight_decay: float = 1e-4
-    lambda_flicker: float = 1.0
-    lambda_geometric: float = 1.0
-    lambda_smooth: float = 0.1
+    lambda_tgm: float = 1.50
+    lambda_fidelity: float = 1.0
+    lambda_tv: float = 1.0
+    lambda_geometric: float = 0.25    
+    lambda_flicker: float = 0.0
     log_interval: int = 10
-    use_amp: bool = False  # Automatic Mixed Precision for lower memory usage
+    use_amp: bool = True
 
 
 @dataclass

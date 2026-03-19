@@ -42,6 +42,8 @@ gaussian_output_dynamic*
 interactive_my_test.py
 xarm/
 
+temporal_depth_output/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
