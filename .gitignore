@@ -43,6 +43,7 @@ interactive_my_test.py
 xarm/
 
 temporal_depth_output/*
+miniconda.sh
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
