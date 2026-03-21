@@ -44,9 +44,10 @@ print("-" * 95)
 for step in range(200):
     optimizer.zero_grad()
     depth_smooth = model(raw, rgb)
+    lf = 0.0 if step < 0 else config.training.lambda_fidelity  # Start with no fidelity loss to let the model find a good minimum for the other losses, then turn it on.
     losses = total_loss(
         depth_smooth, raw, vda, rgb,
-        lambda_fidelity=config.training.lambda_fidelity,
+        lambda_fidelity=lf,
         lambda_tgm=config.training.lambda_tgm,
         lambda_tv=config.training.lambda_tv,
         lambda_geometric=config.training.lambda_geometric,

@@ -97,6 +97,7 @@ class DepthSmoother:
 
         self.model = TemporalDepthSmoother(config=config).to(self.device)
         
+        # Handle checkpoint from compiled model (keys have "_orig_mod." prefix)
         state_dict = checkpoint['model_state']
         if all(k.startswith('_orig_mod.') for k in state_dict.keys()):
             state_dict = {k.replace('_orig_mod.', ''): v for k, v in state_dict.items()}
@@ -132,6 +133,12 @@ class DepthSmoother:
         depth_t = depth_t.unsqueeze(0).to(self.device)  # [1, T, H, W]
         rgb_t   = rgb_t.unsqueeze(0).to(self.device)    # [1, T, H, W, 3]
 
+        # Normalise the full clip once globally before chunking.
+        # This prevents drift/reset artifacts at chunk boundaries
+        depth_mean = depth_t.mean(dim=[1, 2, 3], keepdim=True)
+        depth_std  = depth_t.std( dim=[1, 2, 3], keepdim=True).clamp(min=1e-6)
+        depth_norm = (depth_t - depth_mean) / depth_std
+
         T = depth_t.shape[1]
         window_size = window_size or T  # None → full video, no chunking
 
@@ -141,11 +148,14 @@ class DepthSmoother:
               flush=True)
 
         with torch.no_grad():
-            depth_smooth = sliding_window_inference(
-                self.model, depth_t, rgb_t,
+            depth_smooth_norm = sliding_window_inference(
+                self.model, depth_norm, rgb_t,
                 window_size=window_size,
                 overlap=overlap,
             )
+
+        # Denormalise back to original scale
+        depth_smooth = depth_smooth_norm * depth_std + depth_mean
 
         return depth_smooth.squeeze(0).cpu().numpy()  # [T, H, W]
 

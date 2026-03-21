@@ -140,7 +140,6 @@ def main():
     # ── Step 2: Train ─────────────────────────────────────────────────────
     if not args.skip_train:
         print("🎓 STEP 2: TRAINING\n")
-        print(f"   Monitor with: tensorboard --logdir {train_dir}/tensorboard")
         cmd = [
             sys.executable,
             "-m",

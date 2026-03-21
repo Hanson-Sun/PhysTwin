@@ -106,7 +106,8 @@ class DecoderBlock(nn.Module):
 
     def forward(self, x, skip):
         x = self.up(x)
-        x = F.interpolate(x, size=skip.shape[-2:], mode='bilinear', align_corners=False)
+        if x.shape[-2:] != skip.shape[-2:]:
+            x = F.interpolate(x, size=skip.shape[-2:], mode='bilinear', align_corners=False)
         return self.conv(torch.cat([x, skip], dim=1))
 
 

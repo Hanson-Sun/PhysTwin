@@ -18,10 +18,10 @@ class TrainingConfig:
     learning_rate: float = 3e-3
     num_epochs: int = 50
     weight_decay: float = 1e-4
-    lambda_tgm: float = 1.50
-    lambda_fidelity: float = 1.0
-    lambda_tv: float = 1.0
-    lambda_geometric: float = 0.25    
+    lambda_fidelity: float = 1.2
+    lambda_tgm: float = 0.5
+    lambda_tv: float = 0.5
+    lambda_geometric: float = 0.3   
     lambda_flicker: float = 0.0
     log_interval: int = 10
     use_amp: bool = True
