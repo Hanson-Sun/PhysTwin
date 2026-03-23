@@ -19,7 +19,7 @@ parser.add_argument(
     "--track_method",
     type=str,
     choices=["cotracker", "mvtrack", "spatracker"],
-    default="spatracker",
+    default="cotracker",
     help="Tracking method: 'cotracker' (2D→3D), 'mvtrack' (multi-view 3D), 'spatracker' (per-camera 3D)"
 )
 args = parser.parse_args()
@@ -27,12 +27,12 @@ args = parser.parse_args()
 # Set the debug flags
 ALIGN_DATA = False  # dont need this
 
-PROCESS_SEG = False
-PROCESS_SHAPE_PRIOR = False
+PROCESS_SEG = True
+PROCESS_SHAPE_PRIOR = True
 PROCESS_TRACK = True
 PROCESS_3D = True
-PROCESS_ALIGN = False
-PROCESS_FINAL = False
+PROCESS_ALIGN = True
+PROCESS_FINAL = True
 
 USE_SD_UPSCALE = False
 

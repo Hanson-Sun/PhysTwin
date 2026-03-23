@@ -356,7 +356,6 @@ def total_loss(depth_smooth: torch.Tensor,
     loss_g   = l_geometric(depth_smooth, depth_raw, rgb_01)
     loss_tv_1  = l_tv_k(depth_smooth, depth_vda_aligned, depth_raw, k=1)
     loss_tv_2  = l_tv_k(depth_smooth, depth_vda_aligned, depth_raw, k=2)
-    # loss_tv_4  = l_tv_k(depth_smooth, depth_vda_aligned, depth_raw, k=4)
     loss_tv = loss_tv_1 + 0.2 * loss_tv_2 
     loss_tgm_4 = l_tgm_k(depth_smooth, depth_vda_aligned, depth_raw, k=3)
     loss_tgm_2 = l_tgm_k(depth_smooth, depth_vda_aligned, depth_raw, k=2)

@@ -15,6 +15,8 @@ trap 'rc=$?; echo "runall.sh failed on line ${LINENO} with exit code ${rc}" >&2;
 export WANDB_MODE=offline
 export PYTHONUNBUFFERED=1
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export NVCC_THREADS=2
+export MAX_JOBS=2
 
 # ---- Load conda into this non-interactive shell ----
 source "$(conda info --base)/etc/profile.d/conda.sh"
@@ -35,24 +37,26 @@ step() {
 # conda activate phystwin_data
 # python -u script_depth_inference.py
 
-# # Switch back to main env
-# conda activate phystwin
+# python script_smooth_phystwin_data.py
 
-# # =====================================================
-# # Main pipeline (sequential)
-# # =====================================================
+# Switch back to main env
+conda activate phystwin
 
-# step "Process the data"
-# python -u script_process_data.py
+# =====================================================
+# Main pipeline (sequential)
+# =====================================================
 
-# # step "Detect environment planes"
-# python script_detect_environment_planes.py
+step "Process the data"
+python -u script_process_data.py
 
-# # step "Align extrinsics to detected plane (delete .aligned_to_plane to run again)"
-# python -u script_align_to_plane.py
+# step "Detect environment planes"
+python script_detect_environment_planes.py
 
-# # step "Calibrate camera extrinsics"
-# python -u script_calibrate_camera_extrinsics.py 
+# step "Align extrinsics to detected plane (delete .aligned_to_plane to run again)"
+python -u script_align_to_plane.py
+
+# step "Calibrate camera extrinsics"
+python -u script_calibrate_camera_extrinsics.py 
 
 # step "Export Gaussian data"
 python -u export_gaussian_data.py

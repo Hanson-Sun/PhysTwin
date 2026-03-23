@@ -42,3 +42,11 @@ double_bend_monkey_new,red-monkey,True
 double_lift_cloth_1_new,cloth,False
 single_lift_cloth_3_new,cloth,False
 double_bend_monkey_new,red-monkey,True
+
+double_stretch_sloth_smooth, sloth, True
+single_lift_rope_smooth,twine,True
+single_lift_cloth_3_smooth,cloth,False
+
+double_bend_monkey_0_da3,monkey,True
+double_bend_grey_pad_0_da3,grey-pad-mat,True
+single_fold_tshirt_da3,black-cloth,False

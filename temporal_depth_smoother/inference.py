@@ -33,50 +33,56 @@ def sliding_window_inference(
     Returns:
         [1, T, H, W] smoothed depth
     """
-    assert overlap < window_size // 2, "overlap must be less than window_size // 2"
+    assert overlap < window_size // 2
 
     T = depth.shape[1]
-
-    # Short video — process in one shot
     if T <= window_size:
         return model(depth, rgb)
 
-    stride  = window_size - 2 * overlap
-    output  = torch.zeros_like(depth)
-    counts  = torch.zeros(T, device=depth.device)
+    stride = window_size - 2 * overlap
+    output = torch.zeros_like(depth)
+    counts = torch.zeros(T, device=depth.device)
 
     start = 0
     while start < T:
         end = min(start + window_size, T)
 
-        # Pad last chunk if shorter than window_size
         chunk_d = depth[:, start:end]
         chunk_r = rgb[:, start:end]
+
         if end - start < window_size:
             pad = window_size - (end - start)
-            chunk_d = torch.cat([chunk_d, chunk_d[:, -pad:]], dim=1)
-            chunk_r = torch.cat([chunk_r, chunk_r[:, -pad:]], dim=1)
+            # Reflect pad — more realistic than repeating last frame
+            chunk_d = torch.cat([chunk_d, chunk_d[:, -pad:].flip(1)], dim=1)
+            chunk_r = torch.cat([chunk_r, chunk_r[:, -pad:].flip(1)], dim=1)
 
         out = model(chunk_d, chunk_r)  # [1, window_size, H, W]
 
-        # Only keep centre frames — discard overlap on each side
-        keep_start = overlap if start > 0        else 0
-        keep_end   = window_size - overlap if end < T else window_size
-
-        src = out[:, keep_start:keep_end]
-        dst_start = start + keep_start
-        dst_end   = dst_start + (keep_end - keep_start)
-        dst_end   = min(dst_end, T)
-        src = src[:, :dst_end - dst_start]
-
-        output[:, dst_start:dst_end] += src
-        counts[dst_start:dst_end]    += 1
+        # Use full output, but apply weights so only "safe" center frames contribute heavily
+        # Safe frames: far enough from edges that the model has ±15 frame receptive field
+        safe_start = overlap if start > 0 else 0
+        safe_end   = window_size - overlap if end < T else window_size
+        
+        # Weight array: 1.0 in safe zone, ramping down at edges
+        weights = torch.ones(window_size, device=depth.device)
+        if start > 0:
+            # Ramp up at left edge (frame enters from previous chunk)
+            weights[:safe_start] = torch.linspace(0, 1, safe_start, device=depth.device)
+        if end < T:
+            # Ramp down at right edge (frame picked up by next chunk)
+            weights[safe_end:] = torch.linspace(1, 0, window_size - safe_end, device=depth.device)
+        
+        # Apply weights and accumulate
+        for t in range(window_size):
+            abs_t = start + t
+            if abs_t < T:
+                output[:, abs_t] += out[:, t] * weights[t]
+                counts[abs_t] += weights[t]
 
         if end >= T:
             break
         start += stride
 
-    # Average overlapping regions (counts should be 1 everywhere with correct overlap)
     output /= counts.view(1, T, 1, 1).clamp(min=1)
     return output
 
