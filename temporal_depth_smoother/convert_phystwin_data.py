@@ -29,7 +29,7 @@ def load_camera_frames(color_dir, camera_id) -> np.ndarray | None:
     return np.array(frames, dtype=np.uint8)  # [T, H, W, 3]
 
 
-def process_case(case_dir, output_dir) -> bool:
+def process_case(case_dir, output_dir, overwrite=False) -> bool:
     case_name = Path(case_dir).name
     color_dir = Path(case_dir) / 'color'
     if not color_dir.exists():
@@ -37,6 +37,12 @@ def process_case(case_dir, output_dir) -> bool:
         return False
 
     Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+    # Check if all output files already exist
+    out_paths = [Path(output_dir) / f"{case_name}_cam{cam_id}_rgb.npy" for cam_id in [0, 1, 2]]
+    if all(p.exists() for p in out_paths) and not overwrite:
+        print(f"  [{case_name}] already processed, skipping", flush=True)
+        return True
 
     for cam_id in [0, 1, 2]:
         frames = load_camera_frames(color_dir, cam_id)
@@ -50,10 +56,18 @@ def process_case(case_dir, output_dir) -> bool:
 
     return True
 
+import argparse
 
 def main():
-    source_dir = Path('/mnt/d/DATA/phystwin/data/different_types')
-    output_dir = Path('/root/digital_clone_v2/temporal_depth_training_data')
+    p = argparse.ArgumentParser(description="Convert PhysTwin data to temporal depth smoother format")
+    p.add_argument("--source_dir", default='/mnt/d/DATA/phystwin/data/different_types')
+    p.add_argument("--output_dir", default='/mnt/d/DATA/phystwin/temporal_depth_training_data_v2')
+    p.add_argument("--case_id", default=None, help="Process only cases containing this string")
+    p.add_argument("--overwrite", action="store_true", help="Overwrite existing converted data")
+    args = p.parse_args()
+
+    source_dir = Path(args.source_dir)
+    output_dir = Path(args.output_dir)
 
     if not source_dir.exists():
         print(f"Source not found: {source_dir}"); return
@@ -61,10 +75,14 @@ def main():
     cases = sorted(d for d in source_dir.iterdir() if d.is_dir())
     print(f"Found {len(cases)} cases", flush=True)
 
+    if args.case_id:
+        cases = [c for c in cases if args.case_id in c.name]
+        print(f"Filtered to {len(cases)} cases containing '{args.case_id}'", flush=True)
+
     def run(case):
         print(f"\n── {case.name} ──", flush=True)
         try:
-            return process_case(case, output_dir)
+            return process_case(case, output_dir, args.overwrite)
         except Exception as e:
             print(f"  [{case.name}] ERROR: {e}", flush=True)
             return False

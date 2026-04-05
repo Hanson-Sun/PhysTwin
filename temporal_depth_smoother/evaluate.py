@@ -220,6 +220,8 @@ def main():
     parser.add_argument('--device',           default='cuda')
     parser.add_argument('--window-size',      type=int, default=16,
                         help='Chunk size for inference (frames). Use smaller values for limited VRAM.')
+    parser.add_argument('--overlap',          type=int, default=4,
+                        help='Edge overlap per chunk. Should match inference settings.')
     args = parser.parse_args()
 
     output_dir = Path(args.output_dir)
@@ -238,7 +240,9 @@ def main():
 
     print("\nRunning inference...")
     smoother     = DepthSmoother(args.checkpoint, device=args.device)
-    depth_smooth = smoother.smooth(depth_raw, rgb, window_size=args.window_size, overlap=4)
+    depth_smooth = smoother.smooth(depth_raw, rgb,
+                                   window_size=args.window_size,
+                                   overlap=args.overlap)
 
     print("\nEvaluating...")
     metrics = evaluate_smoothing(

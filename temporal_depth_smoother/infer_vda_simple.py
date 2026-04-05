@@ -45,12 +45,13 @@ def load_model(encoder: str, metric: bool, device: str) -> VideoDepthAnything:
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--data_dir",  default="./temporal_depth_training_data")
+    p.add_argument("--data_dir",  default="/mnt/d/DATA/phystwin/temporal_depth_training_data_v2")
     p.add_argument("--clip_id",   default=None)
     p.add_argument("--encoder",   default="vitl", choices=["vits", "vitb", "vitl"])
     p.add_argument("--metric",    action="store_true")
     p.add_argument("--visualize", action="store_true")
     p.add_argument("--viz_dir",   default="./depth_visualizations")
+    p.add_argument("--overwrite",   action="store_true", help="Overwrite existing depth maps")
     args = p.parse_args()
 
     data_dir = Path(args.data_dir)
@@ -71,13 +72,28 @@ def main():
     for rgb_path in rgb_files:
         clip_id  = rgb_path.stem.replace("_rgb", "")
         out_path = data_dir / f"{clip_id}_depth_vda.npy"
+        da3_path = data_dir / f"{clip_id}_depth_da3.npy"
 
-        if out_path.exists():
+        if out_path.exists() and not args.overwrite:
             print(f"Skipping {clip_id} (already done)"); continue
 
         print(f"\n── {clip_id} ──")
         rgb = np.load(rgb_path)
         print(f"  {rgb.shape} {rgb.dtype}")
+
+        if da3_path.exists():
+            da3 = np.load(da3_path, mmap_mode='r')
+            if da3.ndim >= 3:
+                target_h, target_w = int(da3.shape[1]), int(da3.shape[2])
+                src_h, src_w = int(rgb.shape[1]), int(rgb.shape[2])
+                if (src_h, src_w) != (target_h, target_w):
+                    interp = cv2.INTER_AREA if (target_h <= src_h and target_w <= src_w) else cv2.INTER_CUBIC
+                    rgb = np.stack(
+                        [cv2.resize(frame, (target_w, target_h), interpolation=interp) for frame in rgb],
+                        axis=0,
+                    )
+                    print(f"  Matched DA3 resolution: {target_h}x{target_w}")
+            del da3
 
         depths_list, _ = model.infer_video_depth(rgb, target_fps=30, input_size=518, device=device)
         depths = np.stack(depths_list).astype(np.float32)  # [T, H, W]

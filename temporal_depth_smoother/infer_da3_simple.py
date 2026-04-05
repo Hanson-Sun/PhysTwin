@@ -44,8 +44,10 @@ def colorize(depth: np.ndarray) -> np.ndarray:
 
 
 class DA3Inferencer:
-    def __init__(self, model_name: str, process_res: int = 756):
+    def __init__(self, model_name: str, process_res: int = 504, window_size: int = 3, overlap: int = 2):
         self.process_res = process_res
+        self.window_size = window_size
+        self.overlap = overlap
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         print(f"Loading {model_name} ...")
         self.model = DepthAnything3.from_pretrained(model_name).to(self.device).eval()
@@ -101,21 +103,63 @@ class DA3Inferencer:
         show(0)
         cv2.waitKey(1)
 
-        # ── Frames 1..T-1: scale-aligned inference ──
-        for t in tqdm(range(1, T), desc="Frames", unit="frame"):
+        # ── Frames 1..T-1: sliding window inference ──
+        stride = self.window_size - self.overlap
+        start_idx, chunk_idx = 1, 0
+        pbar = tqdm(total=T - 1, desc="Frames", unit="frame")
+        
+        while start_idx < T:
+            end_idx = min(start_idx + self.window_size, T)
+            window_indices = list(range(start_idx, end_idx))
+            
+            # Flatten batch: for each frame, add all cameras
+            all_images = []
+            all_intrinsics = []
+            all_extrinsics = []
+            for idx in window_indices:
+                for c in range(num_cams):
+                    all_images.append(to_uint8(rgb[c][idx]))
+                    all_intrinsics.append(cam_intr[c])
+                    all_extrinsics.append(cam_ext[c])
+            
+            intrinsics_batch = np.stack(all_intrinsics, axis=0)
+            extrinsics_batch = np.stack(all_extrinsics, axis=0)
+            
             pred = self.model.inference(
-                image=[to_uint8(rgb[c][t]) for c in range(num_cams)],
-                extrinsics=cam_ext,
-                intrinsics=cam_intr,
+                image=all_images,
+                extrinsics=extrinsics_batch,
+                intrinsics=intrinsics_batch,
                 align_to_input_ext_scale=True,
                 process_res=self.process_res,
             )
-            d = extract_depth(pred)
-            for c in range(num_cams): depths[c][t] = d[c]
-            show(t)
-            if cv2.waitKey(1) == 27: break
-            del pred, d
-
+            
+            # Skip overlap frames on non-first chunks
+            is_first_chunk = (chunk_idx == 0)
+            save_start_idx = 0 if is_first_chunk else self.overlap
+            
+            # Unpack results: indexed as frame_idx * num_cams + cam_idx
+            for frame_i, idx in enumerate(window_indices):
+                if not is_first_chunk and frame_i < self.overlap:
+                    continue
+                
+                for c in range(num_cams):
+                    depth_idx = frame_i * num_cams + c
+                    d = pred.depth[depth_idx]
+                    if torch.is_tensor(d):
+                        d = d.detach().cpu().numpy()
+                    depths[c][idx] = d
+                
+                show(idx)
+                pbar.update(1)
+                if cv2.waitKey(1) == 27: 
+                    break
+            
+            torch.cuda.empty_cache() if torch.cuda.is_available() else None
+            start_idx += stride
+            chunk_idx += 1
+        
+        pbar.close()
+        
         for vw in writers:
             if vw: vw.release()
         cv2.destroyAllWindows()
@@ -124,12 +168,15 @@ class DA3Inferencer:
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--data_dir",    default="./temporal_depth_training_data")
+    p.add_argument("--data_dir",    default="/mnt/d/DATA/phystwin/temporal_depth_training_data_v2")
     p.add_argument("--clip_id",     default=None)
     p.add_argument("--model_name",  default="depth-anything/DA3NESTED-GIANT-LARGE")
-    p.add_argument("--process_res", default=756, type=int)
+    p.add_argument("--process_res", default=504, type=int)
+    p.add_argument("--window_size", default=3, type=int, help="Sliding window size for frame chunks")
+    p.add_argument("--overlap",     default=2, type=int, help="Overlap between windows")
     p.add_argument("--visualize",   action="store_true")
     p.add_argument("--viz_dir",     default="./depth_visualizations")
+    p.add_argument("--overwrite",   action="store_true", help="Overwrite existing depth maps")
     args = p.parse_args()
 
     data_dir = Path(args.data_dir)
@@ -146,7 +193,7 @@ def main():
     if not clips:
         print("No clips found."); return
 
-    model = DA3Inferencer(args.model_name, args.process_res)
+    model = DA3Inferencer(args.model_name, args.process_res, args.window_size, args.overlap)
     if args.visualize: Path(args.viz_dir).mkdir(parents=True, exist_ok=True)
 
     for clip_id, cam_paths in sorted(clips.items()):
@@ -154,7 +201,7 @@ def main():
         sorted_cams = sorted(cam_paths.items())
         out_paths = [data_dir / f"{clip_id}_cam{c}_depth_da3.npy" for c, _ in sorted_cams]
 
-        if all(p.exists() for p in out_paths):
+        if all(p.exists() for p in out_paths) and not args.overwrite:
             print("  Already done, skipping."); continue
 
         rgb_paths = [p for _, p in sorted_cams]

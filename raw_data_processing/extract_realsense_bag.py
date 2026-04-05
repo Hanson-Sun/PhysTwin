@@ -94,8 +94,11 @@ def save_frames_and_video(
     # converting each frame twice.
     video_path = Path(output_dir) / case_name / "color" / f"{camera_id}.mp4"
     writer = cv2.VideoWriter(
-        str(video_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h)
+        str(video_path), cv2.VideoWriter_fourcc(*"avc1"), fps, (w, h)
     )
+
+    if not writer.isOpened():
+        raise RuntimeError(f"Failed to open VideoWriter for {video_path}. ")
 
     print(f"Saving color frames → {color_dir}")
     for i, frame in enumerate(color_frames):
@@ -144,18 +147,14 @@ Examples:
     print(f"Output dir : {args.output_dir}")
     print(f"Video FPS  : {args.fps}\n")
 
-    try:
-        color_frames, depth_frames, _ = extract_bag(args.bag_file)
-        save_frames_and_video(
-            color_frames, depth_frames,
-            args.output_dir, args.case_name, args.camera_id, args.fps,
-        )
-        out = Path(args.output_dir) / args.case_name
-        print(f"\n✓ Done — output at {out}/")
+    color_frames, depth_frames, _ = extract_bag(args.bag_file)
+    save_frames_and_video(
+        color_frames, depth_frames,
+        args.output_dir, args.case_name, args.camera_id, args.fps,
+    )
+    out = Path(args.output_dir) / args.case_name
+    print(f"\n✓ Done — output at {out}/")
 
-    except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
 
 
 if __name__ == "__main__":

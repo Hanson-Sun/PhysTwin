@@ -23,12 +23,17 @@ def run_command(cmd, description):
 
 def find_eval_clips(preprocess_dir: Path) -> list:
     """
-    Find all complete clips in the preprocessed directory.
+    Find all complete camera 0 clips in the preprocessed directory.
     Returns list of dicts with paths for depth_raw, rgb, depth_vda_aligned.
     """
     clips = []
     for depth_file in sorted(preprocess_dir.glob("*_depth_raw.npy")):
         clip_id = depth_file.stem.replace("_depth_raw", "")
+        
+        # Only evaluate camera 0 clips (either explicitly _cam0 or no camera specification)
+        if "_cam1" in clip_id or "_cam2" in clip_id:
+            continue
+        
         rgb_path = preprocess_dir / f"{clip_id}_rgb.npy"
         vda_path = preprocess_dir / f"{clip_id}_depth_vda_aligned.npy"
 

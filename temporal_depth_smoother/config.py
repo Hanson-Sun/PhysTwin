@@ -1,4 +1,5 @@
 """Configuration and hyperparameters for Temporal Depth Smoother."""
+
 from dataclasses import dataclass, field
 from typing import List
 
@@ -16,13 +17,14 @@ class ModelConfig:
 class TrainingConfig:
     batch_size: int = 2
     learning_rate: float = 3e-3
-    num_epochs: int = 50
+    num_epochs: int = 10
     weight_decay: float = 1e-4
-    lambda_fidelity: float = 1.2
-    lambda_tgm: float = 0.5
-    lambda_tv: float = 0.5
-    lambda_geometric: float = 0.3   
-    lambda_flicker: float = 0.0
+    lambda_fidelity: float = 1.4
+    lambda_geometric: float = 0.08
+    lambda_geometric_grad: float = 0.1
+    lambda_ssim: float = 0.0
+    lambda_tgm: float = 0.8
+    lambda_tv: float = 0.8  
     log_interval: int = 10
     use_amp: bool = True
 
@@ -31,8 +33,8 @@ class TrainingConfig:
 class DataConfig:
     background_stddev_threshold: float = 0.01
     depth_std_clamp: float = 1e-6
-    target_height: int = 216
-    target_width: int = 384
+    target_height: int = 226  # 360
+    target_width: int = 334  # 554
 
 
 @dataclass
@@ -42,9 +44,12 @@ class Config:
     data: DataConfig = None
 
     def __post_init__(self):
-        if self.model    is None: self.model    = ModelConfig()
-        if self.training is None: self.training = TrainingConfig()
-        if self.data     is None: self.data     = DataConfig()
+        if self.model is None:
+            self.model = ModelConfig()
+        if self.training is None:
+            self.training = TrainingConfig()
+        if self.data is None:
+            self.data = DataConfig()
 
 
 def get_default_config() -> Config:

@@ -111,7 +111,11 @@ def smooth_camera(camera_id: int,
     
 
     if rgb.shape[0] != depth_raw.shape[0]:
-        raise RuntimeError(f"RGB and depth frame count mismatch for camera {camera_id}: {rgb.shape[0]} RGB frames vs {depth_raw.shape[0]} depth frames")
+        print(f"Warning: RGB and depth frame count mismatch for camera {camera_id}: {rgb.shape[0]} RGB frames vs {depth_raw.shape[0]} depth frames", flush=True)
+        min_frames = min(rgb.shape[0], depth_raw.shape[0])
+        rgb = rgb[:min_frames]
+        depth_raw = depth_raw[:min_frames]
+        print(f"  Camera {camera_id}: truncated to {min_frames} frames", flush=True)
     
     # Resize RGB to match depth spatial dimensions if needed
     if rgb.shape[1:3] != depth_raw.shape[1:3]:

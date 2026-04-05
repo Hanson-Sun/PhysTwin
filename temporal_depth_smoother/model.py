@@ -97,17 +97,33 @@ class EncoderBlock(nn.Module):
         return self.down(skip), skip
 
 
+# class DecoderBlock(nn.Module):
+#     """Spatial decoder level: upsample + skip connection + conv block."""
+#     def __init__(self, in_ch: int, skip_ch: int, out_ch: int):
+#         super().__init__()
+#         self.up   = nn.ConvTranspose2d(in_ch, out_ch, kernel_size=2, stride=2)
+#         self.conv = Conv2dBlock(out_ch + skip_ch, out_ch)
+
+#     def forward(self, x, skip):
+#         x = self.up(x)
+#         if x.shape[-2:] != skip.shape[-2:]:
+#             x = F.interpolate(x, size=skip.shape[-2:], mode='bilinear', align_corners=False)
+#         return self.conv(torch.cat([x, skip], dim=1))
+        
 class DecoderBlock(nn.Module):
     """Spatial decoder level: upsample + skip connection + conv block."""
     def __init__(self, in_ch: int, skip_ch: int, out_ch: int):
         super().__init__()
-        self.up   = nn.ConvTranspose2d(in_ch, out_ch, kernel_size=2, stride=2)
-        self.conv = Conv2dBlock(out_ch + skip_ch, out_ch)
+        self.conv_in  = nn.Conv2d(in_ch, out_ch, kernel_size=3, padding=1)
+        self.conv     = Conv2dBlock(out_ch + skip_ch, out_ch)
 
     def forward(self, x, skip):
-        x = self.up(x)
+        x = F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=False)
+        x = self.conv_in(x)
+
         if x.shape[-2:] != skip.shape[-2:]:
             x = F.interpolate(x, size=skip.shape[-2:], mode='bilinear', align_corners=False)
+
         return self.conv(torch.cat([x, skip], dim=1))
 
 
@@ -200,6 +216,7 @@ class TemporalDepthSmoother(nn.Module):
         B, T, H, W = depth_raw.shape
 
         # Per-clip normalisation 
+        # TODO: might need to remove this
         mean = depth_raw.mean(dim=[1, 2, 3], keepdim=True)
         std  = depth_raw.std( dim=[1, 2, 3], keepdim=True).clamp(min=1e-6)
         depth_norm = (depth_raw - mean) / std

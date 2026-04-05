@@ -73,21 +73,30 @@ def extract_bag(bag_path: Path) -> tuple[list, list, list]:
 
 def save_camera(color_frames: list, depth_frames: list,
                 case_dir: Path, camera_id: int, fps: float) -> None:
-    rgb_dir   = case_dir / "color"   / str(camera_id)
+    color_dir = case_dir / "color" / str(camera_id)
     depth_dir = case_dir / "depth" / str(camera_id)
-    rgb_dir.mkdir(parents=True, exist_ok=True)
+    color_dir.mkdir(parents=True, exist_ok=True)
     depth_dir.mkdir(parents=True, exist_ok=True)
 
     h, w = color_frames[0].shape[:2]
+    video_path = case_dir / "color" / f"{camera_id}.mp4"
+
     writer = cv2.VideoWriter(
-        str(case_dir / "rgb" / f"{camera_id}.mp4"),
+        str(video_path),
         cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h),
     )
+
+    if not writer.isOpened():
+        raise RuntimeError(f"Failed to open VideoWriter for {video_path}. "
+                           "mp4v codec may not be available.")
+
     for i, frame in enumerate(color_frames):
         bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-        cv2.imwrite(str(rgb_dir / f"{i}.png"), bgr)
+        cv2.imwrite(str(color_dir / f"{i}.png"), bgr)
         writer.write(bgr)
     writer.release()
+
+    print(f"      Saved video: {video_path}")
 
     for i, depth in enumerate(depth_frames):
         np.save(str(depth_dir / f"{i}.npy"), depth)
@@ -96,7 +105,7 @@ def save_camera(color_frames: list, depth_frames: list,
 # ── Session processing (runs in worker process) ───────────────────────────────
 
 def process_session(session_dir: Path, output_dir: Path,
-                    case_name: str, fps: float) -> tuple[str, bool, str]:
+                    case_name: str, fps: float, skip_existing: bool = False) -> tuple[str, bool, str]:
     """
     Extract all non-.original bags in session_dir.
     Returns (case_name, success, message) — safe to call in a subprocess.
@@ -106,9 +115,15 @@ def process_session(session_dir: Path, output_dir: Path,
         if not p.name.endswith(".original.bag")
     )
     if not bags:
+        print(f"No .bag files found in {session_dir}")
         return case_name, False, "no .bag files found"
 
     case_dir = output_dir / case_name
+    
+    # Check if case folder already exists and has content
+    if skip_existing and case_dir.exists() and any(case_dir.iterdir()):
+        return case_name, True, "  (skipped — already generated)"
+    
     lines = [f"  {len(bags)} camera(s)"]
 
     for cam_id, bag_path in enumerate(bags):
@@ -146,6 +161,8 @@ Examples:
                         help="Process every sub-directory as a separate session")
     parser.add_argument("--workers", type=int, default=2,
                         help="Parallel worker processes (default: 2)")
+    parser.add_argument("--skip-existing", action="store_true",
+                        help="Skip cases that have already been generated (non-empty case folders)")
 
     args = parser.parse_args()
 
@@ -171,7 +188,7 @@ Examples:
 
     with ProcessPoolExecutor(max_workers=args.workers) as pool:
         futures = {
-            pool.submit(process_session, sd, output_dir, name, args.fps): name
+            pool.submit(process_session, sd, output_dir, name, args.fps, args.skip_existing): name
             for sd, name in sessions
         }
         for future in as_completed(futures):

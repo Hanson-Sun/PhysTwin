@@ -50,3 +50,6 @@ single_lift_cloth_3_smooth,cloth,False
 double_bend_monkey_0_da3,monkey,True
 double_bend_grey_pad_0_da3,grey-pad-mat,True
 single_fold_tshirt_da3,black-cloth,False
+
+double_bend_grey_pad_0_da3,grey-pad-mat,True
+single_lift_water_bottle_1_da3,water-bottle,True
