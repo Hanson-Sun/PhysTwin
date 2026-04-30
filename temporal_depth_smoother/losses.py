@@ -507,6 +507,11 @@ def total_loss(
     lambda_geometric_grad: float = 1.0,
     lambda_tv: float = 1.0,
     lambda_ssim: float = 1.0,
+    tv_k1_weight: float = 1.0,
+    tv_k2_weight: float = 0.20,
+    tgm_k1_weight: float = 1.0,
+    tgm_k2_weight: float = 0.21,
+    tgm_k3_weight: float = 0.015,
     depth_threshold: float = 0.15,
     rgb_threshold: float = 0.05,
     vda_weight: float = 0.7,
@@ -530,6 +535,11 @@ def total_loss(
         lambda_geometric_grad:  spatial gradient matching weight
         lambda_tv:         second-order temporal smoothness weight
         lambda_ssim:       SSIM weight
+        tv_k1_weight:      coefficient for TV k=1 term
+        tv_k2_weight:      coefficient for TV k=2 term
+        tgm_k1_weight:     coefficient for TGM k=1 term
+        tgm_k2_weight:     coefficient for TGM k=2 term
+        tgm_k3_weight:     coefficient for TGM k=3 term
     Returns:
         dict: 'total', 'fidelity', 'tgm', 'geometric', 'geometric_grad', 'tv', 'ssim'
     """
@@ -559,13 +569,17 @@ def total_loss(
     if lambda_tv > 0.0:
         loss_tv_2 = l_tv_k(depth_smooth, depth_vda_aligned, depth_raw, k=2)
         loss_tv_1 = l_tv_k(depth_smooth, depth_vda_aligned, depth_raw, k=1)
-        loss_tv = lambda_tv * (loss_tv_1 + 0.25 * loss_tv_2)
+        loss_tv = lambda_tv * (tv_k1_weight * loss_tv_1 + tv_k2_weight * loss_tv_2)
+        # increasing loss_tv_2 lambda can increase motion blur, which is not good
         
     if lambda_tgm > 0.0:
         loss_tgm_3 = l_tgm_k(depth_smooth, depth_vda_aligned, depth_raw, k=3)
         loss_tgm_2 = l_tgm_k(depth_smooth, depth_vda_aligned, depth_raw, k=2)
         loss_tgm_1 = l_tgm_k(depth_smooth, depth_vda_aligned, depth_raw, k=1)
-        loss_tgm = lambda_tgm * (loss_tgm_1 + 0.25 * loss_tgm_2 + 0.05 * loss_tgm_3)
+        loss_tgm = lambda_tgm * (
+            tgm_k1_weight * loss_tgm_1 + tgm_k2_weight * loss_tgm_2 + tgm_k3_weight * loss_tgm_3
+            # larger tgm_k3_weight can cause strange edge gradients
+        )
         
     if loss_fid.isnan().any():
         raise ValueError("loss_fid contains NaN values")

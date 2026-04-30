@@ -17,14 +17,20 @@ class ModelConfig:
 class TrainingConfig:
     batch_size: int = 2
     learning_rate: float = 3e-3
-    num_epochs: int = 10
+    num_epochs: int = 30
     weight_decay: float = 1e-4
-    lambda_fidelity: float = 1.4
-    lambda_geometric: float = 0.08
-    lambda_geometric_grad: float = 0.1
+    lambda_fidelity: float = 1.3
+    lambda_geometric: float = 0.047
+    lambda_geometric_grad: float = 0.05
     lambda_ssim: float = 0.0
     lambda_tgm: float = 0.8
-    lambda_tv: float = 0.8  
+    lambda_tv: float = 0.8
+    tv_k1_weight: float = 1.0
+    # try minimal increases
+    tv_k2_weight: float = 0.25 # this stops long distance flicker, but also adds edge artifacts? 0.22 was ok i think, edge blurring was pretty bad tho
+    tgm_k1_weight: float = 1.0
+    tgm_k2_weight: float = 0.25  # This increases motion blurring significantly?? does reduce flicker tho
+    tgm_k3_weight: float = 0.07  # also increase motion blurring, super similar to tv 0.05
     log_interval: int = 10
     use_amp: bool = True
 
@@ -33,8 +39,8 @@ class TrainingConfig:
 class DataConfig:
     background_stddev_threshold: float = 0.01
     depth_std_clamp: float = 1e-6
-    target_height: int = 226  # 360
-    target_width: int = 334  # 554
+    target_height: int = 226 #226  # 360
+    target_width: int = 334 #334  # 554
 
 
 @dataclass

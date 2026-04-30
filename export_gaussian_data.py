@@ -1,3 +1,4 @@
+import argparse
 import os
 import csv
 import json
@@ -9,6 +10,22 @@ base_path = "./data/different_types"
 output_path = "./data/gaussian_data"
 CONTROLLER_NAME = "hand"
 
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Export Gaussian input data for all scenes listed in a config CSV."
+    )
+    parser.add_argument(
+        "--data-config",
+        default="data_config.csv",
+        help="Path to the scene config CSV (default: data_config.csv).",
+    )
+    return parser.parse_args()
+
+
+args = parse_args()
+DATA_CONFIG_PATH = args.data_config
+
 USE_SD_UPSCALE = False
 
 
@@ -19,7 +36,7 @@ def existDir(dir_path):
 
 existDir(output_path)
 
-with open("data_config.csv", newline="", encoding="utf-8") as csvfile:
+with open(DATA_CONFIG_PATH, newline="", encoding="utf-8") as csvfile:
     reader = csv.reader(csvfile)
     for row in reader:
         case_name = row[0]

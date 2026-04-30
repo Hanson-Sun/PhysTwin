@@ -53,3 +53,24 @@ single_fold_tshirt_da3,black-cloth,False
 
 double_bend_grey_pad_0_da3,grey-pad-mat,True
 single_lift_water_bottle_1_da3,water-bottle,True
+
+double_stretch_sloth_smooth_new_da3, sloth, True
+
+double_stretch_sloth_final,sloth,True
+double_stretch_zebra_final,toy,True
+double_lift_cloth_3_final,cloth,False
+double_bend_monkey_0_final,monkey-toy,True
+double_lift_cloth_collected_final,cloth,False
+single_lift_water_bottle_1_final,bottle,True
+single_tshirt_fold_final,black-cloth,False
+
+
+
+double_stretch_sloth_final,sloth,True
+double_stretch_zebra_final,toy,True
+double_lift_cloth_3_final,cloth,False
+double_bend_monkey_0_final,monkey-toy,True
+double_lift_cloth_collected_final,cloth,False
+single_lift_water_bottle_1_final,bottle,True
+single_tshirt_fold_final,black-cloth,False
+double_bend_grey_pad_0_final,pad,True

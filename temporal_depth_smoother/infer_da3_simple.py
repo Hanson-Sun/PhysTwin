@@ -168,12 +168,12 @@ class DA3Inferencer:
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--data_dir",    default="/mnt/d/DATA/phystwin/temporal_depth_training_data_v2")
+    p.add_argument("--data_dir",    default="/mnt/d/DATA/phystwin/temporal_depth_training_data_v3")
     p.add_argument("--clip_id",     default=None)
     p.add_argument("--model_name",  default="depth-anything/DA3NESTED-GIANT-LARGE")
     p.add_argument("--process_res", default=504, type=int)
-    p.add_argument("--window_size", default=3, type=int, help="Sliding window size for frame chunks")
-    p.add_argument("--overlap",     default=2, type=int, help="Overlap between windows")
+    p.add_argument("--window_size", default=1, type=int, help="Sliding window size for frame chunks")
+    p.add_argument("--overlap",     default=0, type=int, help="Overlap between windows")
     p.add_argument("--visualize",   action="store_true")
     p.add_argument("--viz_dir",     default="./depth_visualizations")
     p.add_argument("--overwrite",   action="store_true", help="Overwrite existing depth maps")

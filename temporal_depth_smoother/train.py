@@ -68,6 +68,11 @@ def train_epoch(
                     lambda_ssim=config.training.lambda_ssim,
                     lambda_tgm=config.training.lambda_tgm,
                     lambda_tv=config.training.lambda_tv,
+                    tv_k1_weight=config.training.tv_k1_weight,
+                    tv_k2_weight=config.training.tv_k2_weight,
+                    tgm_k1_weight=config.training.tgm_k1_weight,
+                    tgm_k2_weight=config.training.tgm_k2_weight,
+                    tgm_k3_weight=config.training.tgm_k3_weight,
                     tgm_baseline=baseline_ema.tgm if baseline_ema is not None else None,
                     tv_baseline=baseline_ema.tv if baseline_ema is not None else None,
                 )
@@ -148,6 +153,11 @@ def val_epoch(model, loader, config, device):
                 lambda_geometric_grad=config.training.lambda_geometric_grad,
                 lambda_tgm=config.training.lambda_tgm,
                 lambda_tv=config.training.lambda_tv,
+                tv_k1_weight=config.training.tv_k1_weight,
+                tv_k2_weight=config.training.tv_k2_weight,
+                tgm_k1_weight=config.training.tgm_k1_weight,
+                tgm_k2_weight=config.training.tgm_k2_weight,
+                tgm_k3_weight=config.training.tgm_k3_weight,
             )
             total += losses["total"].item()
             for k in loss_dict:

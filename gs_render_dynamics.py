@@ -57,6 +57,7 @@ def render_set(
     train_test_exp,
     separate_sh,
     disable_sh=False,
+    
 ):
 
     render_path = os.path.join(output_path, name)
@@ -114,6 +115,8 @@ def render_sets(
     remove_gaussians: bool = False,
     name: str = "dynamic",
     output_dir: str = "./gaussian_output_dynamic",
+    ctrl_pts_path: str = None,
+    max_steps: int = None,
 ):
     with torch.no_grad():
         output_path = output_dir
@@ -136,10 +139,30 @@ def render_sets(
 
         # rollout
         exp_name = dataset.source_path.split("/")[-1]
-        ctrl_pts_path = f"./experiments/{exp_name}/inference.pkl"
-        with open(ctrl_pts_path, "rb") as f:
+        if ctrl_pts_path:
+            resolved_ctrl_pts_path = ctrl_pts_path.replace(
+                "{scene_name}", exp_name
+            ).replace("{scene}", exp_name)
+            resolved_ctrl_pts_path = os.path.expanduser(resolved_ctrl_pts_path)
+        else:
+            resolved_ctrl_pts_path = f"./experiments/{exp_name}/inference.pkl"
+        if not os.path.exists(resolved_ctrl_pts_path):
+            raise FileNotFoundError(
+                f"Control trajectory file not found: {resolved_ctrl_pts_path}"
+            )
+
+        with open(resolved_ctrl_pts_path, "rb") as f:
             ctrl_pts = pickle.load(f)  # (n_frames, n_ctrl_pts, 3) ndarray
         ctrl_pts = torch.tensor(ctrl_pts, dtype=torch.float32, device="cuda")
+
+        if max_steps is not None and ctrl_pts.shape[0] > max_steps:
+            print(
+                f"[Info] ctrl_pts has {ctrl_pts.shape[0]} frames; "
+                f"truncating to max_steps={max_steps}."
+            )
+            ctrl_pts = ctrl_pts[:max_steps]
+
+        n_steps = ctrl_pts.shape[0]
 
         xyz_0 = gaussians.get_xyz
         rgb_0 = gaussians.get_features_dc.squeeze(1)
@@ -147,12 +170,24 @@ def render_sets(
         opa_0 = gaussians.get_opacity
         scale_0 = gaussians.get_scaling
 
+        print("ctrl min/max", ctrl_pts.min(dim=0).values.min(dim=0).values,
+                        ctrl_pts.max(dim=0).values.max(dim=0).values)
+
+        print("gs min/max", gaussians.get_xyz.min(dim=0).values,
+                        gaussians.get_xyz.max(dim=0).values)
+        
+        ctrl_center = ctrl_pts.mean(dim=(0,1))
+        gs_center = xyz_0.mean(dim=0)
+
+        ctrl_pts = ctrl_pts + (gs_center - ctrl_center)
+
         # print(gaussians.get_features_dc.shape)   # (N, 1, 3)
         # print(gaussians.get_features_rest.shape) # (N, 15, 3)
 
         print("===== Number of steps: ", ctrl_pts.shape[0])
         print("===== Number of control points: ", ctrl_pts.shape[1])
         print("===== Number of gaussians: ", gaussians.get_xyz.shape[0])
+        print(ctrl_pts[-10:])
 
         n_steps = ctrl_pts.shape[0]
 
@@ -249,7 +284,7 @@ def rollout(xyz_0, rgb_0, quat_0, opa_0, ctrl_pts, n_steps, device="cuda"):
         for j in range(num_chunks):
             start = j * chunk_size
             end = min((j + 1) * chunk_size, len(all_pos))
-            all_pos_chunk = all_pos[start:end]
+            all_pos_chunk = all_pos[start:end]  
             all_rot_chunk = all_rot[start:end]
             weights = knn_weights(prev_particle_pos, all_pos_chunk, K=16)
             all_pos_chunk, all_rot_chunk, _ = interpolate_motions(
@@ -283,6 +318,22 @@ if __name__ == "__main__":
     parser.add_argument("--remove_gaussians", action="store_true")
     parser.add_argument("--name", default="sceneA", type=str)
     parser.add_argument("--output_dir", default="./gaussian_output_dynamic", type=str)
+    parser.add_argument(
+        "--ctrl_pts_path",
+        default=None,
+        type=str,
+        help=(
+            "Optional path template to inference.pkl "
+            "(supports {scene_name}/{scene}). "
+            "Default when omitted: ./experiments/<scene_name>/inference.pkl"
+        ),
+    )
+    parser.add_argument(
+        "--max_steps",
+        default=None,
+        type=int,
+        help="Cap the number of rollout steps (e.g. to match video frame count).",
+    )
     args = get_combined_args(parser)
     print("Rendering " + args.model_path)
 
@@ -299,6 +350,8 @@ if __name__ == "__main__":
         args.remove_gaussians,
         args.name,
         args.output_dir,
+        getattr(args, "ctrl_pts_path", None),
+        getattr(args, "max_steps", None),
     )
 
     with open("./rendering_finished_dynamic.txt", "a") as f:

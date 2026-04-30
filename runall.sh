@@ -13,6 +13,8 @@ set -euo pipefail
 # trap 'echo; echo "Interrupted. Killing all child processes..."; kill 0' INT TERM
 
 export WANDB_MODE=offline
+
+# Optional overrides for qualitative rendering can still be provided via env vars.
 # export PYTHONUNBUFFERED=1
 # export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # export NVCC_THREADS=2
@@ -36,9 +38,9 @@ step() {
 step "Parse depth data"
 
 conda activate phystwin_data
-python -u script_depth_inference.py
+# python -u script_depth_inference.py
 
-python script_smooth_phystwin_data.py
+# python script_smooth_phystwin_data.py
 
 conda activate phystwin
 # =====================================================
@@ -46,7 +48,7 @@ conda activate phystwin
 # =====================================================
 
 step "Process the data"
-python -u script_process_data.py
+# python -u script_process_data.py
 
 # step "Detect environment planes"
 # python script_detect_environment_planes.py
@@ -63,14 +65,14 @@ python -u export_gaussian_data.py
 step "Export human mask data"
 python -u export_video_human_mask.py
 
-step "Zero-order Optimization"
-python -u script_optimize.py
+# step "Zero-order Optimization"
+# python -u script_optimize.py
 
-step "First-order Optimization"
-python -u script_train.py
+# step "First-order Optimization"
+# python -u script_train.py
 
-step "Inference"
-python -u script_inference.py
+# step "Inference"
+# python -u script_inference.py
 
 step "Train Gaussian (first-frame)"
 bash gs_run.sh

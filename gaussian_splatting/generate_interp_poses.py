@@ -1,3 +1,4 @@
+import argparse
 import csv
 import numpy as np
 import scipy.interpolate
@@ -71,8 +72,23 @@ def generate_interpolated_path(poses: np.ndarray,
 
 
 if __name__ == '__main__':
-    root_dir = "./data/gaussian_data"
-    with open("data_config.csv", newline="", encoding="utf-8") as csvfile:
+    parser = argparse.ArgumentParser(
+        description="Generate interpolated camera poses for Gaussian scenes."
+    )
+    parser.add_argument(
+        "--root-dir",
+        default="./data/gaussian_data",
+        help="Root directory containing per-scene gaussian_data folders.",
+    )
+    parser.add_argument(
+        "--data-config",
+        default="data_config.csv",
+        help="CSV listing scene names in the first column.",
+    )
+    args = parser.parse_args()
+
+    root_dir = args.root_dir
+    with open(args.data_config, newline="", encoding="utf-8") as csvfile:
         scene_names = [row[0] for row in csv.reader(csvfile) if row]
     for scene_name in scene_names:
         scene_dir = os.path.join(root_dir, scene_name)

@@ -1,4 +1,5 @@
-output_dir="./gaussian_output_dynamic"
+ctrl_pts_path_template="${1:-}"
+output_dir="${2:-./gaussian_output_dynamic}"
 
 # views=("0" "1" "2")
 views=("0")
@@ -16,10 +17,17 @@ exp_name='init=hybrid_iso=True_ldepth=0.001_lnormal=0.0_laniso_0.0_lseg=1.0'
 
 for scene_name in "${scenes[@]}"; do
 
-    python gs_render_dynamics.py \
-        -s ./data/gaussian_data/${scene_name} \
-        -m ./gaussian_output/${scene_name}/${exp_name} \
-        --name ${scene_name} \
+    render_cmd=(
+        python gs_render_dynamics.py
+        -s ./data/gaussian_data/${scene_name}
+        -m ./gaussian_output/${scene_name}/${exp_name}
+        --name ${scene_name}
+        --output_dir ${output_dir}
+    )
+    if [ -n "${ctrl_pts_path_template}" ]; then
+        render_cmd+=(--ctrl_pts_path "${ctrl_pts_path_template}")
+    fi
+    "${render_cmd[@]}"
 
     for view_name in "${views[@]}"; do
         # Convert images to video

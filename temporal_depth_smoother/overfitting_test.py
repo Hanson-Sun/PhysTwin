@@ -75,6 +75,11 @@ def run_overfit(model, optimizer, raw, vda, rgb, config, num_epochs, raw_tgrad):
             lambda_ssim=config.training.lambda_ssim,
             lambda_tgm=config.training.lambda_tgm,
             lambda_tv=config.training.lambda_tv,
+            tv_k1_weight=config.training.tv_k1_weight,
+            tv_k2_weight=config.training.tv_k2_weight,
+            tgm_k1_weight=config.training.tgm_k1_weight,
+            tgm_k2_weight=config.training.tgm_k2_weight,
+            tgm_k3_weight=config.training.tgm_k3_weight,
             lambda_geometric=config.training.lambda_geometric,
             lambda_geometric_grad=config.training.lambda_geometric_grad,
         )
