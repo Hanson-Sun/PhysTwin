@@ -1,6 +1,9 @@
 # Process to get the masks of the controller and the object
 import os
 import glob
+import sys
+import subprocess
+import shlex
 from argparse import ArgumentParser
 
 parser = ArgumentParser()
@@ -22,7 +25,12 @@ print(f"Processing {case_name}")
 
 for camera_idx in range(camera_num):
     print(f"Processing {case_name} camera {camera_idx}")
-    os.system(
-        f"python ./data_process/segment_util_video.py --base_path {base_path} --case_name {case_name} --TEXT_PROMPT {TEXT_PROMPT} --camera_idx {camera_idx}"
+    result = subprocess.run(
+        shlex.split(
+        f"{sys.executable} ./data_process/segment_util_video.py --base_path {base_path} --case_name {case_name} --TEXT_PROMPT {TEXT_PROMPT} --camera_idx {camera_idx}"
+        ),
+        check=False,
     )
+    if result.returncode != 0:
+        raise RuntimeError(f"Video segmentation failed for camera {camera_idx}")
     os.system(f"rm -rf {base_path}/{case_name}/tmp_data")

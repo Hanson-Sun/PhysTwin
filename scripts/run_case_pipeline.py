@@ -2,6 +2,8 @@
 
 import argparse
 import csv
+import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -23,9 +25,16 @@ def case_config(config_path: Path, case_name: str) -> tuple[str | None, bool]:
     return None, False
 
 
-def run(command: list[str], label: str) -> None:
+def run(command: list[str], label: str, clean_data_environment: bool = False) -> None:
     print(f"\n=== {label} ===")
-    subprocess.run(command, cwd=REPO_ROOT, check=True)
+    environment = None
+    if clean_data_environment:
+        environment = os.environ.copy()
+        environment.pop("CUDA_HOME", None)
+        environment.pop("LD_LIBRARY_PATH", None)
+        environment["CUDA_HOME"] = "/usr/local/cuda-12.1"
+        environment["LD_LIBRARY_PATH"] = "/usr/local/cuda-12.1/lib64"
+    subprocess.run(command, cwd=REPO_ROOT, check=True, env=environment)
 
 
 def require(path: Path, description: str) -> None:
@@ -39,6 +48,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--base_path", type=Path, default=DEFAULT_BASE_PATH)
     parser.add_argument("--category")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    parser.add_argument(
+        "--data_python",
+        default=sys.executable,
+        help="Python executable for RGB-D processing; use the phystwin-data environment.",
+    )
     parser.add_argument("--shape_prior", action="store_true")
     parser.add_argument("--no_shape_prior", action="store_true")
     parser.add_argument("--cma_max_iter", type=int, default=20)
@@ -47,6 +61,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--gaussian_output_dir", type=Path)
     parser.add_argument("--pruned_output_dir", type=Path)
     parser.add_argument("--skip_process", action="store_true")
+    parser.add_argument("--skip_segmentation", action="store_true")
     parser.add_argument("--skip_warp", action="store_true")
     parser.add_argument("--skip_gaussians", action="store_true")
     parser.add_argument("--skip_cma", action="store_true")
@@ -69,9 +84,7 @@ def main() -> None:
         )
     if args.shape_prior and args.no_shape_prior:
         raise ValueError("--shape_prior and --no_shape_prior are mutually exclusive")
-    use_shape_prior = configured_shape_prior
-    if args.shape_prior:
-        use_shape_prior = True
+    use_shape_prior = args.shape_prior
     if args.no_shape_prior:
         use_shape_prior = False
 
@@ -97,7 +110,7 @@ def main() -> None:
 
     if not args.skip_process:
         process_command = [
-            sys.executable,
+            *shlex.split(args.data_python),
             "process_data.py",
             "--base_path",
             str(args.base_path),
@@ -108,7 +121,9 @@ def main() -> None:
         ]
         if use_shape_prior:
             process_command.append("--shape_prior")
-        run(process_command, "PhysTwin RGB-D processing")
+        if args.skip_segmentation:
+            process_command.append("--skip_segmentation")
+        run(process_command, "PhysTwin RGB-D processing", clean_data_environment=True)
     require(case_dir / "final_data.pkl", "Processed motion data")
     require(case_dir / "split.json", "Train/test split")
 
