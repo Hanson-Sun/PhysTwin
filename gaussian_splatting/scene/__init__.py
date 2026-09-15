@@ -15,6 +15,7 @@ import json
 from typing import TYPE_CHECKING
 
 from ..utils.system_utils import searchForMaxIteration
+from .gaussian_model import GaussianModel
 
 if TYPE_CHECKING:
     from ..arguments import ModelParams

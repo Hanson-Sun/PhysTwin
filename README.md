@@ -130,6 +130,43 @@ gaussian_output/
 gaussian_output_pruned_policy_30_55/
 ```
 
+## End-to-End RGB-D and Warp Training
+
+The integration branch includes the original PhysTwin preprocessing and training
+stages while preserving Boba's runtime trainer. RGB-D videos must be accompanied
+by camera calibration because video files do not contain reliable intrinsics or
+camera poses.
+
+Prepare and process one case:
+
+```bash
+python scripts/process_rgbd_case.py \
+  --rgb_video /path/to/rgb.mp4 \
+  --depth_video /path/to/depth.mp4 \
+  --output_dir data/different_types \
+  --case_name my_case \
+  --category cloth \
+  --intrinsics /path/to/intrinsics.npy \
+  --c2w /path/to/camera_to_world.npy \
+  --depth_scale 1.0
+```
+
+Use `--depth_scale 1000` when the depth video stores metres and the processing
+pipeline should receive millimetres. Add `--shape_prior` to enable the optional
+shape-prior stage.
+
+Run CMA initialization followed by differentiable warp training:
+
+```bash
+python scripts/train_warp_case.py \
+  --base_path data/different_types \
+  --case_name my_case
+```
+
+The best checkpoint is written under
+`experiments/my_case/train/best_*.pth`, with a manifest at
+`experiments/my_case/train/training_manifest.json`.
+
 ## Run Boba-Local
 
 Performance mode:

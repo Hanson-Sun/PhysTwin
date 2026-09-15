@@ -17,6 +17,7 @@ dependencies:
       - torchvision==0.25.0+cu130
       - numpy==1.26.4
       - scipy==1.15.3
+      - cma==4.4.0
       - PyYAML==6.0.3
       - pillow==12.2.0
       - matplotlib==3.10.8
