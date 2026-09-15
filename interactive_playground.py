@@ -45,7 +45,7 @@ def create_gl_window(width, height, use_screen_resolution=False):
 
     glfw.window_hint(glfw.CLIENT_API, glfw.OPENGL_API)
     glfw.window_hint(glfw.CONTEXT_VERSION_MAJOR, 4)
-    glfw.window_hint(glfw.CONTEXT_VERSION_MINOR, 6)
+    glfw.window_hint(glfw.CONTEXT_VERSION_MINOR, 1)
     glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
 
     window = glfw.create_window(width, height, "Boba_Batched Playground", None, None)
