@@ -1833,23 +1833,10 @@ class InvPhyTrainerWarp:
             render_backend.gl.glBindBuffer(
                 render_backend.gl.GL_PIXEL_UNPACK_BUFFER, 0
             )
-            cuda_logic_error = getattr(
-                render_backend.cuda_driver, "LogicError", RuntimeError
-            )
-            try:
-                reg = render_backend.RegisteredBuffer(
-                    int(pbo), render_backend.graphics_map_flags.WRITE_DISCARD
-                )
-            except cuda_logic_error as exc:
-                if pbo is not None:
-                    render_backend.gl.glDeleteBuffers(1, [pbo])
-                    pbo = None
-                raise RuntimeError(
-                    "Failed to register the OpenGL pixel buffer with CUDA in "
-                    "batched full-runtime rendering. This usually indicates a "
-                    "CUDA/OpenGL interop initialization mismatch in the batched "
-                    "render path."
-                ) from exc
+            # WSL workaround: CUDA-GL zero-copy interop (RegisteredBuffer) segfaults
+            # inside WSLg's virtualized driver. Skip registration; the render loop
+            # below falls back to a CPU-copy upload path instead.
+            reg = None
 
             vertex_shader_source = """
             #version 330 core
@@ -2137,20 +2124,10 @@ class InvPhyTrainerWarp:
                 frame_rgba[:, :, 3] = 255
                 torch.cuda.current_stream().synchronize()
 
-                mapping = reg.map()
-                try:
-                    ptr, _ = mapping.device_ptr_and_size()
-                    cpy2d.set_src_device(frame_rgba.data_ptr())
-                    cpy2d.set_dst_device(ptr)
-                    cpy2d(pbo_stream)
-                    pbo_stream.synchronize()
-                finally:
-                    mapping.unmap()
+                # WSL workaround: CPU round-trip instead of CUDA-GL interop.
+                frame_rgba_cpu = frame_rgba.contiguous().cpu().numpy()
 
                 render_backend.gl.glBindTexture(render_backend.gl.GL_TEXTURE_2D, tex)
-                render_backend.gl.glBindBuffer(
-                    render_backend.gl.GL_PIXEL_UNPACK_BUFFER, pbo
-                )
                 render_backend.gl.glTexSubImage2D(
                     render_backend.gl.GL_TEXTURE_2D,
                     0,
@@ -2160,10 +2137,7 @@ class InvPhyTrainerWarp:
                     display_height,
                     render_backend.gl.GL_RGBA,
                     render_backend.gl.GL_UNSIGNED_BYTE,
-                    None,
-                )
-                render_backend.gl.glBindBuffer(
-                    render_backend.gl.GL_PIXEL_UNPACK_BUFFER, 0
+                    frame_rgba_cpu,
                 )
 
                 render_backend.gl.glViewport(0, 0, display_width, display_height)
@@ -2391,9 +2365,8 @@ class InvPhyTrainerWarp:
         render_backend.gl.glBindBuffer(render_backend.gl.GL_PIXEL_UNPACK_BUFFER, pbo)
         render_backend.gl.glBufferData(render_backend.gl.GL_PIXEL_UNPACK_BUFFER, pbo_size, None, render_backend.gl.GL_STREAM_DRAW)
         render_backend.gl.glBindBuffer(render_backend.gl.GL_PIXEL_UNPACK_BUFFER, 0)
-        reg = render_backend.RegisteredBuffer(
-            int(pbo), render_backend.graphics_map_flags.WRITE_DISCARD
-        )
+        # WSL workaround: skip CUDA-GL interop registration (see above)
+        reg = None
 
         # 4) Tiny fullscreen shader (one quad, no VAO needed)
         VS = """
@@ -2593,22 +2566,11 @@ class InvPhyTrainerWarp:
                 frame_rgba[:, :, 3] = 255
                 torch.cuda.current_stream().synchronize()  # ensures frame_rgba is ready to be read
                 
-                mapping = reg.map()
-                try:
-                    ptr, _ = mapping.device_ptr_and_size()
-                    cpy2d.set_src_device(frame_rgba.data_ptr())
-                    cpy2d.set_dst_device(ptr)
-                    cpy2d(pbo_stream)
+                # WSL workaround: CPU round-trip instead of CUDA-GL interop.
+                frame_rgba_cpu = frame_rgba.contiguous().cpu().numpy()
 
-                    pbo_stream.synchronize()
-                finally:
-                    mapping.unmap()
-
-                # Upload from PBO to texture (still on GPU)
                 render_backend.gl.glBindTexture(render_backend.gl.GL_TEXTURE_2D, tex)
-                render_backend.gl.glBindBuffer(render_backend.gl.GL_PIXEL_UNPACK_BUFFER, pbo)
-                render_backend.gl.glTexSubImage2D(render_backend.gl.GL_TEXTURE_2D, 0, 0, 0, width, height, render_backend.gl.GL_RGBA, render_backend.gl.GL_UNSIGNED_BYTE, None)
-                render_backend.gl.glBindBuffer(render_backend.gl.GL_PIXEL_UNPACK_BUFFER, 0)
+                render_backend.gl.glTexSubImage2D(render_backend.gl.GL_TEXTURE_2D, 0, 0, 0, width, height, render_backend.gl.GL_RGBA, render_backend.gl.GL_UNSIGNED_BYTE, frame_rgba_cpu)
                 
                 # Draw
                 render_backend.gl.glViewport(0, 0, width, height)
@@ -2740,7 +2702,8 @@ class InvPhyTrainerWarp:
             #     pickle.dump(vertices.numpy(), f)
             # print(f"[Saved] inference.pkl -> {traj_save_path}, shape={tuple(vertices.shape)}")
             
-            reg.unregister()
+            if reg is not None:
+                reg.unregister()
             render_backend.gl.glDeleteProgram(prog)
             render_backend.gl.glDeleteTextures([tex])
             render_backend.gl.glDeleteBuffers(1, [pbo])
