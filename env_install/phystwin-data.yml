@@ -1,0 +1,41 @@
+# Data-processing environment for PhysTwin segmentation and tracking.
+# Keep this separate from phystwin-cu132: the legacy GroundingDINO extension
+# is not compatible with Boba's PyTorch 2.12/CUDA 13.2 stack.
+name: phystwin-data
+channels:
+  - pytorch
+  - nvidia
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - cuda-toolkit=12.1
+  - cuda-compiler=12.1
+  - pytorch=2.4.0
+  - torchvision=0.19.0
+  - pytorch-cuda=12.1
+  - pip:
+      - numpy==1.26.4
+      - scipy==1.15.3
+      - PyYAML==6.0.3
+      - pillow
+      - opencv-python
+      - imageio
+      - imageio-ffmpeg
+      - supervision>=0.25,<1
+      - tqdm
+      - scikit-learn
+      - fvcore
+      - einops
+      - diffusers==0.30.3
+      - accelerate
+      - transformers==4.46.3
+      - tokenizers==0.20.3
+      - huggingface-hub==0.26.2
+      - addict
+      - pycocotools
+      - timm
+      - yapf
+variables:
+  PYTHONNOUSERSITE: "1"
+  CUDA_HOME: "/usr/local/cuda-12.1"

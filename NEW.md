@@ -74,6 +74,25 @@ Gaussian pruning in order. Use `--dry_run` to inspect the resolved settings,
 `--smoke_test` for a minimal run, or `--skip_process`, `--skip_warp`, and
 `--skip_gaussians` to resume from an existing stage.
 
+Shape-prior generation is opt-in because it requires the separate TRELLIS
+installation. Use `--shape_prior` only after installing TRELLIS; otherwise the
+pipeline uses the processed RGB-D point cloud directly.
+Use `--skip_segmentation` to resume after a completed segmentation stage.
+
+RGB-D processing uses a separate `phystwin-data` environment because the legacy
+GroundingDINO extension is incompatible with Boba's PyTorch 2.12/CUDA 13.2
+environment:
+
+```bash
+conda env create -f env_install/phystwin-data.yml
+conda activate phystwin-data
+bash env_install/install_data_processing.sh
+bash env_install/download_data_checkpoints.sh
+python scripts/run_case_pipeline.py \
+	--case_name double_lift_sloth \
+	--data_python "$(conda info --base)/envs/phystwin-data/bin/python"
+```
+
 
 ## Env modifications
 
