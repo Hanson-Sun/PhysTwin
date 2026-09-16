@@ -42,6 +42,12 @@ def require(path: Path, description: str) -> None:
         raise FileNotFoundError(f"{description} was not produced: {path}")
 
 
+def default_data_python() -> str:
+    """Prefer the phystwin-data env's python for RGB-D processing (sam2 lives there)."""
+    data_python = Path(sys.executable).parents[2] / "phystwin-data" / "bin" / "python"
+    return str(data_python) if data_python.is_file() else sys.executable
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case_name", required=True)
@@ -50,8 +56,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument(
         "--data_python",
-        default=sys.executable,
-        help="Python executable for RGB-D processing; use the phystwin-data environment.",
+        default=default_data_python(),
+        help="Python executable for RGB-D processing; defaults to the "
+        "phystwin-data environment's python, falling back to the active interpreter.",
     )
     parser.add_argument("--shape_prior", action="store_true")
     parser.add_argument("--no_shape_prior", action="store_true")
@@ -102,6 +109,7 @@ def main() -> None:
 
     if args.dry_run:
         print(f"Case: {args.case_name}")
+        print(f"Data python: {args.data_python}")
         print(f"Category: {category or '<not needed with --skip_process>'}")
         print(f"Shape prior: {use_shape_prior}")
         print(f"Process data: {not args.skip_process}")

@@ -5,6 +5,26 @@ PhysTwin preprocessing and warp-training pipeline. Boba's runtime trainer remain
 unchanged; the upstream training trainer is isolated under
 `qqtt/engine/trainer_warp_upstream.py`.
 
+## Environments
+
+Two conda environments are required:
+
+- `phystwin-cu132` — the main runtime: warp training, Gaussian reconstruction, and RL (PyTorch 2.12 / CUDA 13.2).
+- `phystwin-data` — RGB-D data processing only: segmentation, tracking, shape priors. The legacy sam2/GroundingDINO stack needs the older PyTorch 2.4 / CUDA 12.1 toolchain, so it cannot live in the main environment.
+
+Set up `phystwin-data` once:
+
+```bash
+conda env create -f env_install/phystwin-data.yml
+conda activate phystwin-data
+bash env_install/install_data_processing.sh
+bash env_install/download_data_checkpoints.sh
+```
+
+Run everything else from `phystwin-cu132`. `run_case_pipeline.py` finds the
+`phystwin-data` python automatically; pass `--data_python` only if your
+environment is in a non-standard location.
+
 ## Process RGB-D Videos
 
 RGB and depth videos must be paired and require camera calibration. Video files
@@ -84,19 +104,10 @@ or `--shape_prior` to enable it for a case configured without one. Use
 Warp training is headless by default and writes checkpoints under
 `experiments/<case_name>/train/`.
 
-RGB-D processing uses a separate `phystwin-data` environment because the legacy
-GroundingDINO extension is incompatible with Boba's PyTorch 2.12/CUDA 13.2
-environment:
+RGB-D processing automatically runs in the `phystwin-data` environment (see
+[Environments](#environments)).
 
-```bash
-conda env create -f env_install/phystwin-data.yml
-conda activate phystwin-data
-bash env_install/install_data_processing.sh
-bash env_install/download_data_checkpoints.sh
-python scripts/run_case_pipeline.py \
-	--case_name double_lift_sloth \
-	--data_python "$(conda info --base)/envs/phystwin-data/bin/python"
-```## MuJoCo Synthetic RGB-D Export
+## MuJoCo Synthetic RGB-D Export
 
 The MuJoCo exporter writes a PhysTwin-compatible case directory, including:
 
