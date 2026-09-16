@@ -38,6 +38,12 @@ dependencies:
       - pycocotools
       - timm
       - yapf
+      - rtree
+      # Prebuilt pytorch3d wheel matching python 3.10 / torch 2.4 / cu121;
+      # building from source would require the full CUDA toolchain.
+      - --extra-index-url https://download.pytorch.org/whl/cu121
+      - --find-links https://dl.fbaipublicfiles.com/pytorch3d/packaging/wheels/py310_cu121_pyt240/
+      - pytorch3d==0.7.8
 variables:
   PYTHONNOUSERSITE: "1"
   CUDA_HOME: "/usr/local/cuda-12.1"

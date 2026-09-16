@@ -17,14 +17,16 @@ python -m pip install --no-build-isolation --no-deps \
   'git+https://github.com/facebookresearch/sam2.git' \
   'git+https://github.com/IDEA-Research/GroundingDINO.git'
 
-python -m pip install \
+python -m pip install --find-links https://dl.fbaipublicfiles.com/pytorch3d/packaging/wheels/py310_cu121_pyt240/ \
   'transformers==4.46.3' \
   'tokenizers==0.20.3' \
   'huggingface-hub==0.26.2' \
   addict \
   pycocotools \
   timm \
-  yapf
+  yapf \
+  rtree \
+  'pytorch3d==0.7.8'
 
 python - <<'PY'
 import groundingdino

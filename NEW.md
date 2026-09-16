@@ -78,8 +78,7 @@ Gaussian pruning in order. Use `--dry_run` to inspect the resolved settings,
 `optimal_params.pkl` already exists, or `--skip_process`, `--skip_warp`, and
 `--skip_gaussians` to resume from an existing stage.
 
-Shape-prior generation requires the separate TRELLIS installation; use
-`--no_shape_prior` to override a configured shape prior,
+Use `--no_shape_prior` to override a configured shape prior,
 or `--shape_prior` to enable it for a case configured without one. Use
 `--skip_segmentation` to resume after a completed segmentation stage.
 Warp training is headless by default and writes checkpoints under

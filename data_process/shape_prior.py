@@ -1,14 +1,32 @@
 import os
+import sys
+from pathlib import Path
 
-# os.environ['ATTN_BACKEND'] = 'xformers'   # Can be 'flash-attn' or 'xformers', default is 'flash-attn'
+# Use the installed xFormers backend; FlashAttention is not required.
+os.environ["ATTN_BACKEND"] = "xformers"
 os.environ["SPCONV_ALGO"] = "native"  # Can be 'native' or 'auto', default is 'auto'.
 # 'auto' is faster but will do benchmarking at the beginning.
 # Recommended to set to 'native' if run only once.
 
 import imageio
 from PIL import Image
-from TRELLIS.trellis.pipelines import TrellisImageTo3DPipeline
-from TRELLIS.trellis.utils import render_utils, postprocessing_utils
+
+# Support both the repository layout used by this project
+# (data_process/TRELLIS/trellis) and a separately installed TRELLIS package.
+_trellis_checkout = Path(__file__).resolve().parent / "TRELLIS"
+if (_trellis_checkout / "trellis").is_dir():
+    sys.path.insert(0, str(_trellis_checkout))
+
+try:
+    from trellis.pipelines import TrellisImageTo3DPipeline
+    from trellis.utils import render_utils, postprocessing_utils
+except ModuleNotFoundError as error:
+    raise ModuleNotFoundError(
+        "TRELLIS is not installed. Clone/setup the TRELLIS repository at "
+        "data_process/TRELLIS (or install its Python package) before enabling "
+        "shape-prior generation. Use --no_shape_prior to skip this optional stage."
+    ) from error
+
 import numpy as np
 from argparse import ArgumentParser
 
@@ -24,7 +42,7 @@ img_path = args.img_path
 output_dir = args.output_dir
 
 # Load a pipeline from a model folder or a Hugging Face model hub.
-pipeline = TrellisImageTo3DPipeline.from_pretrained("JeffreyXiang/TRELLIS-image-large")
+pipeline = TrellisImageTo3DPipeline.from_pretrained("microsoft/TRELLIS-image-large")
 pipeline.cuda()
 
 final_im = Image.open(img_path).convert("RGBA")
