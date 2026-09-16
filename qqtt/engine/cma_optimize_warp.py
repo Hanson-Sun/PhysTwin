@@ -13,6 +13,8 @@ import os
 
 
 class OptimizerCMA:
+    INVALID_OBJECTIVE = 1.0e6
+
     def __init__(
         self,
         data_path,
@@ -237,13 +239,11 @@ class OptimizerCMA:
             init_dashpot_damping,
         ]
 
-        self.error_func(
-            x_init, visualize=True, video_path=f"{cfg.base_dir}/optimizeCMA/init.mp4"
-        )
+        self.objective(x_init)
 
         std = 1 / 6
         es = cma.CMAEvolutionStrategy(x_init, std, {"bounds": [0.0, 1.0], "seed": 42})
-        es.optimize(self.error_func, iterations=max_iter)
+        es.optimize(self.objective, iterations=max_iter)
 
         # Get the results
         res = es.result
@@ -266,6 +266,7 @@ class OptimizerCMA:
         final_drag_damping = self.denormalize(optimal_x[10], 0, 20)
         final_dashpot_damping = self.denormalize(optimal_x[11], 0, 200)
 
+        # Validate the selected parameters over the full sequence before saving them.
         self.error_func(
             optimal_x,
             visualize=True,
@@ -289,6 +290,17 @@ class OptimizerCMA:
         # Save out all the initialized parameters
         with open(f"{cfg.base_dir}/optimal_params.pkl", "wb") as f:
             pickle.dump(optimal_results, f)
+
+    def objective(self, parameters):
+        try:
+            value = self.error_func(parameters)
+        except (FloatingPointError, RuntimeError, ValueError) as error:
+            logger.warning(f"Invalid CMA candidate: {error}")
+            return self.INVALID_OBJECTIVE
+        if not np.isfinite(value):
+            logger.warning(f"Invalid CMA candidate produced loss={value}")
+            return self.INVALID_OBJECTIVE
+        return float(value)
 
     def error_func(self, parameters, visualize=False, video_path=None):
         global_spring_Y = self.denormalize(
@@ -394,9 +406,17 @@ class OptimizerCMA:
                         self.simulator.step()
                         self.simulator.calculate_simple_loss()
 
+            state = wp.to_torch(
+                self.simulator.wp_states[-1].wp_x, requires_grad=False
+            )
+            velocity = wp.to_torch(
+                self.simulator.wp_states[-1].wp_v, requires_grad=False
+            )
+            if not torch.isfinite(state).all() or not torch.isfinite(velocity).all():
+                raise FloatingPointError("simulation state became non-finite")
+
             if visualize == True:
-                x = wp.to_torch(self.simulator.wp_states[-1].wp_x, requires_grad=False)
-                vertices.append(x.cpu())
+                vertices.append(state.cpu())
 
             if cfg.data_type == "real":
                 if wp.to_torch(self.simulator.acc_count, requires_grad=False)[0] == 0:
@@ -406,6 +426,8 @@ class OptimizerCMA:
                 self.simulator.update_acc()
 
             loss = wp.to_torch(self.simulator.loss, requires_grad=False)
+            if not torch.isfinite(loss).all():
+                raise FloatingPointError("simulation loss became non-finite")
             total_loss += loss.item()
 
             self.simulator.clear_loss()
@@ -416,6 +438,8 @@ class OptimizerCMA:
             )
 
         total_loss /= cfg.train_frame - 1
+        if not np.isfinite(total_loss):
+            raise FloatingPointError("total simulation loss became non-finite")
 
         if visualize == True:
             vertices = torch.stack(vertices, dim=0)

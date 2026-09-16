@@ -178,6 +178,7 @@ def main() -> None:
         "--save_iterations",
         str(args.iterations),
         "--disable_viewer",
+        "--isotropic",
     ]
     if args.use_masks:
         command.append("--use_masks")
