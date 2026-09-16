@@ -29,6 +29,7 @@ if __name__ == "__main__":
     parser.add_argument("--case_name", type=str, required=True)
     parser.add_argument("--train_frame", type=int, required=True)
     parser.add_argument("--iterations", type=int)
+    parser.add_argument("--no_visualize", action="store_true")
     args = parser.parse_args()
 
     base_path = args.base_path
@@ -43,6 +44,7 @@ if __name__ == "__main__":
         if args.iterations < 1:
             raise ValueError("--iterations must be at least 1")
         cfg.iterations = args.iterations
+    cfg.disable_visualization = args.no_visualize
 
     print(f"[DATA TYPE]: {cfg.data_type}")
 

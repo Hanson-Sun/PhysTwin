@@ -62,6 +62,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pruned_output_dir", type=Path)
     parser.add_argument("--skip_process", action="store_true")
     parser.add_argument("--skip_segmentation", action="store_true")
+    parser.add_argument("--visualize_processing", action="store_true")
+    parser.add_argument("--visualize_training", action="store_true")
     parser.add_argument("--skip_warp", action="store_true")
     parser.add_argument("--skip_gaussians", action="store_true")
     parser.add_argument("--skip_cma", action="store_true")
@@ -123,6 +125,8 @@ def main() -> None:
             process_command.append("--shape_prior")
         if args.skip_segmentation:
             process_command.append("--skip_segmentation")
+        if not args.visualize_processing:
+            process_command.append("--no_visualize")
         run(process_command, "PhysTwin RGB-D processing", clean_data_environment=True)
     require(case_dir / "final_data.pkl", "Processed motion data")
     require(case_dir / "split.json", "Train/test split")
@@ -142,6 +146,8 @@ def main() -> None:
             warp_command.append("--skip_cma")
         if warp_iterations is not None:
             warp_command.extend(["--iterations", str(warp_iterations)])
+        if not args.visualize_training:
+            warp_command.append("--no_visualize")
         run(warp_command, "Warp parameter training")
         require(
             REPO_ROOT / "experiments" / args.case_name / "train" / "training_manifest.json",

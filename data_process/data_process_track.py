@@ -17,6 +17,7 @@ parser.add_argument(
     required=True,
 )
 parser.add_argument("--case_name", type=str, required=True)
+parser.add_argument("--no_visualize", action="store_true")
 args = parser.parse_args()
 
 base_path = args.base_path
@@ -135,7 +136,7 @@ def filter_track(track_path, pcd_path, mask_path, frame_num, num_cam):
     return track_data
 
 
-def filter_motion(track_data, neighbor_dist=0.01):
+def filter_motion(track_data, neighbor_dist=0.01, visualize=True):
     # Calculate the motion of each point
     object_points = track_data["object_points"]
     object_colors = track_data["object_colors"]
@@ -154,8 +155,10 @@ def filter_motion(track_data, neighbor_dist=0.01):
     num_frames = object_points.shape[0]
     num_points = object_points.shape[1]
 
-    vis = o3d.visualization.Visualizer()
-    vis.create_window()
+    vis = None
+    if visualize:
+        vis = o3d.visualization.Visualizer()
+        vis.create_window()
     for i in tqdm(range(num_frames - 1)):
         # Convert the points of the current frame to an Open3D point cloud
         pcd = o3d.geometry.PointCloud()
@@ -208,7 +211,7 @@ def filter_motion(track_data, neighbor_dist=0.01):
         # new_pcd.colors = o3d.utility.Vector3dVector(
         #     np.array([0, 1, 0]) * np.ones((len(new_points), 3))
         # )
-        if i == 0:
+        if visualize and i == 0:
             render_motion_pcd = motion_pcd
             # render_modified_pcd = modified_pcd
             # render_new_pcd = new_pcd
@@ -220,7 +223,7 @@ def filter_motion(track_data, neighbor_dist=0.01):
             view_control.set_front([1, 0, -2])
             view_control.set_up([0, 0, -1])
             view_control.set_zoom(1)
-        else:
+        elif visualize:
             render_motion_pcd.points = o3d.utility.Vector3dVector(motion_pcd.points)
             render_motion_pcd.colors = o3d.utility.Vector3dVector(motion_pcd.colors)
             # render_modified_pcd.points = o3d.utility.Vector3dVector(modified_points)
@@ -239,7 +242,8 @@ def filter_motion(track_data, neighbor_dist=0.01):
         # modified_num = len(modified_points)
         # print(f"Object Frame {i}: {modified_num} points are modified")
 
-    vis.destroy_window()
+    if vis is not None:
+        vis.destroy_window()
     track_data["object_motions_valid"] = object_motions_valid
 
     controller_points = track_data["controller_points"]
@@ -261,8 +265,10 @@ def filter_motion(track_data, neighbor_dist=0.01):
     y_normalized = (controller_points[0, :, 1] - y_min) / (y_max - y_min)
     rainbow_colors = plt.cm.rainbow(y_normalized)[:, :3]
 
-    vis = o3d.visualization.Visualizer()
-    vis.create_window()
+    vis = None
+    if visualize:
+        vis = o3d.visualization.Visualizer()
+        vis.create_window()
 
     for i in tqdm(range(num_frames - 1)):
         # Convert the points of the current frame to an Open3D point cloud
@@ -303,7 +309,7 @@ def filter_motion(track_data, neighbor_dist=0.01):
             controller_colors[i][np.where(controller_motions_valid[i])]
         )
 
-        if i == 0:
+        if visualize and i == 0:
             render_motion_pcd = motion_pcd
             vis.add_geometry(render_motion_pcd)
             # Adjust the viewpoint
@@ -311,7 +317,7 @@ def filter_motion(track_data, neighbor_dist=0.01):
             view_control.set_front([1, 0, -2])
             view_control.set_up([0, 0, -1])
             view_control.set_zoom(1)
-        else:
+        elif visualize:
             render_motion_pcd.points = o3d.utility.Vector3dVector(motion_pcd.points)
             render_motion_pcd.colors = o3d.utility.Vector3dVector(motion_pcd.colors)
             vis.update_geometry(render_motion_pcd)
@@ -446,7 +452,7 @@ if __name__ == "__main__":
     # Filter the track data using the semantic mask of object and controller
     track_data = filter_track(track_path, pcd_path, mask_path, frame_num, num_cam)
     # Filter motion
-    track_data = filter_motion(track_data)
+    track_data = filter_motion(track_data, visualize=not args.no_visualize)
     # # Save the filtered track data
     # with open(f"test2.pkl", "wb") as f:
     #     pickle.dump(track_data, f)
@@ -459,4 +465,5 @@ if __name__ == "__main__":
     with open(f"{base_path}/{case_name}/track_process_data.pkl", "wb") as f:
         pickle.dump(track_data, f)
 
-    visualize_track(track_data)
+    if not args.no_visualize:
+        visualize_track(track_data)

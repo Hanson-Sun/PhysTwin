@@ -1,0 +1,13 @@
+<mujoco model="object_box">
+  <!-- Default object: a free box with a freejoint, ready to be poked/pushed.
+       Swap this file for any object with the same shape (one body, a
+       freejoint, and one or more geoms) -- e.g. a soft-body/PhysTwin
+       reconstruction later. -->
+  <worldbody>
+    <body name="object" pos="0 0 0.05">
+      <freejoint name="object_joint"/>
+      <geom name="object_geom" type="box" size="0.05 0.05 0.05"
+            rgba="0.8 0.2 0.2 1" mass="0.2" friction="1.0 0.005 0.0001" solref="0.004 1"/>
+    </body>
+  </worldbody>
+</mujoco>

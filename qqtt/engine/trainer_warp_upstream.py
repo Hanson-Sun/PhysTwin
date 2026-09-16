@@ -314,7 +314,9 @@ class InvPhyTrainerWarp:
     def train(self, start_epoch=-1):
         # Render the initial visualization
         video_path = f"{cfg.base_dir}/train/init.mp4"
-        self.visualize_sim(save_only=True, video_path=video_path)
+        visualize_training = not getattr(cfg, "disable_visualization", False)
+        if visualize_training:
+            self.visualize_sim(save_only=True, video_path=video_path)
 
         best_loss = None
         best_epoch = None
@@ -404,7 +406,7 @@ class InvPhyTrainerWarp:
 
             logger.info(f"[Train]: Iteration: {i}, Loss: {total_loss}")
 
-            if i % cfg.vis_interval == 0 or i == cfg.iterations - 1:
+            if visualize_training and (i % cfg.vis_interval == 0 or i == cfg.iterations - 1):
                 video_path = f"{cfg.base_dir}/train/sim_iter{i}.mp4"
                 self.visualize_sim(save_only=True, video_path=video_path)
                 wandb.log(
@@ -417,8 +419,8 @@ class InvPhyTrainerWarp:
                     },
                     step=i,
                 )
-                # Save the parameters
-                cur_model = {
+            # Save the parameters independently of optional visualization.
+            cur_model = {
                     "epoch": i,
                     "num_object_springs": self.num_object_springs,
                     "spring_Y": torch.exp(
@@ -437,8 +439,8 @@ class InvPhyTrainerWarp:
                         self.simulator.wp_collide_object_fric, requires_grad=False
                     ),
                     "optimizer_state_dict": self.optimizer.state_dict(),
-                }
-                if best_loss == None or total_loss < best_loss:
+            }
+            if best_loss is None or total_loss < best_loss:
                     # Remove old best model file if it exists
                     if best_loss is not None:
                         old_best_model_path = (
@@ -458,10 +460,8 @@ class InvPhyTrainerWarp:
                         f"Latest best model saved: epoch {best_epoch} with loss {best_loss}"
                     )
 
-                torch.save(cur_model, f"{cfg.base_dir}/train/iter_{i}.pth")
-                logger.info(
-                    f"[Visualize]: Visualize the simulation at iteration {i} and save the model"
-                )
+            torch.save(cur_model, f"{cfg.base_dir}/train/iter_{i}.pth")
+            logger.info(f"[Train]: Saved checkpoint for iteration {i}")
 
         wandb.finish()
 

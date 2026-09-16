@@ -78,6 +78,8 @@ Shape-prior generation is opt-in because it requires the separate TRELLIS
 installation. Use `--shape_prior` only after installing TRELLIS; otherwise the
 pipeline uses the processed RGB-D point cloud directly.
 Use `--skip_segmentation` to resume after a completed segmentation stage.
+Warp training is headless by default and writes checkpoints under
+`experiments/<case_name>/train/`.
 
 RGB-D processing uses a separate `phystwin-data` environment because the legacy
 GroundingDINO extension is incompatible with Boba's PyTorch 2.12/CUDA 13.2
