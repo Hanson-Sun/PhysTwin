@@ -20,6 +20,8 @@ dependencies:
       - PyYAML==6.0.3
       - pillow
       - opencv-python
+      - open3d
+      - trimesh
       - imageio
       - imageio-ffmpeg
       - supervision>=0.25,<1

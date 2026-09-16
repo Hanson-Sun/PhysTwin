@@ -7,7 +7,6 @@ import pickle
 import matplotlib.pyplot as plt
 import trimesh
 import cv2
-from utils.align_util import as_mesh
 from argparse import ArgumentParser
 
 parser = ArgumentParser()
@@ -56,6 +55,8 @@ def process_unique_points(track_data):
     object_points[object_points[..., 2] > 0, 2] = 0
 
     if SHAPE_PRIOR:
+        from utils.align_util import as_mesh
+
         shape_mesh_path = f"{base_path}/{case_name}/shape/matching/final_mesh.glb"
         trimesh_mesh = trimesh.load(shape_mesh_path, force="mesh")
         trimesh_mesh = as_mesh(trimesh_mesh)
