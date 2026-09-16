@@ -97,10 +97,10 @@ class GaussianModel:
 
     @property
     def get_scaling(self):
-        if self.isotropic:
-            return self.scaling_activation(self._scaling).repeat(1, 3)
-        else:
-            return self.scaling_activation(self._scaling)
+        scaling = self.scaling_activation(self._scaling)
+        if self.isotropic and scaling.shape[-1] == 1:
+            return scaling.repeat(1, 3)
+        return scaling
     
     @property
     def get_rotation(self):

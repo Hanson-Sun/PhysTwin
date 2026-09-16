@@ -11,6 +11,7 @@ from pathlib import Path
 
 import numpy as np
 import open3d as o3d
+from PIL import Image
 
 
 EXPERIMENT_NAME = "init=hybrid_iso=True_ldepth=0.001_lnormal=0.0_laniso_0.0_lseg=1.0"
@@ -54,6 +55,14 @@ def copy_case_to_gaussian_source(case_dir: Path, source_dir: Path) -> None:
             raise FileNotFoundError(f"Missing RGB-D first frame for view {view_index}")
         shutil.copy2(image_path, source_dir / f"{view_index}.png")
         shutil.copy2(depth_path, source_dir / f"{view_index}_depth.npy")
+
+        if processed_masks is not None:
+            object_mask = np.asarray(
+                processed_masks[0][view_index]["object"], dtype=np.uint8
+            )
+            Image.fromarray(object_mask * 255).save(
+                source_dir / f"mask_{view_index}.png"
+            )
 
         points = np.asarray(points_data["points"][view_index])
         colors = np.asarray(points_data["colors"][view_index])
@@ -141,6 +150,19 @@ def main() -> None:
     required = source_dir / "camera_meta.pkl"
     if not required.is_file():
         raise FileNotFoundError(f"Missing Gaussian source dataset: {required}")
+    if args.use_masks:
+        with required.open("rb") as file:
+            camera_count = len(pickle.load(file)["c2ws"])
+        missing_masks = [
+            source_dir / f"mask_{view_index}.png"
+            for view_index in range(camera_count)
+            if not (source_dir / f"mask_{view_index}.png").is_file()
+        ]
+        if missing_masks:
+            raise FileNotFoundError(
+                "--use_masks requires Gaussian source masks: "
+                + ", ".join(str(path) for path in missing_masks)
+            )
 
     command = [
         sys.executable,

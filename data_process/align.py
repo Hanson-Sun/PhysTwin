@@ -526,7 +526,7 @@ if __name__ == "__main__":
         vis.create_window(visible=False)
         dummy_frame = np.asarray(vis.capture_screen_float_buffer(do_render=True))
         height, width, _ = dummy_frame.shape
-        fourcc = cv2.VideoWriter_fourcc(*"avc1")
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
         video_writer = cv2.VideoWriter(
             f"{output_dir}/final_matching.mp4", fourcc, 30, (width, height)
         )
