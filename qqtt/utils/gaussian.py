@@ -439,7 +439,7 @@ class DuplicatedBatchImagesGaussianView:
     @property
     def get_scaling(self):
         scaling = self.scaling_activation(self._scaling)
-        if self.isotropic:
+        if self.isotropic and scaling.shape[-1] == 1:
             return scaling.repeat(1, 1, 3)
         return scaling
 
