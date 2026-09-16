@@ -86,7 +86,9 @@ def main() -> None:
         )
     if args.shape_prior and args.no_shape_prior:
         raise ValueError("--shape_prior and --no_shape_prior are mutually exclusive")
-    use_shape_prior = args.shape_prior
+    use_shape_prior = configured_shape_prior
+    if args.shape_prior:
+        use_shape_prior = True
     if args.no_shape_prior:
         use_shape_prior = False
 

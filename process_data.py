@@ -168,10 +168,12 @@ if PROCESS_FINAL:
         if SHAPE_PRIOR:
             run_stage(
                 f"{sys.executable} ./data_process/data_process_sample.py --base_path {base_path} --case_name {case_name} --shape_prior"
+                + (" --no_visualize" if args.no_visualize else "")
             )
         else:
             run_stage(
                 f"{sys.executable} ./data_process/data_process_sample.py --base_path {base_path} --case_name {case_name}"
+                + (" --no_visualize" if args.no_visualize else "")
             )
 
     # Save the train test split

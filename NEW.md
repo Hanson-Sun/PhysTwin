@@ -25,7 +25,7 @@ python scripts/process_rgbd_case.py \
 Use `--depth_scale 1000` when the depth video stores metres. Add
 `--shape_prior` to enable shape-prior processing. The command writes
 `final_data.pkl`, `metadata.json`, `calibrate.pkl`, and intermediate data under
-`data/different_types/my_case/`.
+`<output_dir>/my_case/`.
 
 ## Train Warp Parameters
 
@@ -38,7 +38,9 @@ python scripts/train_warp_case.py \
 This runs CMA initialization followed by differentiable warp training. The best
 weights are saved under `experiments/my_case/train/best_*.pth`, with a manifest
 at `experiments/my_case/train/training_manifest.json`. Use `--skip_cma` to skip
-the initialization stage. Use `--iterations 1` for a quick smoke test.
+the initialization stage only when
+`experiments_optimization/my_case/optimal_params.pkl` already exists. Use
+`--iterations 1 --cma_max_iter 1 --no_visualize` for a small end-to-end test.
 
 ## Reconstruct Gaussians
 
@@ -48,7 +50,8 @@ Run this once after RGB-D processing and before RL:
 python scripts/reconstruct_gaussians.py \
 	--base_path data/different_types \
 	--case_name my_case \
-	--output_dir gaussian_output/my_case
+	--output_dir gaussian_output/my_case \
+	--use_masks
 ```
 
 This prepares the first-frame Gaussian dataset and trains the static appearance
@@ -61,8 +64,8 @@ and the trained warp weights; do not reconstruct them for every episode.
 
 ## Run Everything
 
-For a case listed in `data_config.csv`, the category and shape-prior setting are
-selected automatically:
+For a case listed in `data_config.csv`, the category and default shape-prior
+setting are selected automatically:
 
 ```bash
 python scripts/run_case_pipeline.py \
@@ -71,13 +74,14 @@ python scripts/run_case_pipeline.py \
 
 This runs RGB-D processing, CMA and warp training, Gaussian reconstruction, and
 Gaussian pruning in order. Use `--dry_run` to inspect the resolved settings,
-`--smoke_test` for a minimal run, or `--skip_process`, `--skip_warp`, and
+`--smoke_test` for a minimal run when a compatible
+`optimal_params.pkl` already exists, or `--skip_process`, `--skip_warp`, and
 `--skip_gaussians` to resume from an existing stage.
 
-Shape-prior generation is opt-in because it requires the separate TRELLIS
-installation. Use `--shape_prior` only after installing TRELLIS; otherwise the
-pipeline uses the processed RGB-D point cloud directly.
-Use `--skip_segmentation` to resume after a completed segmentation stage.
+Shape-prior generation requires the separate TRELLIS installation; use
+`--no_shape_prior` to override a configured shape prior,
+or `--shape_prior` to enable it for a case configured without one. Use
+`--skip_segmentation` to resume after a completed segmentation stage.
 Warp training is headless by default and writes checkpoints under
 `experiments/<case_name>/train/`.
 
