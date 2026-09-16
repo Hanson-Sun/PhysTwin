@@ -98,9 +98,9 @@ class InvPhyTrainerWarp:
             self.structure_points = self.dataset.structure_points
             self.num_all_points = self.dataset.num_all_points
         elif cfg.data_type == "synthetic":
-            print("synthetic data detected")
-            import pdb
-            pdb.set_trace()
+            raise NotImplementedError(
+                "Synthetic data is not supported by InvPhyTrainerWarp quality mode."
+            )
         else:
             raise ValueError(f"Data type {cfg.data_type} not supported")
 
