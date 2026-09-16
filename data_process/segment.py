@@ -1,6 +1,6 @@
 # Process to get the masks of the controller and the object
-import os
 import glob
+import shutil
 import sys
 import subprocess
 import shlex
@@ -33,4 +33,4 @@ for camera_idx in range(camera_num):
     )
     if result.returncode != 0:
         raise RuntimeError(f"Video segmentation failed for camera {camera_idx}")
-    os.system(f"rm -rf {base_path}/{case_name}/tmp_data")
+    shutil.rmtree(f"{base_path}/{case_name}/tmp_data", ignore_errors=True)

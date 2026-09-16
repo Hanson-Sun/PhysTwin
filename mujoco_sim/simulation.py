@@ -82,8 +82,20 @@ class DigitalTwinSim:
             lists must share the same length T (one waypoint per outer step).
         Returns one Frame per captured step.
         """
+        if capture_every < 1:
+            raise ValueError("capture_every must be at least 1")
+        if substeps < 1:
+            raise ValueError("substeps must be at least 1")
+        if not interactor_trajectory:
+            raise ValueError("at least one interactor trajectory is required")
+
         names = list(interactor_trajectory.keys())
-        n_waypoints = len(next(iter(interactor_trajectory.values())))
+        lengths = {name: len(trajectory) for name, trajectory in interactor_trajectory.items()}
+        if not lengths or min(lengths.values()) == 0:
+            raise ValueError("interactor trajectories cannot be empty")
+        if len(set(lengths.values())) != 1:
+            raise ValueError(f"all trajectories must have the same length, got {lengths}")
+        n_waypoints = next(iter(lengths.values()))
         frames = []
 
         for t in range(n_waypoints):

@@ -167,9 +167,10 @@ if __name__ == "__main__":
         for key, value in data.items():
             if value != CONTROLLER_NAME:
                 if "object" in mask_info[i]:
-                    # TODO: Handle the case when there are multiple objects
-                    import pdb
-                    pdb.set_trace()
+                    raise ValueError(
+                        f"Multiple object masks detected for camera {i}; "
+                        "the PhysTwin pipeline currently supports one object."
+                    )
                 mask_info[i]["object"] = int(key)
             if value == CONTROLLER_NAME:
                 if "controller" in mask_info[i]:

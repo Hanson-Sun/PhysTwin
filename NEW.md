@@ -97,8 +97,38 @@ bash env_install/download_data_checkpoints.sh
 python scripts/run_case_pipeline.py \
 	--case_name double_lift_sloth \
 	--data_python "$(conda info --base)/envs/phystwin-data/bin/python"
+```## MuJoCo Synthetic RGB-D Export
+
+The MuJoCo exporter writes a PhysTwin-compatible case directory, including:
+
+- `color/<camera>/<frame>.png` RGB frames
+- `color/<camera>.mp4` videos for dense tracking
+- `depth/<camera>/<frame>.npy` uint16 depth in millimetres
+- `calibrate.pkl` camera-to-world poses in the OpenCV camera convention
+- `metadata.json` with intrinsics, image size, FPS, and frame count
+- `split.json` with the standard 70/30 train/test frame ranges
+
+The current PhysTwin preprocessing scripts require three cameras, matching the
+three cameras in `mujoco_assets/world.xml`:
+
+```python
+from mujoco_sim.phystwin_export import export_case
+
+# After collecting frames with DigitalTwinSim:
+export_case(sim, frames, "data/different_types/my_sim_case")
 ```
 
+To inspect one of the exported depth maps:
+
+```bash
+python -m mujoco_sim.visualize_depth \
+    --input data/different_types/my_sim_case/depth/0/0.npy \
+    --output data/different_types/my_sim_case/depth/0/0_preview.png
+```
+
+The visualizer treats PhysTwin integer depth files as millimetres and floating
+point depth files as metres by default. Use `--unit meters` or
+`--unit millimeters` to override that behavior.
 
 ## Env modifications
 

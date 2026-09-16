@@ -32,6 +32,9 @@ def build_scene(n_interactors: int = 1, object_file: str = DEFAULT_OBJECT_FILE):
     Returns (xml: str, assets: dict[str, bytes]), ready for
     mujoco.MjModel.from_xml_string(xml, assets).
     """
+    if n_interactors < 0:
+        raise ValueError("n_interactors cannot be negative")
+
     claw_template = _read(CLAW_FILE)
     object_path = Path(object_file)
     object_name = object_path.name
