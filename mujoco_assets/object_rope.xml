@@ -1,6 +1,12 @@
 <mujoco model="sim_object_rope">
   <asset>
-    <material name="rope" rgba="0.72 0.38 0.12 1"/>
+    <!-- Repeating high-contrast weave pattern makes the thin rope easier for
+         feature matching than a uniform brown capsule. -->
+    <texture name="rope_weave" type="2d" builtin="checker"
+             rgb1="0.92 0.62 0.24" rgb2="0.28 0.09 0.025"
+             width="64" height="64"/>
+    <material name="rope" texture="rope_weave" texrepeat="12 3"
+              texuniform="true"/>
   </asset>
   <worldbody>
     <!-- Compatibility anchor for the existing case-state API. -->

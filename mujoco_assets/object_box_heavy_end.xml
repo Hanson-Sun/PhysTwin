@@ -1,0 +1,19 @@
+<mujoco model="sim_object_box_heavy_end">
+  <!-- Thin rectangular object whose ballast is concentrated near its +X end.
+       The ballast is non-colliding because it is embedded inside the shell. -->
+  <asset>
+    <material name="heavy_end_ballast" rgba="0.18 0.18 0.22 1"/>
+  </asset>
+  <worldbody>
+    <body name="object" pos="0 0 0.035">
+      <freejoint name="object_joint"/>
+      <geom name="object_shell" type="box" size="0.18 0.04 0.025"
+            rgba="0.8 0.2 0.2 1" mass="0.2"
+            friction="1.0 0.005 0.0001" solref="0.004 1"/>
+      <!-- Most of the mass is concentrated at the right-hand end. -->
+      <geom name="object_ballast" type="box" pos="0.11 0 0"
+            size="0.055 0.03 0.018" material="heavy_end_ballast"
+            mass="1.8" contype="0" conaffinity="0"/>
+    </body>
+  </worldbody>
+</mujoco>

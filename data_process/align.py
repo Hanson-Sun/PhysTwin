@@ -18,7 +18,15 @@ from utils.align_util import (
 )
 from match_pairs import image_pair_matching
 import matplotlib.pyplot as plt
-from data_process.controller_labels import is_controller_label, parse_controller_names
+try:
+    from data_process.controller_labels import (
+        is_controller_label,
+        parse_controller_names,
+    )
+except ModuleNotFoundError:
+    # This file is launched directly by process_data.py, so data_process is
+    # the script directory rather than an importable top-level package.
+    from controller_labels import is_controller_label, parse_controller_names
 from scipy.optimize import minimize
 from scipy.spatial import KDTree
 
@@ -78,24 +86,45 @@ def pose_selection_render_superglue(
 
 
 def registration_pnp(mesh_matching_points, raw_matching_points, intrinsic):
-    # Solve the PNP and verify the reprojection error
+    # EPNP needs at least four correspondences; SQPNP supports the minimum
+    # three-point case produced by feature matching on thin, textureless objects.
+    mesh_matching_points = np.asarray(mesh_matching_points, dtype=np.float32)
+    raw_matching_points = np.asarray(raw_matching_points, dtype=np.float32)
+    num_matches = mesh_matching_points.shape[0]
+    if num_matches < 3 or raw_matching_points.shape[0] != num_matches:
+        raise ValueError(
+            "Shape-prior alignment needs at least three paired 2D/3D matches; "
+            f"received {num_matches} mesh points and "
+            f"{raw_matching_points.shape[0]} image points."
+        )
+
+    pnp_flag = cv2.SOLVEPNP_SQPNP if num_matches == 3 else cv2.SOLVEPNP_EPNP
+    if num_matches == 3:
+        print(
+            "[Alignment] Only three matches were found; using SQPNP. "
+            "The resulting pose may be less stable than a four-point EPNP pose."
+        )
+
     success, rvec, tvec = cv2.solvePnP(
-        np.float32(mesh_matching_points),
-        np.float32(raw_matching_points),
+        mesh_matching_points,
+        raw_matching_points,
         np.float32(intrinsic),
         distCoeffs=np.zeros(4, dtype=np.float32),
-        flags=cv2.SOLVEPNP_EPNP,
+        flags=pnp_flag,
     )
-    assert success, "solvePnP failed"
+    if not success:
+        raise RuntimeError(
+            f"solvePnP failed with {num_matches} matched correspondences"
+        )
     projected_points, _ = cv2.projectPoints(
-        np.float32(mesh_matching_points),
+        mesh_matching_points,
         rvec,
         tvec,
         intrinsic,
         np.zeros(4, dtype=np.float32),
     )
     error = np.linalg.norm(
-        np.float32(raw_matching_points) - projected_points.reshape(-1, 2), axis=1
+        raw_matching_points - projected_points.reshape(-1, 2), axis=1
     ).mean()
     print(f"Reprojection Error: {error}")
     if error > 50:

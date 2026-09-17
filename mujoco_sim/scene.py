@@ -60,7 +60,6 @@ def build_scene(n_interactors: int = 1, object_file: str = DEFAULT_OBJECT_FILE):
 
     includes = [
         f'<include file="{WORLD_FILE}"/>',
-        f'<include file="{CLAW_MATERIALS_FILE}"/>',
         f'<include file="{object_name}"/>',
     ]
     for i in range(n_interactors):

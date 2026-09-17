@@ -10,7 +10,12 @@ import cv2
 import pickle
 from argparse import ArgumentParser
 
-from data_process.controller_labels import is_controller_label, parse_controller_names
+try:
+    from data_process.controller_labels import is_controller_label, parse_controller_names
+except ModuleNotFoundError:
+    # This file is launched directly by process_data.py, so data_process is
+    # the script directory rather than an importable top-level package.
+    from controller_labels import is_controller_label, parse_controller_names
 
 parser = ArgumentParser()
 parser.add_argument(

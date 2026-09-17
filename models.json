@@ -19,6 +19,16 @@
       "capture_every": 8,
       "substeps": 4,
       "fps": 30
+    },
+    {
+      "case_name": "sim_rigid_box_heavy_end",
+      "object_file": "object_box_heavy_end.xml",
+      "width": 848,
+      "height": 480,
+      "steps_per_segment": 300,
+      "capture_every": 8,
+      "substeps": 4,
+      "fps": 30
     }
   ]
 }

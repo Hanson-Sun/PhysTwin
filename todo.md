@@ -1,0 +1,7 @@
+- the rope didnt learn?? i think the depth maps were flipped or something
+- generate more softbody types
+- the claw model doesnt load, check validity
+- why does rope fail on alignment? something about the shape prior
+- test pipeline
+- integrate warp and mujoco sim
+- modify warp simulation to be able to work with claw trajectory inputs
