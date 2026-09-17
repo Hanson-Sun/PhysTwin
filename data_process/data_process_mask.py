@@ -10,6 +10,8 @@ import cv2
 import pickle
 from argparse import ArgumentParser
 
+from data_process.controller_labels import is_controller_label, parse_controller_names
+
 parser = ArgumentParser()
 parser.add_argument(
     "--base_path",
@@ -17,12 +19,13 @@ parser.add_argument(
     required=True,
 )
 parser.add_argument("--case_name", type=str, required=True)
-parser.add_argument("--controller_name", type=str, required=True)
+parser.add_argument("--controller_name", type=str)
+parser.add_argument("--controller_names", type=str)
 args = parser.parse_args()
 
 base_path = args.base_path
 case_name = args.case_name
-CONTROLLER_NAME = args.controller_name
+CONTROLLER_NAMES = parse_controller_names(args.controller_names or args.controller_name)
 
 processed_masks = {}
 
@@ -165,14 +168,14 @@ if __name__ == "__main__":
             data = json.load(f)
         mask_info[i] = {}
         for key, value in data.items():
-            if value != CONTROLLER_NAME:
+            if not is_controller_label(value, CONTROLLER_NAMES):
                 if "object" in mask_info[i]:
                     raise ValueError(
                         f"Multiple object masks detected for camera {i}; "
                         "the PhysTwin pipeline currently supports one object."
                     )
                 mask_info[i]["object"] = int(key)
-            if value == CONTROLLER_NAME:
+            if is_controller_label(value, CONTROLLER_NAMES):
                 if "controller" in mask_info[i]:
                     mask_info[i]["controller"].append(int(key))
                 else:

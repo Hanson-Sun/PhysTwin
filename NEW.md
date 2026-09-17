@@ -42,8 +42,13 @@ python scripts/process_rgbd_case.py \
 	--depth_scale 1.0
 ```
 
-Use `--depth_scale 1000` when the depth video stores metres. Add
-`--shape_prior` to enable shape-prior processing. The command writes
+Use `--depth_scale 1000` when the depth video stores metres. The segmentation pipeline defaults to the robot prompt
+`claw. robot gripper. hand.` and recognizes `hand`, `claw`, `gripper`, and
+`robot gripper` as controller labels while preserving the downstream
+`controller` mask name. Use
+`--controller_prompt` and `--controller_names` on `process_data.py` to override
+those defaults. Add `--shape_prior` to enable shape-prior processing. The
+command writes
 `final_data.pkl`, `metadata.json`, `calibrate.pkl`, and intermediate data under
 `<output_dir>/my_case/`.
 
@@ -118,6 +123,22 @@ The MuJoCo exporter writes a PhysTwin-compatible case directory, including:
 - `metadata.json` with intrinsics, image size, FPS, and frame count
 - `split.json` with the standard 70/30 train/test frame ranges
 
+The default MuJoCo example now loads the validated rigid
+`mujoco_assets/object_box.xml`. Proper soft-body assets will be added after
+surface repair and tetrahedral volume generation. The active representative
+assets are:
+
+- `object_rope.xml` — simple flexible rope/twine scaffold
+- `object_box.xml` — validated rigid baseline box
+
+The previous procedural cloth, doll, sloth, zebra, package, and compound-plush
+stand-ins are not active in `models.json` because they are not proper connected
+volume meshes. The real PhysTwin sloth/zebra `shape/object.glb` files are also
+non-watertight, disconnected surface reconstructions and must be repaired and
+tetrahedralized before they can be used as MuJoCo `dim=3` flex objects.
+
+Select an active asset with the JSON generator's `object_file` field or with
+`load_model(object_file=...)`.
 The current PhysTwin preprocessing scripts require three cameras, matching the
 three cameras in `mujoco_assets/world.xml`:
 
@@ -127,6 +148,41 @@ from mujoco_sim.phystwin_export import export_case
 # After collecting frames with DigitalTwinSim:
 export_case(sim, frames, "data/different_types/my_sim_case")
 ```
+
+Generate multiple simulation cases from a JSON manifest:
+
+```json
+{
+  "models": [
+    {
+      "case_name": "sim_rigid_box",
+      "object_file": "object_box.xml",
+      "width": 848,
+      "height": 480,
+      "steps_per_segment": 300,
+      "capture_every": 8,
+      "substeps": 4,
+      "fps": 30
+    },
+    {
+      "case_name": "sim_rigid_box",
+      "object_file": "object_box.xml"
+    }
+  ]
+}
+```
+
+Run this from the repository root to write cases under the standard PhysTwin
+root `data/different_types/<case_name>/`:
+
+```bash
+python scripts/generate_sim_data.py models.json
+python scripts/generate_sim_data.py models.json --output_dir data/different_types --overwrite
+```
+
+Use `--dry_run` to validate and list every manifest entry without rendering.
+The `phystwin-cu132` environment includes the MuJoCo package's bundled
+elasticity plugin libraries, and the scene loader loads them automatically.
 
 To inspect one of the exported depth maps:
 

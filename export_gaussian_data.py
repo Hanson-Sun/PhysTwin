@@ -5,9 +5,11 @@ import pickle
 import numpy as np
 import open3d as o3d
 
+from data_process.controller_labels import is_controller_label, parse_controller_names
+
 base_path = "./data/different_types"
 output_path = "./data/gaussian_data"
-CONTROLLER_NAME = "hand"
+CONTROLLER_NAMES = parse_controller_names(None)
 
 
 def existDir(dir_path):
@@ -42,7 +44,7 @@ with open("data_config.csv", newline="", encoding="utf-8") as csvfile:
                 data = json.load(f)
             obj_idx = None
             for key, value in data.items():
-                if value != CONTROLLER_NAME:
+                if not is_controller_label(value, CONTROLLER_NAMES):
                     if obj_idx is not None:
                         raise ValueError("More than one object detected.")
                     obj_idx = int(key)

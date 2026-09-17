@@ -22,6 +22,8 @@ dependencies:
       - PyYAML==6.0.3
       - pillow==12.2.0
       - matplotlib==3.10.8
+      # GUI-enabled build required by tools/view_depth_video.py; do not install
+      # opencv-python-headless alongside it.
       - opencv-python==4.11.0.86
       - termcolor==3.3.0
       - imageio==2.37.3
@@ -41,6 +43,8 @@ dependencies:
       - open3d==0.19.0
       - glfw==2.10.0
       - PyOpenGL==3.1.0
+      # Bundles MuJoCo's optional elasticity plugin libraries (including cable).
+      - mujoco>=3.3.0
       - pycuda==2026.1
       - ninja==1.13.0
       - kornia==0.8.2

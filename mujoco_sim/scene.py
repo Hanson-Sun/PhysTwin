@@ -10,6 +10,15 @@ from pathlib import Path
 
 import mujoco
 
+# MuJoCo distributes optional elasticity/sensor/actuator plugins alongside the
+# Python package. Loading the bundled directory is harmless when the bindings
+# already loaded it and makes plugin-backed MJCF work in direct script runs.
+try:
+    mujoco.mj_loadAllPluginLibraries(str(mujoco.PLUGINS_DIR))
+except (AttributeError, OSError):
+    # Older MuJoCo builds may not expose bundled plugin loading.
+    pass
+
 ASSETS_DIR = Path(__file__).parent / "../" / "mujoco_assets"
 
 WORLD_FILE = "world.xml"
@@ -26,8 +35,9 @@ def build_scene(n_interactors: int = 1, object_file: str = DEFAULT_OBJECT_FILE):
     """Compose world + `n_interactors` claws + one object into a single model.
 
     `object_file` is a filename under assets/ (or an absolute path) to any
-    standalone MJCF file containing one body with a freejoint + geom(s) --
-    swap in your own object without touching this function.
+    standalone MJCF file containing an ``object`` body with a freejoint. The
+    default is the validated rigid box; use a compatible volume asset when
+    one is available.
 
     Returns (xml: str, assets: dict[str, bytes]), ready for
     mujoco.MjModel.from_xml_string(xml, assets).

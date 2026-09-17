@@ -18,6 +18,7 @@ from utils.align_util import (
 )
 from match_pairs import image_pair_matching
 import matplotlib.pyplot as plt
+from data_process.controller_labels import is_controller_label, parse_controller_names
 from scipy.optimize import minimize
 from scipy.spatial import KDTree
 
@@ -29,12 +30,13 @@ parser.add_argument(
     required=True,
 )
 parser.add_argument("--case_name", type=str, required=True)
-parser.add_argument("--controller_name", type=str, required=True)
+parser.add_argument("--controller_name", type=str)
+parser.add_argument("--controller_names", type=str)
 args = parser.parse_args()
 
 base_path = args.base_path
 case_name = args.case_name
-CONTROLLER_NAME = args.controller_name
+CONTROLLER_NAMES = parse_controller_names(args.controller_names or args.controller_name)
 output_dir = f"{base_path}/{case_name}/shape/matching"
 
 
@@ -273,7 +275,7 @@ if __name__ == "__main__":
         data = json.load(f)
     obj_idx = None
     for key, value in data.items():
-        if value != CONTROLLER_NAME:
+        if not is_controller_label(value, CONTROLLER_NAMES):
             if obj_idx is not None:
                 raise ValueError("More than one object detected.")
             obj_idx = int(key)

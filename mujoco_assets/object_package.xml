@@ -1,0 +1,18 @@
+<mujoco model="sim_object_package">
+  <asset>
+    <material name="cardboard" rgba="0.62 0.38 0.16 1"/>
+  </asset>
+  <worldbody>
+    <body name="object" gravcomp="1">
+      <freejoint name="object_joint"/>
+      <geom name="object_root" type="sphere" pos="0 0 0.10" size="0.001" mass="0.001" contype="0" conaffinity="0"/>
+      <flexcomp name="package" type="grid" count="12 1 1" dim="1"
+                pos="-0.11 0 0.06" spacing="0.02 0.02 0.02"
+                radius="0.009" mass="0.35" material="cardboard">
+        <edge stiffness="100" damping="2"/>
+        <contact condim="3" friction="0.9 0.02 0.01"/>
+      </flexcomp>
+      <geom name="package_shell" type="box" pos="0 0 0.10" size="0.12 0.09 0.08" mass="0.01" material="cardboard" contype="1" conaffinity="1" solref="0.01 1"/>
+    </body>
+  </worldbody>
+</mujoco>

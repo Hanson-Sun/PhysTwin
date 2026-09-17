@@ -1,6 +1,6 @@
 <mujoco model="claw_materials">
   <asset>
-    <material name="claw_metal" rgba="0.55 0.57 0.6 1" specular="0.7" shininess="0.6" reflectance="0.15"/>
-    <material name="claw_pad" rgba="0.85 0.25 0.1 1" specular="0.2" shininess="0.2"/>
+    <material name="claw_metal" rgba="0.04 0.10 0.22 1" specular="0.8" shininess="0.7" reflectance="0.2"/>
+    <material name="claw_pad" rgba="0.95 0.18 0.03 1" specular="0.25" shininess="0.25"/>
   </asset>
 </mujoco>

@@ -1,39 +1,40 @@
 <mujoco model="claw">
-  <!--
-    Mocap-driven two-finger claw. Kinematic (mocap) so it can be scripted
-    directly via pos/quat each step, while still producing real contacts
-    with objects. The local origin (0,0,0) is the pinch point / contact
-    point that DigitalTwinSim.set_interactor_pose places at the target.
-
-    Fingers stay nearly parallel to the push/poke axis (only a slight
-    taper) so they don't sweep diagonally through an object's side during
-    a horizontal push -- a splayed "V" shape looks more claw-like but
-    clips through anything taller than the pinch point, since the fingers
-    cross the object's height range at an angle. Palm/wrist sit well back
-    (from local z=0.10) so they clear objects roughly the size of the
-    default box.
-
-    __NAME__ is a placeholder substituted by scene.py for each instance
-    (e.g. "interactor0", "interactor1", ...) so multiple claws can be
-    composed into one scene without name collisions. Materials live in
-    claw_materials.xml (included once, separately) rather than here, since
-    this body file may be included more than once for multiple claws and
-    MJCF doesn't allow duplicate asset names.
-  -->
+  <!-- A visually distinctive two-prong claw. The mocap origin remains the
+       pinch point so existing interaction trajectories stay compatible. -->
   <worldbody>
     <body name="__NAME__" mocap="true" pos="0 0 0.3">
-      <geom name="__NAME___pad_l" type="sphere" pos="-0.005 0 0" size="0.007"
-            material="claw_pad" solref="0.004 1" contype="1" conaffinity="1"/>
-      <geom name="__NAME___pad_r" type="sphere" pos="0.005 0 0" size="0.007"
-            material="claw_pad" solref="0.004 1" contype="1" conaffinity="1"/>
-      <geom name="__NAME___finger_l" type="capsule" fromto="-0.005 0 0 -0.010 0 0.10" size="0.005"
-            material="claw_metal" solref="0.004 1" contype="1" conaffinity="1"/>
-      <geom name="__NAME___finger_r" type="capsule" fromto="0.005 0 0 0.010 0 0.10" size="0.005"
-            material="claw_metal" solref="0.004 1" contype="1" conaffinity="1"/>
-      <geom name="__NAME___palm" type="box" pos="0 0 0.115" size="0.018 0.014 0.010"
+      <!-- Large colored pads make the contact point easy to segment. -->
+      <geom name="__NAME___pad_l" type="sphere" pos="-0.016 0 0" size="0.012"
+            material="claw_pad" solref="0.01 1" contype="1" conaffinity="1"/>
+      <geom name="__NAME___pad_r" type="sphere" pos="0.016 0 0" size="0.012"
+            material="claw_pad" solref="0.01 1" contype="1" conaffinity="1"/>
+
+      <!-- Splayed prongs provide a recognizable claw silhouette. -->
+      <geom name="__NAME___finger_l" type="capsule"
+            fromto="-0.016 0 0 -0.048 0 0.13" size="0.009"
+            material="claw_metal" solref="0.01 1" contype="1" conaffinity="1"/>
+      <geom name="__NAME___finger_r" type="capsule"
+            fromto="0.016 0 0 0.048 0 0.13" size="0.009"
+            material="claw_metal" solref="0.01 1" contype="1" conaffinity="1"/>
+      <geom name="__NAME___tip_l" type="capsule"
+            fromto="-0.048 0 0.13 -0.035 0 0.16" size="0.010"
+            material="claw_metal" solref="0.01 1" contype="1" conaffinity="1"/>
+      <geom name="__NAME___tip_r" type="capsule"
+            fromto="0.048 0 0.13 0.035 0 0.16" size="0.010"
+            material="claw_metal" solref="0.01 1" contype="1" conaffinity="1"/>
+
+      <!-- Palm and thick wrist make the tool readable in RGB frames. -->
+      <geom name="__NAME___palm" type="box" pos="0 0 0.17"
+            size="0.065 0.035 0.022" material="claw_metal"
+            contype="1" conaffinity="1"/>
+      <geom name="__NAME___housing" type="box" pos="0 0 0.215"
+            size="0.045 0.030 0.025" material="claw_metal"
+            contype="1" conaffinity="1"/>
+      <geom name="__NAME___wrist" type="capsule"
+            fromto="0 0 0.23 0 0 0.34" size="0.022"
             material="claw_metal" contype="1" conaffinity="1"/>
-      <geom name="__NAME___wrist" type="capsule" fromto="0 0 0.13 0 0 0.19" size="0.010"
-            material="claw_metal" contype="1" conaffinity="1"/>
+      <geom name="__NAME___wrist_cap" type="sphere" pos="0 0 0.35"
+            size="0.028" material="claw_pad" contype="1" conaffinity="1"/>
     </body>
   </worldbody>
 </mujoco>
