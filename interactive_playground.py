@@ -230,6 +230,35 @@ def main():
             base_dir=output_dir,
         )
 
+        # The perf runtime replays the recorded controller trajectory; it is not
+        # a keyboard-driven interactive controller.  Print the trajectory span
+        # so a flat/empty preprocessing result is visible before the window
+        # starts and does not look like a renderer failure.
+        controller = trainer.controller_points.detach()
+        object_points = trainer.dataset.object_points.detach()
+        if controller.shape[0] < 2 or object_points.shape[0] < 2:
+            raise ValueError(
+                "The recorded sequence must contain at least two frames"
+            )
+
+        controller_displacement = torch.linalg.vector_norm(
+            controller[1:] - controller[:-1], dim=-1
+        ).max().item()
+        object_displacement = torch.linalg.vector_norm(
+            object_points[1:] - object_points[:-1], dim=-1
+        ).max().item()
+        print(
+            "[Diagnostics] recorded sequence: "
+            f"frames={object_points.shape[0]}, "
+            f"controller max displacement={controller_displacement:.6f} m, "
+            f"object max displacement={object_displacement:.6f} m"
+        )
+        if controller_displacement < 1e-4:
+            print(
+                "[Diagnostics] controller trajectory is effectively static; "
+                "the perf window will show no interaction."
+            )
+
         if args.mode == "perf":
             trainer.interactive_playground(
                 best_model_path,

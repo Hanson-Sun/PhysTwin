@@ -1,4 +1,6 @@
 <mujoco model="claw">
+  <include file="claw_materials.xml"/>
+
   <!-- A visually distinctive two-prong claw. The mocap origin remains the
        pinch point so existing interaction trajectories stay compatible. -->
   <worldbody>

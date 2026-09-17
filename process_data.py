@@ -22,7 +22,7 @@ parser.add_argument("--category", type=str, required=True)
 parser.add_argument(
     "--controller_prompt",
     type=str,
-    default="claw. robot gripper. hand.",
+    default="robot gripper.",
     help="GroundingDINO controller prompt; multiple phrases are dot-separated.",
 )
 parser.add_argument(

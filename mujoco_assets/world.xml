@@ -2,27 +2,30 @@
   <option timestep="0.001" integrator="implicitfast" gravity="0 0 -9.81"/>
 
   <visual>
-    <headlight ambient="0.25 0.25 0.25" diffuse="0.35 0.35 0.35" specular="0.1 0.1 0.1"/>
+    <headlight ambient="0.42 0.42 0.42" diffuse="0.45 0.45 0.45" specular="0.12 0.12 0.12"/>
     <quality shadowsize="2048"/>
     <global offwidth="1280" offheight="1280"/>
   </visual>
 
   <asset>
     <texture type="skybox" builtin="gradient" rgb1="0.6 0.7 0.9" rgb2="0.1 0.1 0.2" width="256" height="256"/>
-    <texture name="grid" type="2d" builtin="checker" rgb1="0.7 0.7 0.7" rgb2="0.5 0.5 0.5" width="300" height="300"/>
-    <material name="grid_mat" texture="grid" texrepeat="5 5" reflectance="0.1" shininess="0.1"/>
+    <texture name="grid" type="2d" builtin="checker" rgb1="0.58 0.60 0.63" rgb2="0.40 0.42 0.45" width="300" height="300"/>
+    <material name="grid_mat" texture="grid" texrepeat="5 5" reflectance="0.04" shininess="0.18"/>
   </asset>
 
   <worldbody>
     <!-- key light: main directional light, casts shadows -->
-    <light name="key" pos="0.6 -0.6 1.2" dir="-0.5 0.5 -1" directional="true"
-           diffuse="0.7 0.7 0.65" specular="0.3 0.3 0.3" castshadow="true"/>
-    <!-- fill light: softer, opposite side, no shadow so it doesn't double-darken -->
-    <light name="fill" pos="-0.7 0.5 0.8" dir="0.7 -0.5 -0.6" directional="true"
-           diffuse="0.25 0.25 0.3" castshadow="false"/>
-    <!-- rim/back light: separates object from background -->
-    <light name="rim" pos="0 0.8 0.5" dir="0 -0.8 -0.3" directional="true"
-           diffuse="0.2 0.2 0.22" castshadow="false"/>
+    <light name="key" pos="0.6 -0.8 1.3" dir="-0.35 0.55 -1" directional="true"
+           diffuse="0.48 0.48 0.45" specular="0.16 0.16 0.16" castshadow="true"/>
+    <!-- Broad fill light lifts shadowed sides without creating a second shadow. -->
+    <light name="fill" pos="-0.8 -0.2 1.0" dir="0.55 0.15 -1" directional="true"
+           diffuse="0.38 0.40 0.46" specular="0.05 0.05 0.06" castshadow="false"/>
+    <!-- Soft opposite-side light preserves shape separation from the floor. -->
+    <light name="rim" pos="0.2 0.9 1.0" dir="-0.1 -0.7 -1" directional="true"
+           diffuse="0.30 0.32 0.38" specular="0.08 0.08 0.10" castshadow="false"/>
+    <!-- Low-power front fill keeps contact faces readable during pushing. -->
+    <light name="front_fill" pos="0 -0.9 0.7" dir="0 0.4 -1" directional="true"
+           diffuse="0.18 0.20 0.22" castshadow="false"/>
 
     <geom name="floor" type="plane" size="1 1 0.1" material="grid_mat"/>
 

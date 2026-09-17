@@ -42,8 +42,8 @@ python scripts/process_rgbd_case.py \
 	--depth_scale 1.0
 ```
 
-Use `--depth_scale 1000` when the depth video stores metres. The segmentation pipeline defaults to the robot prompt
-`claw. robot gripper. hand.` and recognizes `hand`, `claw`, `gripper`, and
+Use `--depth_scale 1000` when the depth video stores metres. The segmentation pipeline defaults to the single robot prompt
+`robot gripper.` and recognizes `hand`, `claw`, `gripper`, and
 `robot gripper` as controller labels while preserving the downstream
 `controller` mask name. Use
 `--controller_prompt` and `--controller_names` on `process_data.py` to override

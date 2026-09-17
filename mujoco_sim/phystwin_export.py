@@ -28,6 +28,13 @@ from PIL import Image
 # OpenCV camera frame (what PhysTwin/RealSense use): +y down, looks down +z.
 _MJ_TO_CV = np.diag([1.0, -1.0, -1.0])
 
+# PhysTwin's simulator convention has the ground at z=0 and object points at
+# z <= 0.  MuJoCo uses the physically equivalent z-up convention (objects at
+# z >= 0), so exported world poses must include this global reflection.  The
+# depth images themselves are not vertically flipped; this only converts the
+# coordinate frame used by the point-cloud reconstruction and warp solver.
+_MJ_WORLD_TO_PHYSTWIN = np.diag([1.0, 1.0, -1.0, 1.0])
+
 
 def _intrinsics(model, cam_name: str, width: int, height: int) -> list:
     cam_id = model.camera(cam_name).id
@@ -40,10 +47,10 @@ def _intrinsics(model, cam_name: str, width: int, height: int) -> list:
 def _extrinsic_c2w(model, data, cam_name: str) -> np.ndarray:
     cam_id = model.camera(cam_name).id
     r_mj = data.cam_xmat[cam_id].reshape(3, 3)
-    c2w = np.eye(4)
-    c2w[:3, :3] = r_mj @ _MJ_TO_CV
-    c2w[:3, 3] = data.cam_xpos[cam_id]
-    return c2w
+    c2w_mj = np.eye(4)
+    c2w_mj[:3, :3] = r_mj @ _MJ_TO_CV
+    c2w_mj[:3, 3] = data.cam_xpos[cam_id]
+    return _MJ_WORLD_TO_PHYSTWIN @ c2w_mj
 
 
 def export_case(
