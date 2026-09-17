@@ -1,4 +1,4 @@
-"""Demo: push the object across the floor with a scripted claw motion."""
+"""Demo: push the default validated box across the floor with a scripted claw."""
 
 from pathlib import Path
 
@@ -22,8 +22,8 @@ def main() -> None:
     sim = DigitalTwinSim(model=load_model(n_interactors=1), width=256, height=256)
 
     # Waypoints (x, y, z) for the claw's contact point, in world coordinates.
-    # The object sits at the origin with half-size 0.05, so z=0.05 is its
-    # mid-height contact plane.
+    # The default box sits at the origin; z=0.05 reaches its center contact
+    # plane.
     waypoints = [
         (-0.20, 0.0, 0.20),  # start high and to the side
         (-0.20, 0.0, 0.05),  # descend to push height

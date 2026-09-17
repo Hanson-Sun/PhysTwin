@@ -3,11 +3,13 @@ import json
 import shutil
 from pathlib import Path
 
+from data_process.controller_labels import is_controller_label, parse_controller_names
+
 
 BASE_PATH = Path("./data/different_types")
 OUTPUT_PATH = Path("./data/render_eval_data")
 DATA_CONFIG_PATH = Path("./data_config.csv")
-CONTROLLER_NAME = "hand"
+CONTROLLER_NAMES = parse_controller_names(None)
 
 
 def ensure_dir(dir_path: Path):
@@ -39,7 +41,7 @@ def copy_case(case_name: str):
 
         obj_idx = None
         for key, value in data.items():
-            if value != CONTROLLER_NAME:
+            if not is_controller_label(value, CONTROLLER_NAMES):
                 if obj_idx is not None:
                     raise ValueError("More than one object detected.")
                 obj_idx = int(key)

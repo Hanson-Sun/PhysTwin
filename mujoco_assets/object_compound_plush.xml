@@ -1,0 +1,54 @@
+<mujoco model="sim_object_compound_plush">
+  <asset>
+    <material name="plush_body" rgba="0.55 0.32 0.20 1"/>
+    <material name="plush_patch" rgba="0.82 0.62 0.38 1"/>
+  </asset>
+  <worldbody>
+    <body name="object" gravcomp="1">
+      <freejoint name="object_joint"/>
+      <geom name="object_root" type="sphere" pos="0 0 0.18" size="0.001" mass="0.001" contype="0" conaffinity="0"/>
+
+      <flexcomp name="torso" type="grid" count="18 1 1" dim="1"
+                pos="-0.14 0 0.15" spacing="0.016 0.016 0.016"
+                radius="0.007" mass="0.24" material="plush_body">
+        <edge stiffness="6" damping="2.0"/>
+        <contact solref="0.02 1" solimp="0.8 0.95 0.01" condim="3" friction="0.9 0.02 0.01"/>
+      </flexcomp>
+      <flexcomp name="head" type="grid" count="10 1 1" dim="1"
+                pos="-0.07 0 0.30" spacing="0.016 0.016 0.016"
+                radius="0.008" mass="0.10" material="plush_patch">
+        <edge stiffness="5" damping="1.8"/>
+        <contact solref="0.02 1" solimp="0.8 0.95 0.01" condim="3" friction="0.85 0.02 0.01"/>
+      </flexcomp>
+
+      <flexcomp name="arm_left" type="grid" count="9 1 1" dim="1"
+                pos="-0.12 0.02 0.22" spacing="0.018 0.018 0.018"
+                radius="0.007" mass="0.045" material="plush_body">
+        <edge stiffness="4" damping="1.5"/>
+        <contact solref="0.02 1" solimp="0.8 0.95 0.01" condim="3" friction="0.9 0.02 0.01"/>
+      </flexcomp>
+      <flexcomp name="arm_right" type="grid" count="9 1 1" dim="1"
+                pos="0.04 0.02 0.22" spacing="0.018 0.018 0.018"
+                radius="0.007" mass="0.045" material="plush_body">
+        <edge stiffness="4" damping="1.5"/>
+        <contact solref="0.02 1" solimp="0.8 0.95 0.01" condim="3" friction="0.9 0.02 0.01"/>
+      </flexcomp>
+      <flexcomp name="tail" type="grid" count="12 1 1" dim="1"
+                pos="0.10 0 0.14" spacing="0.018 0.018 0.018"
+                radius="0.006" mass="0.035" material="plush_body">
+        <edge stiffness="3" damping="1.2"/>
+        <contact solref="0.02 1" solimp="0.8 0.95 0.01" condim="3" friction="0.9 0.02 0.01"/>
+      </flexcomp>
+
+      <!-- These parts have hidden hinge state that an interaction learner can discover. -->
+      <body name="ear_left" pos="-0.05 0 0.37">
+        <joint name="ear_left_hinge" type="hinge" axis="0 1 0" range="-50 50" damping="0.02"/>
+        <geom type="capsule" fromto="0 0 0 0 0 0.07" size="0.018" mass="0.015" material="plush_patch"/>
+      </body>
+      <body name="ear_right" pos="0.05 0 0.37">
+        <joint name="ear_right_hinge" type="hinge" axis="0 1 0" range="-50 50" damping="0.02"/>
+        <geom type="capsule" fromto="0 0 0 0 0 0.07" size="0.018" mass="0.015" material="plush_patch"/>
+      </body>
+    </body>
+  </worldbody>
+</mujoco>

@@ -1,0 +1,24 @@
+<mujoco model="sim_object_rope">
+  <asset>
+    <material name="rope" rgba="0.72 0.38 0.12 1"/>
+  </asset>
+  <worldbody>
+    <!-- Compatibility anchor for the existing case-state API. -->
+    <body name="object" gravcomp="1">
+      <freejoint name="object_joint"/>
+      <geom name="object_root" type="sphere" pos="0 0 0.01" size="0.001"
+            mass="0.001" contype="0" conaffinity="0"/>
+    </body>
+
+    <!-- Top-level dynamic cable: its first link is not welded to the dummy
+         object body, so gripper forces can translate and bend the rope. -->
+    <composite prefix="rope" type="cable" curve="s" count="23 1 1"
+               size="0.48" offset="-0.082 -0.226 0.01"
+               quat="0.819152 0 0 0.573576" initial="none">
+      <joint kind="main" damping="0.5" armature="0.001"/>
+      <geom type="capsule" size="0.01" mass="0.015" material="rope"
+            friction="0.8 0.02 0.01" solref="0.02 1"
+            solimp="0.8 0.95 0.01" condim="3"/>
+    </composite>
+  </worldbody>
+</mujoco>

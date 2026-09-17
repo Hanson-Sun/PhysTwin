@@ -27,7 +27,7 @@ for camera_idx in range(camera_num):
     print(f"Processing {case_name} camera {camera_idx}")
     result = subprocess.run(
         shlex.split(
-        f"{sys.executable} ./data_process/segment_util_video.py --base_path {base_path} --case_name {case_name} --TEXT_PROMPT {TEXT_PROMPT} --camera_idx {camera_idx}"
+        f"{sys.executable} ./data_process/segment_util_video.py --base_path {shlex.quote(base_path)} --case_name {shlex.quote(case_name)} --TEXT_PROMPT {shlex.quote(TEXT_PROMPT)} --camera_idx {camera_idx}"
         ),
         check=False,
     )

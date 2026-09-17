@@ -1,0 +1,19 @@
+<mujoco model="sim_object_cloth">
+  <asset>
+    <material name="cloth" rgba="0.18 0.48 0.78 1"/>
+  </asset>
+  <worldbody>
+    <body name="object" gravcomp="1">
+      <freejoint name="object_joint"/>
+      <geom name="object_root" type="sphere" pos="0 0 0.12" size="0.001" mass="0.001" contype="0" conaffinity="0"/>
+      <!-- Parallel spring strands approximate a lightweight deformable sheet. -->
+      <flexcomp name="cloth_0" type="grid" count="12 1 1" dim="1" pos="-0.22 -0.12 0.14" spacing="0.04 0.04 0.04" radius="0.012" mass="0.025" material="cloth"><edge stiffness="18" damping="0.5"/><contact condim="3" friction="0.8 0.02 0.01"/></flexcomp>
+      <flexcomp name="cloth_1" type="grid" count="12 1 1" dim="1" pos="-0.22 -0.08 0.14" spacing="0.04 0.04 0.04" radius="0.012" mass="0.025" material="cloth"><edge stiffness="18" damping="0.5"/><contact condim="3" friction="0.8 0.02 0.01"/></flexcomp>
+      <flexcomp name="cloth_2" type="grid" count="12 1 1" dim="1" pos="-0.22 -0.04 0.14" spacing="0.04 0.04 0.04" radius="0.012" mass="0.025" material="cloth"><edge stiffness="18" damping="0.5"/><contact condim="3" friction="0.8 0.02 0.01"/></flexcomp>
+      <flexcomp name="cloth_3" type="grid" count="12 1 1" dim="1" pos="-0.22 0.00 0.14" spacing="0.04 0.04 0.04" radius="0.012" mass="0.025" material="cloth"><edge stiffness="18" damping="0.5"/><contact condim="3" friction="0.8 0.02 0.01"/></flexcomp>
+      <flexcomp name="cloth_4" type="grid" count="12 1 1" dim="1" pos="-0.22 0.04 0.14" spacing="0.04 0.04 0.04" radius="0.012" mass="0.025" material="cloth"><edge stiffness="18" damping="0.5"/><contact condim="3" friction="0.8 0.02 0.01"/></flexcomp>
+      <flexcomp name="cloth_5" type="grid" count="12 1 1" dim="1" pos="-0.22 0.08 0.14" spacing="0.04 0.04 0.04" radius="0.012" mass="0.025" material="cloth"><edge stiffness="18" damping="0.5"/><contact condim="3" friction="0.8 0.02 0.01"/></flexcomp>
+      <flexcomp name="cloth_6" type="grid" count="12 1 1" dim="1" pos="-0.22 0.12 0.14" spacing="0.04 0.04 0.04" radius="0.012" mass="0.025" material="cloth"><edge stiffness="18" damping="0.5"/><contact condim="3" friction="0.8 0.02 0.01"/></flexcomp>
+    </body>
+  </worldbody>
+</mujoco>

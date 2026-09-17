@@ -1,0 +1,24 @@
+{
+  "models": [
+    {
+      "case_name": "sim_rope",
+      "object_file": "object_rope.xml",
+      "width": 848,
+      "height": 480,
+      "steps_per_segment": 300,
+      "capture_every": 8,
+      "substeps": 4,
+      "fps": 30
+    },
+    {
+      "case_name": "sim_rigid_box",
+      "object_file": "object_box.xml",
+      "width": 848,
+      "height": 480,
+      "steps_per_segment": 300,
+      "capture_every": 8,
+      "substeps": 4,
+      "fps": 30
+    }
+  ]
+}

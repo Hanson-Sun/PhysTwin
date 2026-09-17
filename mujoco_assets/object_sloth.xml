@@ -1,0 +1,24 @@
+<mujoco model="sim_object_sloth">
+  <asset>
+    <material name="sloth_fur" rgba="0.48 0.30 0.18 1"/>
+    <material name="sloth_face" rgba="0.78 0.58 0.38 1"/>
+  </asset>
+  <worldbody>
+    <body name="object" gravcomp="1">
+      <freejoint name="object_joint"/>
+      <geom name="object_root" type="sphere" pos="0 0 0.16" size="0.001" mass="0.001" contype="0" conaffinity="0"/>
+      <flexcomp name="sloth_body" type="grid" count="16 1 1" dim="1"
+                pos="-0.12 0 0.16" spacing="0.03 0.03 0.03"
+                radius="0.012" mass="0.28" material="sloth_fur">
+        <edge stiffness="28" damping="1.0"/>
+        <contact condim="3" friction="0.9 0.02 0.01"/>
+      </flexcomp>
+      <geom name="sloth_head" type="ellipsoid" pos="0 0 0.30" size="0.085 0.07 0.075" mass="0.04" material="sloth_fur"/>
+      <geom name="sloth_face" type="ellipsoid" pos="0 -0.065 0.30" size="0.052 0.018 0.045" mass="0.01" material="sloth_face"/>
+      <geom name="sloth_arm_l" type="capsule" fromto="-0.06 0 0.23 -0.16 0 0.10" size="0.035" mass="0.025" material="sloth_fur"/>
+      <geom name="sloth_arm_r" type="capsule" fromto="0.06 0 0.23 0.16 0 0.10" size="0.035" mass="0.025" material="sloth_fur"/>
+      <geom name="sloth_leg_l" type="capsule" fromto="-0.05 0 0.10 -0.10 0 0.01" size="0.04" mass="0.03" material="sloth_fur"/>
+      <geom name="sloth_leg_r" type="capsule" fromto="0.05 0 0.10 0.10 0 0.01" size="0.04" mass="0.03" material="sloth_fur"/>
+    </body>
+  </worldbody>
+</mujoco>

@@ -75,12 +75,14 @@ class DigitalTwinSim:
         object_bodies: list[str] = ("object",),
         capture_every: int = 1,
         substeps: int = 1,
+        progress=None,
     ) -> list[Frame]:
         """Play a scripted trajectory and record synthetic RGB-D + ground truth.
 
         interactor_trajectory: {interactor_name: [(pos, quat), ...]}, all
             lists must share the same length T (one waypoint per outer step).
-        Returns one Frame per captured step.
+        Returns one Frame per captured step. If ``progress`` is provided, it
+        is called once after each outer simulation step.
         """
         if capture_every < 1:
             raise ValueError("capture_every must be at least 1")
@@ -104,6 +106,9 @@ class DigitalTwinSim:
                 self.set_interactor_pose(name, pos, quat)
 
             self.step(substeps)
+
+            if progress is not None:
+                progress(1)
 
             if t % capture_every == 0:
                 frames.append(

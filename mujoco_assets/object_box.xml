@@ -1,4 +1,4 @@
-<mujoco model="object_box">
+<mujoco model="sim_object_box">
   <!-- Default object: a free box with a freejoint, ready to be poked/pushed.
        Swap this file for any object with the same shape (one body, a
        freejoint, and one or more geoms) -- e.g. a soft-body/PhysTwin
