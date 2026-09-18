@@ -816,26 +816,22 @@ def build_rotation_reuse_cache(
     motions_bm = torch.empty(mass_node_per_instance, number_of_instance, 3,
                          device=device, dtype=torch.float32).contiguous()
 
-    def build_W_csr(weights_indices_ik: torch.Tensor, weights_ik: torch.Tensor, Nb_: int, dtype: torch.dtype | None = None) -> torch.Tensor:
-        Ng_, K_ = weights_indices_ik.shape
-        row = torch.arange(Ng_, device=device, dtype=torch.int64).repeat_interleave(K_)  # (Ng*K,)
-        col = weights_indices_ik.reshape(-1).to(device=device, dtype=torch.int64)                                      # (Ng*K,)
-        #updated to use float16
-        val = weights_ik.reshape(-1).to(device=device, dtype=dtype) 
-
-        W = torch.sparse_coo_tensor(
-            torch.stack([row, col], dim=0),
-            val,
-            size=(Ng_, Nb_),
-            device=device,
-            #updated to use float16
-            dtype=dtype,
-        ).coalesce()
-        return W.to_sparse_csr()
-    weights_indices_i64 = weights_indices.to(torch.int64).contiguous()
-
-    W_csr_f32 = build_W_csr(weights_indices_i64, weights_f32, mass_node_per_instance, dtype=torch.float32)  # dtype=float32 inside
-    W_csr_f16 = build_W_csr(weights_indices_i64, weights_f16, mass_node_per_instance, dtype=torch.float16)  # dtype=float16 inside
+    weights_indices_i64 = weights_indices.to(device=device, dtype=torch.int64).contiguous()
+    if weights_indices_i64.ndim != 2 or weights_f32.shape != weights_indices_i64.shape:
+        raise ValueError(
+            "weights_indices and weights must have the same 2-D shape; "
+            f"got {tuple(weights_indices_i64.shape)} and {tuple(weights_f32.shape)}"
+        )
+    if weights_indices_i64.numel():
+        index_min = int(weights_indices_i64.min().item())
+        index_max = int(weights_indices_i64.max().item())
+        if index_min < 0 or index_max >= mass_node_per_instance:
+            raise ValueError(
+                f"Skinning index out of bounds: [{index_min}, {index_max}] "
+                f"for {mass_node_per_instance} mass nodes"
+            )
+    if not torch.isfinite(weights_f32).all().item():
+        raise ValueError("Skinning weights contain NaN or Inf values")
 
     gs_rest = Func.normalize(gaussians_quat_rest, dim=-1, eps=1e-6).to(device=device, dtype=torch.float16).contiguous()
 
@@ -845,15 +841,14 @@ def build_rotation_reuse_cache(
         "mass_nodes_rest": mass_nodes_rest,  # (B, 3) Rest bone positions
         "gaussians_quat_rest": gs_rest,  # (N, 4) Rest Gaussian quaternions
         "relations": relations,  # (B, n_adj) Bone adjacency graph
-        "weights_indices": weights_indices,  # (N, K) Bone indices per Gaussian
+        "weights_indices": weights_indices_i64,  # (N, K) Bone indices per Gaussian
+        "weights": weights_f32,  # (N, K) Dense weights for indexed blending
         "rest_bone_to_neighbors": rest_bone_to_neighbors,  # (B, n_adj, 3) Precomputed rest vectors
         "mass_nodes_per_instance": mass_node_per_instance,
         "gaussians_per_instance": gaussians_per_instance,
         "number_of_instance": number_of_instance,
         "xyz_local_w": xyz_local_w,
         "bones_rest_blend": bones_rest_blend,
-        "W_csr_f32": W_csr_f32,  # Sparse weight matrix in CSR format for fast multiplication
-        "W_csr_f16": W_csr_f16,  # Sparse weight matrix in CSR format for fast multiplication
         # === Dynamic state (modified each frame) ===
         # batched vector cover all instances
         "R_cache": R_cache,  # (B, 3, 3) Cached rotation matrices
@@ -998,16 +993,19 @@ def lbs_with_rotation_reuse(
     # We are keeping this in fp32 for accuracy
     cache["motions_bm_fp32"].copy_(motions.transpose(0, 1))  # (Nb,I,3)
     
-    M_mat = cache["motions_bm_fp32"].reshape(mass_nodes_per_instance, number_of_instance * 3)         # view
-    M_out = torch.sparse.mm(cache["W_csr_f32"], M_mat)                      # (Ng, I*3)
-    motion_sum = M_out.view(gaussians_per_instance, number_of_instance, 3)                      # view
+    # Each Gaussian has only K influences. Indexed blending avoids CUDA sparse
+    # kernels, including unsupported FP16 sparse matmul and unstable COO/CSR
+    # conversion paths.
+    weights_ik = cache["weights"]
+    weights_indices_ik = cache["weights_indices"]
+    motion_selected = cache["motions_bm_fp32"][weights_indices_ik]  # (Ng, K, I, 3)
+    motion_sum = (motion_selected * weights_ik[:, :, None, None]).sum(dim=1)
     
     xyz_def_nia = xyz_rot_sum + motion_sum + cache["bones_rest_blend"][:, None, :]     # (Ng,I,3)
     xyz_deformed = xyz_def_nia.permute(1, 0, 2).reshape(number_of_instance * gaussians_per_instance, 3)
 
-    Q_mat = cache["Q_cache_bm"].reshape(mass_nodes_per_instance, number_of_instance * 4)   # view, no copy
-    Q_out = torch.sparse.mm(cache["W_csr_f16"], Q_mat)                                     # (Ng, I*4)
-    q = Q_out.view(gaussians_per_instance, number_of_instance, 4) 
+    q_selected = cache["Q_cache_bm"][weights_indices_ik].float()  # (Ng, K, I, 4)
+    q = (q_selected * weights_ik[:, :, None, None]).sum(dim=1)
     rest = gaussians_quat_rest.view(gaussians_per_instance, 1, 4)
     quat_def_nic = quat_mul_norm_fused(q, rest)  # (Ng
     quat_deformed = quat_def_nic.permute(1, 0, 2).reshape(number_of_instance * gaussians_per_instance, 4)
