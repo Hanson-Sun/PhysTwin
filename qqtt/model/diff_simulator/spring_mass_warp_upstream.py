@@ -11,7 +11,7 @@ if not cfg.use_graph:
 
 
 class State:
-    def __init__(self, wp_init_vertices, num_control_points):
+    def __init__(self, wp_init_vertices, num_control_points, num_contact_points=0):
         self.wp_x = wp.zeros_like(wp_init_vertices, requires_grad=True)
         self.wp_v_before_collision = wp.zeros_like(wp_init_vertices, requires_grad=True)
         self.wp_v_before_ground = wp.zeros_like(wp_init_vertices, requires_grad=True)
@@ -22,6 +22,9 @@ class State:
             (num_control_points), dtype=wp.vec3, requires_grad=False
         )
         self.wp_control_v = wp.zeros_like(self.wp_control_x, requires_grad=False)
+        self.wp_contact_x = wp.zeros(
+            (num_contact_points), dtype=wp.vec3, requires_grad=False
+        )
 
     def clear_forces(self):
         self.wp_vertice_forces.zero_()
@@ -135,6 +138,32 @@ def eval_springs(
             wp.atomic_add(f, idx1, overall_force)
         if idx2 < num_object_points:
             wp.atomic_sub(f, idx2, overall_force)
+
+
+@wp.kernel
+def controller_contact_force(
+    x: wp.array(dtype=wp.vec3),
+    controller_x: wp.array(dtype=wp.vec3),
+    controller_grid: wp.uint64,
+    contact_radius: float,
+    contact_stiffness: float,
+    contact_count: wp.array(dtype=wp.int32),
+    f: wp.array(dtype=wp.vec3),
+):
+    """Apply unilateral normal contact from nearby kinematic controller points."""
+    object_idx = wp.tid()
+    object_position = x[object_idx]
+    total_force = wp.vec3(0.0, 0.0, 0.0)
+    neighbors = wp.hash_grid_query(controller_grid, object_position, contact_radius)
+    for controller_idx in neighbors:
+        delta = object_position - controller_x[controller_idx]
+        distance = wp.length(delta)
+        penetration = contact_radius - distance
+        if penetration > 0.0:
+            normal = delta / wp.max(distance, 1e-6)
+            total_force += contact_stiffness * penetration * normal
+            wp.atomic_add(contact_count, 0, 1)
+    wp.atomic_add(f, object_idx, total_force)
 
 
 @wp.kernel
@@ -588,6 +617,7 @@ class SpringMassSystemWarp:
         num_surface_points=None,
         num_original_points=None,
         controller_points=None,
+        controller_contact_points=None,
         reverse_z=False,
         spring_Y_min=1e3,
         spring_Y_max=1e5,
@@ -637,6 +667,25 @@ class SpringMassSystemWarp:
             controller_points.shape[1] if not controller_points is None else 0
         )
         self.controller_points = controller_points
+        self.controller_contact_points = (
+            controller_contact_points
+            if controller_contact_points is not None
+            else controller_points
+        )
+        self.num_contact_points = (
+            self.controller_contact_points.shape[1]
+            if self.controller_contact_points is not None
+            else 0
+        )
+        self.controller_contact_radius = float(getattr(cfg, "controller_contact_radius", 0.014))
+        self.controller_contact_stiffness = float(
+            getattr(cfg, "controller_contact_stiffness", 3e4)
+        )
+        self.controller_contact_enabled = self.controller_contact_points is not None
+        self.controller_contact_count = wp.zeros(1, dtype=wp.int32, requires_grad=False)
+        self.controller_contact_grid = (
+            wp.HashGrid(128, 128, 128) if self.controller_contact_enabled else None
+        )
 
         # Deal with the any collision detection
         self.object_collision_flag = 0
@@ -719,6 +768,16 @@ class SpringMassSystemWarp:
             self.wp_target_control_point = wp.from_torch(
                 self.controller_points[1].clone(), dtype=wp.vec3, requires_grad=False
             )
+            self.wp_original_contact_point = wp.from_torch(
+                self.controller_contact_points[0].clone(),
+                dtype=wp.vec3,
+                requires_grad=False,
+            )
+            self.wp_target_contact_point = wp.from_torch(
+                self.controller_contact_points[1].clone(),
+                dtype=wp.vec3,
+                requires_grad=False,
+            )
 
             self.chamfer_loss = wp.zeros(1, dtype=wp.float32, requires_grad=True)
             self.track_loss = wp.zeros(1, dtype=wp.float32, requires_grad=True)
@@ -728,7 +787,11 @@ class SpringMassSystemWarp:
         # Initialize the warp parameters
         self.wp_states = []
         for i in range(self.num_substeps + 1):
-            state = State(self.wp_init_velocities, self.num_control_points)
+            state = State(
+                self.wp_init_velocities,
+                self.num_control_points,
+                self.num_contact_points,
+            )
             self.wp_states.append(state)
         if cfg.data_type == "real":
             self.distance_matrix = wp.zeros(
@@ -817,6 +880,18 @@ class SpringMassSystemWarp:
                 dim=self.num_control_points,
                 inputs=[self.controller_points[frame_idx]],
                 outputs=[self.wp_target_control_point],
+            )
+            wp.launch(
+                copy_vec3,
+                dim=self.num_contact_points,
+                inputs=[self.controller_contact_points[frame_idx - 1]],
+                outputs=[self.wp_original_contact_point],
+            )
+            wp.launch(
+                copy_vec3,
+                dim=self.num_contact_points,
+                inputs=[self.controller_contact_points[frame_idx]],
+                outputs=[self.wp_target_contact_point],
             )
 
         if not pure_inference:
@@ -943,7 +1018,7 @@ class SpringMassSystemWarp:
         for i in range(self.num_substeps):
             self.wp_states[i].clear_forces()
             if not self.controller_points is None:
-                # Set the control point
+                # Set the legacy sparse control points.
                 wp.launch(
                     set_control_points,
                     dim=self.num_control_points,
@@ -955,6 +1030,18 @@ class SpringMassSystemWarp:
                     ],
                     outputs=[self.wp_states[i].wp_control_x],
                 )
+                if self.num_contact_points:
+                    wp.launch(
+                        set_control_points,
+                        dim=self.num_contact_points,
+                        inputs=[
+                            self.num_substeps,
+                            self.wp_original_contact_point,
+                            self.wp_target_contact_point,
+                            i,
+                        ],
+                        outputs=[self.wp_states[i].wp_contact_x],
+                    )
 
             # Calculate the spring forces
             wp.launch(
@@ -975,6 +1062,26 @@ class SpringMassSystemWarp:
                 ],
                 outputs=[self.wp_states[i].wp_vertice_forces],
             )
+
+            if self.controller_contact_enabled:
+                self.controller_contact_grid.build(
+                    self.wp_states[i].wp_contact_x,
+                    self.controller_contact_radius,
+                )
+                self.controller_contact_count.zero_()
+                wp.launch(
+                    controller_contact_force,
+                    dim=self.num_object_points,
+                    inputs=[
+                        self.wp_states[i].wp_x,
+                        self.wp_states[i].wp_contact_x,
+                        self.controller_contact_grid.id,
+                        self.controller_contact_radius,
+                        self.controller_contact_stiffness,
+                        self.controller_contact_count,
+                    ],
+                    outputs=[self.wp_states[i].wp_vertice_forces],
+                )
 
             if self.object_collision_flag:
                 output_v = self.wp_states[i].wp_v_before_collision
