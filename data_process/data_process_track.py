@@ -18,6 +18,12 @@ parser.add_argument(
 )
 parser.add_argument("--case_name", type=str, required=True)
 parser.add_argument("--no_visualize", action="store_true")
+parser.add_argument(
+    "--controller_point_count",
+    type=int,
+    default=30,
+    help="Number of sparse controller points retained for legacy consumers.",
+)
 args = parser.parse_args()
 
 base_path = args.base_path
@@ -328,7 +334,9 @@ def filter_motion(track_data, neighbor_dist=0.01, visualize=True):
     return track_data
 
 
-def get_final_track_data(track_data, controller_threhsold=0.01):
+def get_final_track_data(
+    track_data, controller_threhsold=0.01, controller_point_count=30
+):
     object_points = track_data["object_points"]
     object_colors = track_data["object_colors"]
     object_visibilities = track_data["object_visibilities"]
@@ -337,8 +345,20 @@ def get_final_track_data(track_data, controller_threhsold=0.01):
     mask = track_data["controller_mask"]
 
     new_controller_points = controller_points[:, np.where(mask)[0], :]
-    assert len(new_controller_points[0]) >= 30
-    # Do farthest point sampling on the valid controller points to select the final controller points
+    if controller_point_count < 1:
+        raise ValueError("controller_point_count must be positive")
+    if len(new_controller_points[0]) < controller_point_count:
+        raise ValueError(
+            "Not enough valid controller tracks for sparse sampling: "
+            f"required {controller_point_count}, found {len(new_controller_points[0])}"
+        )
+
+    # Preserve all valid, consistently tracked controller points for future
+    # collider construction. The legacy sparse field remains available below.
+    dense_controller_points = new_controller_points.copy()
+
+    # Do farthest point sampling on the valid controller points to select the
+    # sparse controller representation used by existing PhysTwin consumers.
     valid_indices = np.arange(len(new_controller_points[0]))
     points_map = {}
     sample_points = []
@@ -348,14 +368,15 @@ def get_final_track_data(track_data, controller_threhsold=0.01):
     sample_points = np.array(sample_points)
     sample_pcd = o3d.geometry.PointCloud()
     sample_pcd.points = o3d.utility.Vector3dVector(sample_points)
-    fps_pcd = sample_pcd.farthest_point_down_sample(30)
+    fps_pcd = sample_pcd.farthest_point_down_sample(controller_point_count)
     final_indices = []
     for point in fps_pcd.points:
         final_indices.append(points_map[tuple(point)])
 
     print(f"Controller Point Number: {len(final_indices)}")
+    print(f"Dense Controller Point Number: {dense_controller_points.shape[1]}")
 
-    # Get the nearest controller points and their colors
+    # Get the sparse controller points and preserve the dense points separately.
     nearest_controller_points = new_controller_points[:, final_indices]
 
     # object_pcd = o3d.geometry.PointCloud()
@@ -377,6 +398,7 @@ def get_final_track_data(track_data, controller_threhsold=0.01):
     track_data.pop("controller_colors")
     track_data.pop("controller_visibilities")
     track_data["controller_points"] = nearest_controller_points
+    track_data["controller_points_dense"] = dense_controller_points
 
     return track_data
 
@@ -460,7 +482,9 @@ if __name__ == "__main__":
     # with open(f"test2.pkl", "rb") as f:
     #     track_data = pickle.load(f)
 
-    track_data = get_final_track_data(track_data)
+    track_data = get_final_track_data(
+        track_data, controller_point_count=args.controller_point_count
+    )
 
     with open(f"{base_path}/{case_name}/track_process_data.pkl", "wb") as f:
         pickle.dump(track_data, f)

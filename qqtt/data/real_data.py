@@ -18,6 +18,7 @@ class RealData:
         object_visibilities = data["object_visibilities"]
         object_motions_valid = data["object_motions_valid"]
         controller_points = data["controller_points"]
+        controller_points_dense = data.get("controller_points_dense", controller_points)
         other_surface_points = data["surface_points"]
         interior_points = data["interior_points"]
 
@@ -70,6 +71,9 @@ class RealData:
         )
         self.controller_points = torch.tensor(
             controller_points, dtype=torch.float32, device=cfg.device
+        )
+        self.controller_points_dense = torch.tensor(
+            controller_points_dense, dtype=torch.float32, device=cfg.device
         )
 
         self.frame_len = self.object_points.shape[0]
