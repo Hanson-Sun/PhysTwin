@@ -33,6 +33,50 @@ def _as_points(points: np.ndarray, name: str) -> np.ndarray:
     return points
 
 
+def hollow_controller_points(
+    controller_points: np.ndarray,
+    voxel_size: float,
+) -> np.ndarray:
+    """Remove duplicate and fully enclosed controller voxels.
+
+    Selection is based on frame zero and applied to every frame so the output
+    remains a consistent tracked trajectory. A voxel is retained when it lies
+    on the six-connected boundary of the occupied voxel set.
+    """
+    points = _as_points(controller_points, "controller_points")
+    if voxel_size <= 0.0:
+        raise ValueError("voxel_size must be positive")
+
+    voxel_coords = np.floor(points[0] / voxel_size).astype(np.int64)
+    unique_coords, unique_indices = np.unique(
+        voxel_coords, axis=0, return_index=True
+    )
+    occupied = {tuple(coord) for coord in unique_coords}
+    shell_mask = np.zeros(len(unique_coords), dtype=bool)
+    neighbor_offsets = (
+        (1, 0, 0),
+        (-1, 0, 0),
+        (0, 1, 0),
+        (0, -1, 0),
+        (0, 0, 1),
+        (0, 0, -1),
+    )
+    for index, coord in enumerate(unique_coords):
+        coord_tuple = tuple(coord)
+        shell_mask[index] = any(
+            tuple(coord + offset) not in occupied for offset in neighbor_offsets
+        )
+
+    selected_indices = unique_indices[shell_mask]
+    if selected_indices.size < 2:
+        raise ValueError(
+            "Hollow controller filtering removed too many points; "
+            f"input={points.shape[1]}, output={selected_indices.size}, "
+            f"voxel_size={voxel_size}"
+        )
+    return points[:, selected_indices, :].copy()
+
+
 def measure_controller_collider_coverage(
     controller_points: np.ndarray,
     object_points: np.ndarray | None = None,
