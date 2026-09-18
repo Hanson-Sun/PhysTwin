@@ -225,6 +225,9 @@ class OptimizerCMA:
         init_collision_dist = self.normalize(cfg.collision_dist, 0.01, 0.05)
         init_drag_damping = self.normalize(cfg.drag_damping, 0, 20)
         init_dashpot_damping = self.normalize(cfg.dashpot_damping, 0, 200)
+        init_controller_contact_friction = self.normalize(
+            cfg.controller_contact_friction, 0, 2
+        )
 
         x_init = [
             init_global_spring_Y,
@@ -237,6 +240,7 @@ class OptimizerCMA:
             init_collision_dist,
             init_drag_damping,
             init_dashpot_damping,
+            init_controller_contact_friction,
         ]
 
         self.objective(x_init)
@@ -265,6 +269,7 @@ class OptimizerCMA:
         final_collision_dist = self.denormalize(optimal_x[7], 0.01, 0.05)
         final_drag_damping = self.denormalize(optimal_x[8], 0, 20)
         final_dashpot_damping = self.denormalize(optimal_x[9], 0, 200)
+        final_controller_contact_friction = self.denormalize(optimal_x[10], 0, 2)
 
         # Validate the selected parameters over the full sequence before saving them.
         self.error_func(
@@ -286,6 +291,7 @@ class OptimizerCMA:
         optimal_results["collision_dist"] = final_collision_dist
         optimal_results["drag_damping"] = final_drag_damping
         optimal_results["dashpot_damping"] = final_dashpot_damping
+        optimal_results["controller_contact_friction"] = final_controller_contact_friction
 
         # Save out all the initialized parameters
         with open(f"{cfg.base_dir}/optimal_params.pkl", "wb") as f:
@@ -317,6 +323,7 @@ class OptimizerCMA:
         collision_dist = self.denormalize(parameters[7], 0.01, 0.05)
         drag_damping = self.denormalize(parameters[8], 0, 20)
         dashpot_damping = self.denormalize(parameters[9], 0, 200)
+        controller_contact_friction = self.denormalize(parameters[10], 0, 2)
 
         # Reuse topology tensors for candidates with identical topology
         # parameters. Physical parameters still use a fresh simulator because
@@ -374,6 +381,7 @@ class OptimizerCMA:
             # CMA uses the legacy sparse contact proxy; full hollow-dense
             # contact is reserved for detailed Adam training.
             controller_contact_points=self.controller_points,
+            controller_contact_friction=controller_contact_friction,
             reverse_z=cfg.reverse_z,
             spring_Y_min=cfg.spring_Y_min,
             spring_Y_max=cfg.spring_Y_max,
