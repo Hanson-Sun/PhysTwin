@@ -77,6 +77,36 @@ def hollow_controller_points(
     return points[:, selected_indices, :].copy()
 
 
+def save_controller_point_plot(
+    controller_points: np.ndarray,
+    output_path: str,
+    frame_index: int = 0,
+    hollow: bool = False,
+    voxel_size: float = 0.003,
+) -> None:
+    """Save a simple 3D scatter plot of one controller trajectory frame."""
+    import matplotlib.pyplot as plt
+
+    points = _as_points(controller_points, "controller_points")
+    if frame_index < 0 or frame_index >= points.shape[0]:
+        raise IndexError(f"frame_index must be in [0, {points.shape[0]})")
+    frame_points = points
+    if hollow:
+        frame_points = hollow_controller_points(points, voxel_size)
+    frame_points = frame_points[frame_index]
+
+    figure = plt.figure(figsize=(8, 6))
+    axis = figure.add_subplot(111, projection="3d")
+    axis.scatter(frame_points[:, 0], frame_points[:, 1], frame_points[:, 2], s=2)
+    axis.set_xlabel("x (m)")
+    axis.set_ylabel("y (m)")
+    axis.set_zlabel("z (m)")
+    axis.set_title(f"Controller points, frame {frame_index}")
+    figure.tight_layout()
+    figure.savefig(output_path, dpi=150)
+    plt.close(figure)
+
+
 def measure_controller_collider_coverage(
     controller_points: np.ndarray,
     object_points: np.ndarray | None = None,

@@ -30,7 +30,6 @@ class State:
             (num_control_points), dtype=wp.vec3, requires_grad=False
         )
         self.wp_control_v = wp.zeros_like(self.wp_control_x, requires_grad=False)
-
     def clear_forces(self):
         self.wp_vertice_forces.zero_()
 
@@ -50,20 +49,88 @@ def copy_vec3(data: wp.array(dtype=wp.vec3), origin: wp.array(dtype=wp.vec3)):
 @wp.kernel(enable_backward=False)
 def set_control_points(
     num_substeps: int,
+    substep_dt: float,
     original_control_point: wp.array(dtype=wp.vec3),
     target_control_point: wp.array(dtype=wp.vec3),
     step: int,
     control_x: wp.array(dtype=wp.vec3),
+    control_v: wp.array(dtype=wp.vec3),
 ):
-    # Set the control points in each substep
+    # Set the interpolated controller position and velocity for each substep.
     tid = wp.tid()
-
+    displacement = target_control_point[tid] - original_control_point[tid]
     t = float(step + 1) / float(num_substeps)
-    control_x[tid] = (
-        original_control_point[tid]
-        + (target_control_point[tid] - original_control_point[tid]) * t
-    )
+    control_x[tid] = original_control_point[tid] + displacement * t
+    control_v[tid] = displacement / (float(num_substeps) * substep_dt)
 
+
+
+@wp.kernel
+def batched_controller_contact_force(
+    x: wp.array(dtype=wp.vec3),
+    v: wp.array(dtype=wp.vec3),
+    controller_x: wp.array(dtype=wp.vec3),
+    controller_v: wp.array(dtype=wp.vec3),
+    controller_grid: wp.uint64,
+    object_massnode_single: int,
+    controller_massnode_single: int,
+    contact_radius: float,
+    activation_radius: float,
+    release_radius: float,
+    contact_stiffness: float,
+    contact_friction: float,
+    contact_active: wp.array(dtype=wp.int32),
+    contact_count: wp.array(dtype=wp.int32),
+    active_count: wp.array(dtype=wp.int32),
+    f: wp.array(dtype=wp.vec3),
+):
+    object_idx = wp.tid()
+    instance_idx = object_idx // object_massnode_single
+    first_controller = instance_idx * controller_massnode_single
+    last_controller = first_controller + controller_massnode_single
+    object_position = x[object_idx]
+    object_velocity = v[object_idx]
+    was_active = contact_active[object_idx] != 0
+    has_activation = int(0)
+    has_release = int(0)
+
+    neighbors = wp.hash_grid_query(controller_grid, object_position, release_radius)
+    for controller_idx in neighbors:
+        if controller_idx >= first_controller and controller_idx < last_controller:
+            distance = wp.length(object_position - controller_x[controller_idx])
+            if distance <= activation_radius:
+                has_activation = 1
+            if distance <= release_radius:
+                has_release = 1
+
+    is_active = (has_release != 0) if was_active else (has_activation != 0)
+    contact_active[object_idx] = 1 if is_active else 0
+    if is_active:
+        wp.atomic_add(active_count, 0, 1)
+
+    total_force = wp.vec3(0.0, 0.0, 0.0)
+    if is_active:
+        neighbors = wp.hash_grid_query(controller_grid, object_position, contact_radius)
+        for controller_idx in neighbors:
+            if controller_idx >= first_controller and controller_idx < last_controller:
+                delta = object_position - controller_x[controller_idx]
+                distance = wp.length(delta)
+                penetration = contact_radius - distance
+                if penetration > 0.0:
+                    normal = delta / wp.max(distance, 1e-6)
+                    normal_force = contact_stiffness * penetration
+                    total_force += normal_force * normal
+                    relative_velocity = object_velocity - controller_v[controller_idx]
+                    tangential_velocity = relative_velocity - wp.dot(relative_velocity, normal) * normal
+                    tangential_speed = wp.length(tangential_velocity)
+                    if tangential_speed > 1e-6:
+                        friction_force = wp.min(
+                            contact_friction * normal_force,
+                            tangential_speed * contact_stiffness,
+                        )
+                        total_force -= friction_force * tangential_velocity / tangential_speed
+                    wp.atomic_add(contact_count, 0, 1)
+    wp.atomic_add(f, object_idx, total_force)
 
 
 @wp.kernel
@@ -749,6 +816,23 @@ class SpringMassSystemWarp:
             controller_rest_location.clone(), dtype=wp.vec3, requires_grad=False
         )
         self.num_controller_points = controller_rest_location.shape[0]
+        self.controller_contact_radius = float(getattr(cfg, "controller_contact_radius", 0.014))
+        self.controller_contact_activation_radius = float(
+            getattr(cfg, "controller_contact_activation_radius", self.controller_contact_radius)
+        )
+        self.controller_contact_release_radius = float(
+            getattr(cfg, "controller_contact_release_radius", self.controller_contact_radius * 1.25)
+        )
+        if self.controller_contact_activation_radius > self.controller_contact_release_radius:
+            raise ValueError("controller contact activation radius must not exceed release radius")
+        self.controller_contact_stiffness = float(getattr(cfg, "controller_contact_stiffness", 3e4))
+        self.controller_contact_friction = float(getattr(cfg, "controller_contact_friction", 0.3))
+        self.controller_contact_grid = wp.HashGrid(128, 128, 128)
+        self.controller_contact_active = wp.zeros(
+            self.object_massnode_total, dtype=wp.int32, requires_grad=False
+        )
+        self.controller_contact_count = wp.zeros(1, dtype=wp.int32, requires_grad=False)
+        self.controller_active_contact_count = wp.zeros(1, dtype=wp.int32, requires_grad=False)
   
         # Preallocating the warp parameters
         self.wp_states = []
@@ -855,11 +939,15 @@ class SpringMassSystemWarp:
                 dim=self.num_controller_points,
                 inputs=[
                     self.num_substeps,
+                    self.dt,
                     self.wp_original_control_point,
                     self.wp_target_control_point,
                     i,
                 ],
-                outputs=[self.wp_states[i].wp_control_x],
+                outputs=[
+                    self.wp_states[i].wp_control_x,
+                    self.wp_states[i].wp_control_v,
+                ],
             )
             
             if self.use_gather_solver:
@@ -931,6 +1019,35 @@ class SpringMassSystemWarp:
                     ],
                     outputs=[self.wp_states[i].wp_vertice_forces],
                 )
+
+            self.controller_contact_grid.build(
+                self.wp_states[i].wp_control_x,
+                self.controller_contact_release_radius,
+            )
+            self.controller_contact_count.zero_()
+            self.controller_active_contact_count.zero_()
+            wp.launch(
+                batched_controller_contact_force,
+                dim=self.object_massnode_total,
+                inputs=[
+                    self.wp_states[i].wp_x,
+                    self.wp_states[i].wp_v,
+                    self.wp_states[i].wp_control_x,
+                    self.wp_states[i].wp_control_v,
+                    self.controller_contact_grid.id,
+                    self.object_massnode_single,
+                    self.controller_massnode_single,
+                    self.controller_contact_radius,
+                    self.controller_contact_activation_radius,
+                    self.controller_contact_release_radius,
+                    self.controller_contact_stiffness,
+                    self.controller_contact_friction,
+                    self.controller_contact_active,
+                    self.controller_contact_count,
+                    self.controller_active_contact_count,
+                ],
+                outputs=[self.wp_states[i].wp_vertice_forces],
+            )
 
             if self.object_collision_flag:
                 output_v = self.wp_states[i].wp_v_before_collision
