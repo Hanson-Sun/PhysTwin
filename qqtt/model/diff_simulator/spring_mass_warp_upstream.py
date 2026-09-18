@@ -150,9 +150,13 @@ def controller_contact_force(
     controller_v: wp.array(dtype=wp.vec3),
     controller_grid: wp.uint64,
     contact_radius: float,
+    activation_radius: float,
+    release_radius: float,
     contact_stiffness: float,
     contact_friction: float,
+    contact_active: wp.array(dtype=wp.int32),
     contact_count: wp.array(dtype=wp.int32),
+    active_count: wp.array(dtype=wp.int32),
     f: wp.array(dtype=wp.vec3),
 ):
     """Apply unilateral normal contact and capped tangential friction."""
@@ -160,26 +164,44 @@ def controller_contact_force(
     object_position = x[object_idx]
     object_velocity = v[object_idx]
     total_force = wp.vec3(0.0, 0.0, 0.0)
-    neighbors = wp.hash_grid_query(controller_grid, object_position, contact_radius)
+    was_active = contact_active[object_idx] != 0
+    has_activation = int(0)
+    has_release = int(0)
+    neighbors = wp.hash_grid_query(controller_grid, object_position, release_radius)
     for controller_idx in neighbors:
         delta = object_position - controller_x[controller_idx]
         distance = wp.length(delta)
-        penetration = contact_radius - distance
-        if penetration > 0.0:
-            normal = delta / wp.max(distance, 1e-6)
-            normal_force = contact_stiffness * penetration
-            total_force += normal_force * normal
+        if distance <= activation_radius:
+            has_activation = 1
+        if distance <= release_radius:
+            has_release = 1
 
-            relative_velocity = object_velocity - controller_v[controller_idx]
-            tangential_velocity = relative_velocity - wp.dot(relative_velocity, normal) * normal
-            tangential_speed = wp.length(tangential_velocity)
-            if tangential_speed > 1e-6:
-                friction_force = wp.min(
-                    contact_friction * normal_force,
-                    tangential_speed * contact_stiffness,
-                )
-                total_force -= friction_force * tangential_velocity / tangential_speed
-            wp.atomic_add(contact_count, 0, 1)
+    is_active = (has_release != 0) if was_active else (has_activation != 0)
+    contact_active[object_idx] = 1 if is_active else 0
+    if is_active:
+        wp.atomic_add(active_count, 0, 1)
+
+    if is_active:
+        neighbors = wp.hash_grid_query(controller_grid, object_position, contact_radius)
+        for controller_idx in neighbors:
+            delta = object_position - controller_x[controller_idx]
+            distance = wp.length(delta)
+            penetration = contact_radius - distance
+            if penetration > 0.0:
+                normal = delta / wp.max(distance, 1e-6)
+                normal_force = contact_stiffness * penetration
+                total_force += normal_force * normal
+
+                relative_velocity = object_velocity - controller_v[controller_idx]
+                tangential_velocity = relative_velocity - wp.dot(relative_velocity, normal) * normal
+                tangential_speed = wp.length(tangential_velocity)
+                if tangential_speed > 1e-6:
+                    friction_force = wp.min(
+                        contact_friction * normal_force,
+                        tangential_speed * contact_stiffness,
+                    )
+                    total_force -= friction_force * tangential_velocity / tangential_speed
+                wp.atomic_add(contact_count, 0, 1)
     wp.atomic_add(f, object_idx, total_force)
 
 
@@ -696,6 +718,14 @@ class SpringMassSystemWarp:
             else 0
         )
         self.controller_contact_radius = float(getattr(cfg, "controller_contact_radius", 0.014))
+        self.controller_contact_activation_radius = float(
+            getattr(cfg, "controller_contact_activation_radius", self.controller_contact_radius)
+        )
+        self.controller_contact_release_radius = float(
+            getattr(cfg, "controller_contact_release_radius", self.controller_contact_radius * 1.25)
+        )
+        if self.controller_contact_activation_radius > self.controller_contact_release_radius:
+            raise ValueError("controller contact activation radius must not exceed release radius")
         self.controller_contact_stiffness = float(
             getattr(cfg, "controller_contact_stiffness", 3e4)
         )
@@ -704,6 +734,10 @@ class SpringMassSystemWarp:
         self.controller_contact_friction = float(controller_contact_friction)
         self.controller_contact_enabled = self.controller_contact_points is not None
         self.controller_contact_count = wp.zeros(1, dtype=wp.int32, requires_grad=False)
+        self.controller_active_contact_count = wp.zeros(1, dtype=wp.int32, requires_grad=False)
+        self.controller_contact_active = wp.zeros(
+            self.num_object_points, dtype=wp.int32, requires_grad=False
+        )
         self.controller_contact_grid = (
             wp.HashGrid(128, 128, 128) if self.controller_contact_enabled else None
         )
@@ -1095,9 +1129,10 @@ class SpringMassSystemWarp:
             if self.controller_contact_enabled:
                 self.controller_contact_grid.build(
                     self.wp_states[i].wp_contact_x,
-                    self.controller_contact_radius,
+                    self.controller_contact_release_radius,
                 )
                 self.controller_contact_count.zero_()
+                self.controller_active_contact_count.zero_()
                 wp.launch(
                     controller_contact_force,
                     dim=self.num_object_points,
@@ -1108,9 +1143,13 @@ class SpringMassSystemWarp:
                         self.wp_states[i].wp_contact_v,
                         self.controller_contact_grid.id,
                         self.controller_contact_radius,
+                        self.controller_contact_activation_radius,
+                        self.controller_contact_release_radius,
                         self.controller_contact_stiffness,
                         self.controller_contact_friction,
+                        self.controller_contact_active,
                         self.controller_contact_count,
+                        self.controller_active_contact_count,
                     ],
                     outputs=[self.wp_states[i].wp_vertice_forces],
                 )

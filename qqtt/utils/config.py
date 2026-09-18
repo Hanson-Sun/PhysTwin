@@ -26,6 +26,8 @@ class Config:
         self.controller_radius = 0.04
         self.controller_max_neighbours = 50
         self.controller_contact_radius = 0.014
+        self.controller_contact_activation_radius = 0.014
+        self.controller_contact_release_radius = 0.0175
         self.controller_contact_stiffness = 3e4
         self.controller_contact_friction = 0.3
         self.controller_collider_voxel_size = 0.003
