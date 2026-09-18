@@ -77,6 +77,7 @@ class InvPhyTrainerWarp:
             self.object_visibilities = self.dataset.object_visibilities
             self.object_motions_valid = self.dataset.object_motions_valid
             self.controller_points = self.dataset.controller_points
+            self.controller_points_dense = self.dataset.controller_points_dense
             self.structure_points = self.dataset.structure_points
             self.num_original_points = self.dataset.num_original_points
             self.num_surface_points = self.dataset.num_surface_points
@@ -150,6 +151,7 @@ class InvPhyTrainerWarp:
             num_surface_points=self.num_surface_points,
             num_original_points=self.num_original_points,
             controller_points=self.controller_points,
+            controller_contact_points=self.controller_points_dense,
             reverse_z=cfg.reverse_z,
             spring_Y_min=cfg.spring_Y_min,
             spring_Y_max=cfg.spring_Y_max,
