@@ -2,6 +2,7 @@ import numpy as np
 import torch
 import pickle
 from qqtt.utils import logger, cfg
+from qqtt.utils.controller_collider import hollow_controller_points
 import matplotlib.pyplot as plt
 
 
@@ -71,6 +72,12 @@ class RealData:
         )
         self.controller_points = torch.tensor(
             controller_points, dtype=torch.float32, device=cfg.device
+        )
+        dense_voxel_size = float(
+            getattr(cfg, "controller_collider_voxel_size", 0.003)
+        )
+        controller_points_dense = hollow_controller_points(
+            controller_points_dense, dense_voxel_size
         )
         self.controller_points_dense = torch.tensor(
             controller_points_dense, dtype=torch.float32, device=cfg.device

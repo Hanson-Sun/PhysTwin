@@ -27,6 +27,7 @@ class Config:
         self.controller_max_neighbours = 50
         self.controller_contact_radius = 0.014
         self.controller_contact_stiffness = 3e4
+        self.controller_collider_voxel_size = 0.003
 
         self.spring_Y_min = 0
         self.spring_Y_max = 1e5

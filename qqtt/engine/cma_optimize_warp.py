@@ -36,9 +36,10 @@ class OptimizerCMA:
 
         self.init_masks = None
         self.init_velocities = None
+        self._topology_cache = {}
         # Load the data
         if cfg.data_type == "real":
-            self.dataset = RealData(visualize=False)
+            self.dataset = RealData(visualize=False, save_gt=False)
             # Get the object points and controller points
             self.object_points = self.dataset.object_points
             self.object_colors = self.dataset.object_colors
@@ -319,26 +320,39 @@ class OptimizerCMA:
         drag_damping = self.denormalize(parameters[10], 0, 20)
         dashpot_damping = self.denormalize(parameters[11], 0, 200)
 
-        # Initialize the vertices, springs, rest lengths and masses
-        if self.controller_points is None:
-            firt_frame_controller_points = None
-        else:
-            firt_frame_controller_points = self.controller_points[0]
+        # Reuse topology tensors for candidates with identical topology
+        # parameters. Physical parameters still use a fresh simulator because
+        # captured Warp graphs bake timestep/damping/collision scalars.
+        topology_key = (
+            float(object_radius),
+            int(object_max_neighbours),
+            float(controller_radius),
+            int(controller_max_neighbours),
+        )
+        cached_topology = self._topology_cache.get(topology_key)
+        if cached_topology is None:
+            if self.controller_points is None:
+                first_frame_controller_points = None
+            else:
+                first_frame_controller_points = self.controller_points[0]
+            cached_topology = self._init_start(
+                self.structure_points,
+                first_frame_controller_points,
+                object_radius=object_radius,
+                object_max_neighbours=object_max_neighbours,
+                controller_radius=controller_radius,
+                controller_max_neighbours=controller_max_neighbours,
+                mask=self.init_masks,
+            )
+            self._topology_cache[topology_key] = cached_topology
+
         (
             self.init_vertices,
             self.init_springs,
             self.init_rest_lengths,
             self.init_masses,
             self.num_object_springs,
-        ) = self._init_start(
-            self.structure_points,
-            firt_frame_controller_points,
-            object_radius=object_radius,
-            object_max_neighbours=object_max_neighbours,
-            controller_radius=controller_radius,
-            controller_max_neighbours=controller_max_neighbours,
-            mask=self.init_masks,
-        )
+        ) = cached_topology
 
         self.simulator = SpringMassSystemWarp(
             self.init_vertices,
@@ -361,7 +375,9 @@ class OptimizerCMA:
             num_surface_points=self.num_surface_points,
             num_original_points=self.num_original_points,
             controller_points=self.controller_points,
-            controller_contact_points=self.controller_points_dense,
+            # CMA uses the legacy sparse contact proxy; full hollow-dense
+            # contact is reserved for detailed Adam training.
+            controller_contact_points=self.controller_points,
             reverse_z=cfg.reverse_z,
             spring_Y_min=cfg.spring_Y_min,
             spring_Y_max=cfg.spring_Y_max,
