@@ -203,7 +203,7 @@ def main():
     _ = torch.empty(1, device="cuda")
     set_all_seeds(42)
 
-    if not export_only:
+    if not export_only and args.mode == "perf":
         import pycuda.driver as cuda_driver
 
         cuda_driver.init()

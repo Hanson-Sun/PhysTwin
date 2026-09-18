@@ -15,9 +15,7 @@ import open3d as o3d
 import torchvision
 import cv2
 import glfw
-import pycuda.driver as cuda_driver
 from OpenGL import GL as gl
-from pycuda.gl import RegisteredBuffer, graphics_map_flags
 
 from gaussian_splatting.scene.cameras import Camera
 from gaussian_splatting.scene.gaussian_model import GaussianModel
@@ -826,8 +824,6 @@ class InvPhyTrainerWarp:
         intrinsic_T = K_cuda.T.contiguous()
         inv_Lz = 1.0 / lights[:, 2]
         BYTES_PER_PIXEL = 4
-        pbo_size = width * height * BYTES_PER_PIXEL
-        row_pitch = width * BYTES_PER_PIXEL
 
         tex = gl.glGenTextures(1)
         gl.glBindTexture(gl.GL_TEXTURE_2D, tex)
@@ -846,11 +842,6 @@ class InvPhyTrainerWarp:
         )
         gl.glBindTexture(gl.GL_TEXTURE_2D, 0)
 
-        pbo = gl.glGenBuffers(1)
-        gl.glBindBuffer(gl.GL_PIXEL_UNPACK_BUFFER, pbo)
-        gl.glBufferData(gl.GL_PIXEL_UNPACK_BUFFER, pbo_size, None, gl.GL_STREAM_DRAW)
-        gl.glBindBuffer(gl.GL_PIXEL_UNPACK_BUFFER, 0)
-        reg = RegisteredBuffer(int(pbo), graphics_map_flags.WRITE_DISCARD)
 
         VS = """
         #version 330 core
@@ -882,14 +873,6 @@ class InvPhyTrainerWarp:
         gl.glUseProgram(0)
         vao = gl.glGenVertexArrays(1)
         gl.glBindVertexArray(vao)
-
-        pbo_stream = cuda_driver.Stream()
-
-        cpy2d = cuda_driver.Memcpy2D()
-        cpy2d.src_pitch = row_pitch
-        cpy2d.dst_pitch = row_pitch
-        cpy2d.width_in_bytes = row_pitch
-        cpy2d.height = height
 
         frame_rgba = torch.empty((height, width, 4), dtype=torch.uint8, device=cfg.device)
         frame = torch.empty_like(overlay)
@@ -1009,19 +992,11 @@ class InvPhyTrainerWarp:
                 frame_rgba[:, :, 3] = 255
                 torch.cuda.current_stream().synchronize()
 
-                mapping = reg.map()
-                try:
-                    ptr, _ = mapping.device_ptr_and_size()
-                    cpy2d.set_src_device(frame_rgba.data_ptr())
-                    cpy2d.set_dst_device(ptr)
-                    cpy2d(pbo_stream)
-
-                    pbo_stream.synchronize()
-                finally:
-                    mapping.unmap()
-
+                # Avoid CUDA-OpenGL PBO interop here. It is not supported on
+                # all desktop/WSL driver combinations and can invalidate the
+                # CUDA context. Upload the completed frame through OpenGL.
+                frame_rgba_cpu = frame_rgba.cpu().numpy()
                 gl.glBindTexture(gl.GL_TEXTURE_2D, tex)
-                gl.glBindBuffer(gl.GL_PIXEL_UNPACK_BUFFER, pbo)
                 gl.glTexSubImage2D(
                     gl.GL_TEXTURE_2D,
                     0,
@@ -1031,9 +1006,8 @@ class InvPhyTrainerWarp:
                     height,
                     gl.GL_RGBA,
                     gl.GL_UNSIGNED_BYTE,
-                    None,
+                    frame_rgba_cpu,
                 )
-                gl.glBindBuffer(gl.GL_PIXEL_UNPACK_BUFFER, 0)
 
                 gl.glViewport(0, 0, width, height)
                 gl.glDisable(gl.GL_DEPTH_TEST)
@@ -1212,12 +1186,11 @@ class InvPhyTrainerWarp:
                     n_gaussians_single_obj,
                 )
 
-            reg.unregister()
             gl.glDeleteProgram(prog)
             gl.glDeleteTextures([tex])
-            gl.glDeleteBuffers(1, [pbo])
             gl.glDeleteVertexArrays(1, [vao])
-            cuda_ctx.pop()
+            if cuda_ctx is not None:
+                cuda_ctx.pop()
 
 
     def _create_gs_view(self, w2c, intrinsic, height, width):
