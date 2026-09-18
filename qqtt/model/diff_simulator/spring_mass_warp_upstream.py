@@ -25,6 +25,7 @@ class State:
         self.wp_contact_x = wp.zeros(
             (num_contact_points), dtype=wp.vec3, requires_grad=False
         )
+        self.wp_contact_v = wp.zeros_like(self.wp_contact_x, requires_grad=False)
 
     def clear_forces(self):
         self.wp_vertice_forces.zero_()
@@ -66,19 +67,20 @@ def copy_float(data: wp.array(dtype=wp.float32), origin: wp.array(dtype=wp.float
 @wp.kernel(enable_backward=False)
 def set_control_points(
     num_substeps: int,
+    substep_dt: float,
     original_control_point: wp.array(dtype=wp.vec3),
     target_control_point: wp.array(dtype=wp.vec3),
     step: int,
     control_x: wp.array(dtype=wp.vec3),
+    control_v: wp.array(dtype=wp.vec3),
 ):
-    # Set the control points in each substep
+    # Set the interpolated position and kinematic velocity for each substep.
     tid = wp.tid()
 
+    displacement = target_control_point[tid] - original_control_point[tid]
     t = float(step + 1) / float(num_substeps)
-    control_x[tid] = (
-        original_control_point[tid]
-        + (target_control_point[tid] - original_control_point[tid]) * t
-    )
+    control_x[tid] = original_control_point[tid] + displacement * t
+    control_v[tid] = displacement / (float(num_substeps) * substep_dt)
 
 
 @wp.kernel
@@ -143,16 +145,20 @@ def eval_springs(
 @wp.kernel
 def controller_contact_force(
     x: wp.array(dtype=wp.vec3),
+    v: wp.array(dtype=wp.vec3),
     controller_x: wp.array(dtype=wp.vec3),
+    controller_v: wp.array(dtype=wp.vec3),
     controller_grid: wp.uint64,
     contact_radius: float,
     contact_stiffness: float,
+    contact_friction: float,
     contact_count: wp.array(dtype=wp.int32),
     f: wp.array(dtype=wp.vec3),
 ):
-    """Apply unilateral normal contact from nearby kinematic controller points."""
+    """Apply unilateral normal contact and capped tangential friction."""
     object_idx = wp.tid()
     object_position = x[object_idx]
+    object_velocity = v[object_idx]
     total_force = wp.vec3(0.0, 0.0, 0.0)
     neighbors = wp.hash_grid_query(controller_grid, object_position, contact_radius)
     for controller_idx in neighbors:
@@ -161,7 +167,18 @@ def controller_contact_force(
         penetration = contact_radius - distance
         if penetration > 0.0:
             normal = delta / wp.max(distance, 1e-6)
-            total_force += contact_stiffness * penetration * normal
+            normal_force = contact_stiffness * penetration
+            total_force += normal_force * normal
+
+            relative_velocity = object_velocity - controller_v[controller_idx]
+            tangential_velocity = relative_velocity - wp.dot(relative_velocity, normal) * normal
+            tangential_speed = wp.length(tangential_velocity)
+            if tangential_speed > 1e-6:
+                friction_force = wp.min(
+                    contact_friction * normal_force,
+                    tangential_speed * contact_stiffness,
+                )
+                total_force -= friction_force * tangential_velocity / tangential_speed
             wp.atomic_add(contact_count, 0, 1)
     wp.atomic_add(f, object_idx, total_force)
 
@@ -618,6 +635,7 @@ class SpringMassSystemWarp:
         num_original_points=None,
         controller_points=None,
         controller_contact_points=None,
+        controller_contact_friction=None,
         reverse_z=False,
         spring_Y_min=1e3,
         spring_Y_max=1e5,
@@ -681,6 +699,9 @@ class SpringMassSystemWarp:
         self.controller_contact_stiffness = float(
             getattr(cfg, "controller_contact_stiffness", 3e4)
         )
+        if controller_contact_friction is None:
+            controller_contact_friction = getattr(cfg, "controller_contact_friction", 0.3)
+        self.controller_contact_friction = float(controller_contact_friction)
         self.controller_contact_enabled = self.controller_contact_points is not None
         self.controller_contact_count = wp.zeros(1, dtype=wp.int32, requires_grad=False)
         self.controller_contact_grid = (
@@ -1024,11 +1045,15 @@ class SpringMassSystemWarp:
                     dim=self.num_control_points,
                     inputs=[
                         self.num_substeps,
+                        self.dt,
                         self.wp_original_control_point,
                         self.wp_target_control_point,
                         i,
                     ],
-                    outputs=[self.wp_states[i].wp_control_x],
+                    outputs=[
+                        self.wp_states[i].wp_control_x,
+                        self.wp_states[i].wp_control_v,
+                    ],
                 )
                 if self.num_contact_points:
                     wp.launch(
@@ -1036,11 +1061,15 @@ class SpringMassSystemWarp:
                         dim=self.num_contact_points,
                         inputs=[
                             self.num_substeps,
+                            self.dt,
                             self.wp_original_contact_point,
                             self.wp_target_contact_point,
                             i,
                         ],
-                        outputs=[self.wp_states[i].wp_contact_x],
+                        outputs=[
+                            self.wp_states[i].wp_contact_x,
+                            self.wp_states[i].wp_contact_v,
+                        ],
                     )
 
             # Calculate the spring forces
@@ -1074,10 +1103,13 @@ class SpringMassSystemWarp:
                     dim=self.num_object_points,
                     inputs=[
                         self.wp_states[i].wp_x,
+                        self.wp_states[i].wp_v,
                         self.wp_states[i].wp_contact_x,
+                        self.wp_states[i].wp_contact_v,
                         self.controller_contact_grid.id,
                         self.controller_contact_radius,
                         self.controller_contact_stiffness,
+                        self.controller_contact_friction,
                         self.controller_contact_count,
                     ],
                     outputs=[self.wp_states[i].wp_vertice_forces],
