@@ -200,3 +200,23 @@ point depth files as metres by default. Use `--unit meters` or
 
 1. `pip install mujoco`
 2. `pip install gymnasium`
+
+## Controller Point Visualization
+
+Use `scripts/visualize_controller_points.py` to save a simple static 3D plot of controller points from a PhysTwin `final_data.pkl` file.
+
+Plot the hollow dense controller shell for a selected frame:
+
+```bash
+python scripts/visualize_controller_points.py \
+  data/different_types/sim_rope/final_data.pkl \
+  controller_points.png \
+  --dense --hollow --frame 50
+```
+
+Options:
+
+- `--dense`: plot `controller_points_dense` instead of the legacy sparse points.
+- `--hollow`: remove duplicate/interior dense voxels before plotting.
+- `--frame N`: select the trajectory frame to plot.
+- `--voxel-size SIZE`: configure hollow-shell voxel size; default is `0.003` meters.
