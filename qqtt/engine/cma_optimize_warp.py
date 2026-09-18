@@ -214,10 +214,10 @@ class OptimizerCMA:
         )
         init_object_radius = self.normalize(cfg.object_radius, 0.01, 0.05)
         init_object_max_neighbours = self.normalize(cfg.object_max_neighbours, 10, 50)
-        init_controller_radius = self.normalize(cfg.controller_radius, 0.01, 0.08)
-        init_controller_max_neighbours = self.normalize(
-            cfg.controller_max_neighbours, 10, 80
-        )
+        # Controller geometry/topology is fixed during CMA. Only physical
+        # parameters should vary between candidates.
+        fixed_controller_radius = cfg.controller_radius
+        fixed_controller_max_neighbours = cfg.controller_max_neighbours
         init_collide_elas = cfg.collide_elas
         init_collide_fric = self.normalize(cfg.collide_fric, 0, 2)
         init_collide_object_elas = cfg.collide_object_elas
@@ -230,8 +230,6 @@ class OptimizerCMA:
             init_global_spring_Y,
             init_object_radius,
             init_object_max_neighbours,
-            init_controller_radius,
-            init_controller_max_neighbours,
             init_collide_elas,
             init_collide_fric,
             init_collide_object_elas,
@@ -258,15 +256,15 @@ class OptimizerCMA:
         )
         final_object_radius = self.denormalize(optimal_x[1], 0.01, 0.05)
         final_object_max_neighbours = int(self.denormalize(optimal_x[2], 10, 50))
-        final_controller_radius = self.denormalize(optimal_x[3], 0.01, 0.08)
-        final_controller_max_neighbours = int(self.denormalize(optimal_x[4], 10, 80))
-        final_collide_elas = optimal_x[5]
-        final_collide_fric = self.denormalize(optimal_x[6], 0, 2)
-        final_collide_object_elas = optimal_x[7]
-        final_collide_object_fric = self.denormalize(optimal_x[8], 0, 2)
-        final_collision_dist = self.denormalize(optimal_x[9], 0.01, 0.05)
-        final_drag_damping = self.denormalize(optimal_x[10], 0, 20)
-        final_dashpot_damping = self.denormalize(optimal_x[11], 0, 200)
+        final_controller_radius = fixed_controller_radius
+        final_controller_max_neighbours = fixed_controller_max_neighbours
+        final_collide_elas = optimal_x[3]
+        final_collide_fric = self.denormalize(optimal_x[4], 0, 2)
+        final_collide_object_elas = optimal_x[5]
+        final_collide_object_fric = self.denormalize(optimal_x[6], 0, 2)
+        final_collision_dist = self.denormalize(optimal_x[7], 0.01, 0.05)
+        final_drag_damping = self.denormalize(optimal_x[8], 0, 20)
+        final_dashpot_damping = self.denormalize(optimal_x[9], 0, 200)
 
         # Validate the selected parameters over the full sequence before saving them.
         self.error_func(
@@ -310,15 +308,15 @@ class OptimizerCMA:
         )
         object_radius = self.denormalize(parameters[1], 0.01, 0.05)
         object_max_neighbours = int(self.denormalize(parameters[2], 10, 50))
-        controller_radius = self.denormalize(parameters[3], 0.01, 0.08)
-        controller_max_neighbours = int(self.denormalize(parameters[4], 10, 80))
-        collide_elas = parameters[5]
-        collide_fric = self.denormalize(parameters[6], 0, 2)
-        collide_object_elas = parameters[7]
-        collide_object_fric = self.denormalize(parameters[8], 0, 2)
-        collision_dist = self.denormalize(parameters[9], 0.01, 0.05)
-        drag_damping = self.denormalize(parameters[10], 0, 20)
-        dashpot_damping = self.denormalize(parameters[11], 0, 200)
+        controller_radius = cfg.controller_radius
+        controller_max_neighbours = cfg.controller_max_neighbours
+        collide_elas = parameters[3]
+        collide_fric = self.denormalize(parameters[4], 0, 2)
+        collide_object_elas = parameters[5]
+        collide_object_fric = self.denormalize(parameters[6], 0, 2)
+        collision_dist = self.denormalize(parameters[7], 0.01, 0.05)
+        drag_damping = self.denormalize(parameters[8], 0, 20)
+        dashpot_damping = self.denormalize(parameters[9], 0, 200)
 
         # Reuse topology tensors for candidates with identical topology
         # parameters. Physical parameters still use a fresh simulator because
@@ -326,8 +324,6 @@ class OptimizerCMA:
         topology_key = (
             float(object_radius),
             int(object_max_neighbours),
-            float(controller_radius),
-            int(controller_max_neighbours),
         )
         cached_topology = self._topology_cache.get(topology_key)
         if cached_topology is None:
