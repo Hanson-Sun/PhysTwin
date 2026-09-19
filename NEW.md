@@ -203,20 +203,24 @@ point depth files as metres by default. Use `--unit meters` or
 
 ## Controller Point Visualization
 
-Use `scripts/visualize_controller_points.py` to save a simple static 3D plot of controller points from a PhysTwin `final_data.pkl` file.
-
-Plot the hollow dense controller shell for a selected frame:
+Use `scripts/visualize_controller_points.py` to create an MP4 from the
+simulated vertex trajectory. It renders one calibrated headless Open3D panel per
+camera and appends the panels horizontally, preserving each panel's native
+resolution. The script prefers `inference.pkl` next to `final_data.pkl`; if it
+is missing, it falls back to the object trajectory in `final_data.pkl`.
 
 ```bash
 python scripts/visualize_controller_points.py \
   data/different_types/sim_rope/final_data.pkl \
-  controller_points.png \
-  --dense --hollow --frame 50
+  data/different_types/sim_rope/inference_with_controller_points.mp4 \
+  --dense --hollow
 ```
 
 Options:
 
-- `--dense`: plot `controller_points_dense` instead of the legacy sparse points.
-- `--hollow`: remove duplicate/interior dense voxels before plotting.
-- `--frame N`: select the trajectory frame to plot.
+- `--trajectory PATH`: use a different simulated vertex trajectory.
+- `--dense`: show `controller_points_dense` instead of sparse points.
+- `--hollow`: remove duplicate/interior dense voxels before visualization.
+- `--inset-scale SIZE`: set the inset size as a fraction of the video; default is `0.34`.
+- `--trail-length N`: show the previous N controller positions in orange.
 - `--voxel-size SIZE`: configure hollow-shell voxel size; default is `0.003` meters.

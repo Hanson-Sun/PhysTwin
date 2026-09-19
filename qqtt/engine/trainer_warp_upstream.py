@@ -162,14 +162,21 @@ class InvPhyTrainerWarp:
         )
 
         if not pure_inference_mode:
-            self.optimizer = torch.optim.Adam(
-                [
-                    wp.to_torch(self.simulator.wp_spring_Y),
-                    wp.to_torch(self.simulator.wp_collide_elas),
-                    wp.to_torch(self.simulator.wp_collide_fric),
+            self.trainable_parameters = [
+                ("spring_Y", wp.to_torch(self.simulator.wp_spring_Y)),
+                ("collide_elas", wp.to_torch(self.simulator.wp_collide_elas)),
+                ("collide_fric", wp.to_torch(self.simulator.wp_collide_fric)),
+                (
+                    "collide_object_elas",
                     wp.to_torch(self.simulator.wp_collide_object_elas),
+                ),
+                (
+                    "collide_object_fric",
                     wp.to_torch(self.simulator.wp_collide_object_fric),
-                ],
+                ),
+            ]
+            self.optimizer = torch.optim.Adam(
+                [parameter for _, parameter in self.trainable_parameters],
                 lr=cfg.base_lr,
                 betas=(0.9, 0.99),
             )
@@ -325,6 +332,15 @@ class InvPhyTrainerWarp:
         # Train the model with the physical simulator
         for i in range(start_epoch + 1, cfg.iterations):
             total_loss = 0.0
+            total_controller_contacts = 0
+            total_active_controller_contacts = 0
+            max_object_displacement = 0.0
+            max_spring_grad_norm = 0.0
+            max_gradient_norms = {name: 0.0 for name, _ in self.trainable_parameters}
+            epoch_parameter_start = {
+                name: parameter.detach().clone()
+                for name, parameter in self.trainable_parameters
+            }
             if cfg.data_type == "real":
                 total_chamfer_loss = 0.0
                 total_track_loss = 0.0
@@ -350,6 +366,56 @@ class InvPhyTrainerWarp:
                                 self.simulator.step()
                                 self.simulator.calculate_simple_loss()
                             self.simulator.tape.backward(self.simulator.loss)
+
+                    spring_grad = wp.to_torch(
+                        self.simulator.wp_spring_Y.grad, requires_grad=False
+                    )
+                    for parameter_name, parameter in self.trainable_parameters:
+                        gradient = parameter.grad
+                        if gradient is None:
+                            raise RuntimeError(
+                                f"missing gradient for {parameter_name} at epoch={i}, frame={j}"
+                            )
+                        if not torch.isfinite(gradient).all():
+                            raise FloatingPointError(
+                                f"non-finite gradient for {parameter_name} at epoch={i}, frame={j}"
+                            )
+                        gradient_norm = float(torch.linalg.vector_norm(gradient).item())
+                        max_gradient_norms[parameter_name] = max(
+                            max_gradient_norms[parameter_name], gradient_norm
+                        )
+                    max_spring_grad_norm = max(
+                        max_spring_grad_norm,
+                        float(torch.linalg.vector_norm(spring_grad).item()),
+                    )
+
+                    contact_count = int(
+                        wp.to_torch(
+                            self.simulator.controller_contact_count, requires_grad=False
+                        )[0].item()
+                    )
+                    active_contact_count = int(
+                        wp.to_torch(
+                            self.simulator.controller_active_contact_count,
+                            requires_grad=False,
+                        )[0].item()
+                    )
+                    total_controller_contacts += contact_count
+                    total_active_controller_contacts += active_contact_count
+                    object_state = wp.to_torch(
+                        self.simulator.wp_states[-1].wp_x[: self.num_all_points],
+                        requires_grad=False,
+                    )
+                    object_start = wp.to_torch(
+                        self.simulator.wp_states[0].wp_x[: self.num_all_points],
+                        requires_grad=False,
+                    )
+                    object_displacement = torch.linalg.vector_norm(
+                        object_state - object_start, dim=1
+                    ).max().item()
+                    max_object_displacement = max(
+                        max_object_displacement, float(object_displacement)
+                    )
 
                     self.optimizer.step()
 
@@ -379,6 +445,14 @@ class InvPhyTrainerWarp:
                         self.simulator.wp_states[-1].wp_v,
                     )
 
+            parameter_updates = {}
+            for parameter_name, parameter in self.trainable_parameters:
+                update = (parameter.detach() - epoch_parameter_start[parameter_name]).abs()
+                parameter_updates[parameter_name] = float(update.max().item())
+                if not torch.isfinite(parameter).all():
+                    raise FloatingPointError(
+                        f"non-finite parameter after epoch={i}: {parameter_name}"
+                    )
             total_loss /= cfg.train_frame - 1
             if cfg.data_type == "real":
                 total_chamfer_loss /= cfg.train_frame - 1
@@ -402,11 +476,32 @@ class InvPhyTrainerWarp:
                     "collide_object_fric": wp.to_torch(
                         self.simulator.wp_collide_object_fric, requires_grad=False
                     ).item(),
+                    "controller_contact_friction": self.simulator.controller_contact_friction,
+                    "controller_contact_count": total_controller_contacts,
+                    "controller_active_contact_count": total_active_controller_contacts,
+                    "max_object_displacement": max_object_displacement,
+                    "spring_gradient_norm": max_spring_grad_norm,
+                    **{
+                        f"max_gradient_norm/{name}": value
+                        for name, value in max_gradient_norms.items()
+                    },
+                    **{
+                        f"parameter_update/{name}": value
+                        for name, value in parameter_updates.items()
+                    },
                 },
                 step=i,
             )
 
-            logger.info(f"[Train]: Iteration: {i}, Loss: {total_loss}")
+            logger.info(
+                f"[Train]: Iteration: {i}, Loss: {total_loss}, "
+                f"controller_contacts={total_controller_contacts}, "
+                f"active_contacts={total_active_controller_contacts}, "
+                f"max_object_displacement={max_object_displacement:.6g}, "
+                f"max_spring_grad_norm={max_spring_grad_norm:.6g}, "
+                f"parameter_updates={parameter_updates}, "
+                f"max_gradient_norms={max_gradient_norms}"
+            )
 
             if visualize_training and (i % cfg.vis_interval == 0 or i == cfg.iterations - 1):
                 video_path = f"{cfg.base_dir}/train/sim_iter{i}.mp4"
