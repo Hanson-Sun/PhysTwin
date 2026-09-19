@@ -55,6 +55,7 @@ class Config:
 
         # Other parameters for visualization
         self.overlay_path = None
+        self.live_visualization = False
 
     def to_dict(self):
         # Convert the class to dictionary
@@ -80,6 +81,8 @@ class Config:
         self.update_from_dict(config_dict)
 
     def set_optimal_params(self, optimal_params):
+        optimal_params = dict(optimal_params)
+        optimal_params.pop("controller_contact_friction", None)
         optimal_params["init_spring_Y"] = optimal_params.pop("global_spring_Y")
         self.update_from_dict(optimal_params)
 

@@ -158,8 +158,83 @@ def controller_contact_force(
     contact_count: wp.array(dtype=wp.int32),
     active_count: wp.array(dtype=wp.int32),
     f: wp.array(dtype=wp.vec3),
+    normal_force_out: wp.array(dtype=wp.vec3),
+    friction_force_out: wp.array(dtype=wp.vec3),
 ):
     """Apply unilateral normal contact and capped tangential friction."""
+    object_idx = wp.tid()
+    object_position = x[object_idx]
+    object_velocity = v[object_idx]
+    stiffness = contact_stiffness
+    friction = contact_friction
+    total_force = wp.vec3(0.0, 0.0, 0.0)
+    total_normal_force = wp.vec3(0.0, 0.0, 0.0)
+    total_friction_force = wp.vec3(0.0, 0.0, 0.0)
+    was_active = contact_active[object_idx] != 0
+    has_activation = int(0)
+    has_release = int(0)
+    neighbors = wp.hash_grid_query(controller_grid, object_position, release_radius)
+    for controller_idx in neighbors:
+        delta = object_position - controller_x[controller_idx]
+        distance = wp.length(delta)
+        if distance <= activation_radius:
+            has_activation = 1
+        if distance <= release_radius:
+            has_release = 1
+
+    is_active = (has_release != 0) if was_active else (has_activation != 0)
+    contact_active[object_idx] = 1 if is_active else 0
+    if is_active:
+        wp.atomic_add(active_count, 0, 1)
+
+    if is_active:
+        neighbors = wp.hash_grid_query(controller_grid, object_position, contact_radius)
+        for controller_idx in neighbors:
+            delta = object_position - controller_x[controller_idx]
+            distance = wp.length(delta)
+            penetration = contact_radius - distance
+            if penetration > 0.0:
+                normal = delta / wp.max(distance, 1e-6)
+                normal_force = stiffness * penetration
+                normal_component = normal_force * normal
+                total_normal_force += normal_component
+                total_force += normal_component
+
+                relative_velocity = object_velocity - controller_v[controller_idx]
+                tangential_velocity = relative_velocity - wp.dot(relative_velocity, normal) * normal
+                tangential_speed = wp.length(tangential_velocity)
+                if tangential_speed > 1e-6:
+                    friction_force = wp.min(
+                        friction * normal_force,
+                        tangential_speed * stiffness,
+                    )
+                    friction_component = -friction_force * tangential_velocity / tangential_speed
+                    total_friction_force += friction_component
+                    total_force += friction_component
+                wp.atomic_add(contact_count, 0, 1)
+    normal_force_out[object_idx] = total_normal_force
+    friction_force_out[object_idx] = total_friction_force
+    wp.atomic_add(f, object_idx, total_force)
+
+
+@wp.kernel
+def controller_contact_force_fixed(
+    x: wp.array(dtype=wp.vec3),
+    v: wp.array(dtype=wp.vec3),
+    controller_x: wp.array(dtype=wp.vec3),
+    controller_v: wp.array(dtype=wp.vec3),
+    controller_grid: wp.uint64,
+    contact_radius: float,
+    activation_radius: float,
+    release_radius: float,
+    contact_stiffness: float,
+    contact_friction: float,
+    contact_active: wp.array(dtype=wp.int32),
+    contact_count: wp.array(dtype=wp.int32),
+    active_count: wp.array(dtype=wp.int32),
+    f: wp.array(dtype=wp.vec3),
+):
+    """Apply fixed contact for CMA without calibration component buffers."""
     object_idx = wp.tid()
     object_position = x[object_idx]
     object_velocity = v[object_idx]
@@ -203,6 +278,24 @@ def controller_contact_force(
                     total_force -= friction_force * tangential_velocity / tangential_speed
                 wp.atomic_add(contact_count, 0, 1)
     wp.atomic_add(f, object_idx, total_force)
+
+
+@wp.kernel
+def apply_controller_contact_calibration(
+    normal_force: wp.array(dtype=wp.vec3),
+    friction_force: wp.array(dtype=wp.vec3),
+    contact_stiffness: wp.array(dtype=wp.float32),
+    contact_friction: wp.array(dtype=wp.float32),
+    base_stiffness: float,
+    base_friction: float,
+    f: wp.array(dtype=wp.vec3),
+):
+    tid = wp.tid()
+    stiffness_scale = wp.exp(contact_stiffness[0]) / base_stiffness
+    friction_scale = wp.clamp(contact_friction[0], low=0.0, high=2.0) / wp.max(base_friction, 1e-6)
+    correction = (stiffness_scale - 1.0) * normal_force[tid]
+    correction += (friction_scale - 1.0) * friction_force[tid]
+    wp.atomic_add(f, tid, correction)
 
 
 @wp.kernel
@@ -657,7 +750,9 @@ class SpringMassSystemWarp:
         num_original_points=None,
         controller_points=None,
         controller_contact_points=None,
+        controller_contact_stiffness=None,
         controller_contact_friction=None,
+        learn_controller_contact=False,
         reverse_z=False,
         spring_Y_min=1e3,
         spring_Y_max=1e5,
@@ -669,6 +764,7 @@ class SpringMassSystemWarp:
     ):
         logger.info(f"[SIMULATION]: Initialize the Spring-Mass System")
         self.device = cfg.device
+        self.disable_backward = disable_backward
 
         # Record the parameters
         self.wp_init_vertices = wp.from_torch(
@@ -726,18 +822,45 @@ class SpringMassSystemWarp:
         )
         if self.controller_contact_activation_radius > self.controller_contact_release_radius:
             raise ValueError("controller contact activation radius must not exceed release radius")
-        self.controller_contact_stiffness = float(
-            getattr(cfg, "controller_contact_stiffness", 3e4)
-        )
+        if controller_contact_stiffness is None:
+            controller_contact_stiffness = getattr(cfg, "controller_contact_stiffness", 3e4)
+        if controller_contact_stiffness <= 0.0:
+            raise ValueError("controller contact stiffness must be positive")
         if controller_contact_friction is None:
             controller_contact_friction = getattr(cfg, "controller_contact_friction", 0.3)
+        self.controller_contact_stiffness = float(controller_contact_stiffness)
         self.controller_contact_friction = float(controller_contact_friction)
+        self.learn_controller_contact = learn_controller_contact
+        self.wp_controller_contact_stiffness = wp.from_torch(
+            torch.log(
+                torch.tensor(
+                    [controller_contact_stiffness],
+                    dtype=torch.float32,
+                    device=self.device,
+                )
+            ),
+            requires_grad=learn_controller_contact,
+        )
+        self.wp_controller_contact_friction = wp.from_torch(
+            torch.tensor([controller_contact_friction], dtype=torch.float32, device=self.device),
+            requires_grad=learn_controller_contact,
+        )
         self.controller_contact_enabled = self.controller_contact_points is not None
         self.controller_contact_count = wp.zeros(1, dtype=wp.int32, requires_grad=False)
         self.controller_active_contact_count = wp.zeros(1, dtype=wp.int32, requires_grad=False)
         self.controller_contact_active = wp.zeros(
             self.num_object_points, dtype=wp.int32, requires_grad=False
         )
+        if self.learn_controller_contact:
+            self.controller_contact_normal_force = wp.zeros_like(
+                self.wp_init_vertices, requires_grad=False
+            )
+            self.controller_contact_friction_force = wp.zeros_like(
+                self.wp_init_vertices, requires_grad=False
+            )
+        else:
+            self.controller_contact_normal_force = None
+            self.controller_contact_friction_force = None
         self.controller_contact_grid = (
             wp.HashGrid(128, 128, 128) if self.controller_contact_enabled else None
         )
@@ -883,43 +1006,49 @@ class SpringMassSystemWarp:
             requires_grad=cfg.collision_learn,
         )
 
-        # Create the CUDA graph to acclerate
+        # Create the CUDA graph to accelerate.
         if cfg.use_graph:
-            if cfg.data_type == "real":
-                if not disable_backward:
-                    with wp.ScopedCapture() as capture:
-                        self.tape = wp.Tape()
-                        with self.tape:
-                            self.step()
-                            self.calculate_loss()
-                        self.tape.backward(self.loss)
-                else:
-                    with wp.ScopedCapture() as capture:
-                        self.step()
-                        self.calculate_loss()
-                self.graph = capture.graph
-            elif cfg.data_type == "synthetic":
-                if not disable_backward:
-                    # For synthetic data, we compute simple loss
-                    with wp.ScopedCapture() as capture:
-                        self.tape = wp.Tape()
-                        with self.tape:
-                            self.step()
-                            self.calculate_simple_loss()
-                        self.tape.backward(self.loss)
-                else:
-                    with wp.ScopedCapture() as capture:
-                        self.step()
-                        self.calculate_simple_loss()
-                self.graph = capture.graph
-            else:
-                raise NotImplementedError
-
-            with wp.ScopedCapture() as forward_capture:
-                self.step()
-            self.forward_graph = forward_capture.graph
+            self.rebuild_graphs()
         else:
             self.tape = wp.Tape()
+
+    def rebuild_graphs(self):
+        """Re-capture training and forward graphs after an eager replay."""
+        if not cfg.use_graph:
+            self.tape = wp.Tape()
+            return
+
+        if cfg.data_type == "real":
+            if not self.disable_backward:
+                with wp.ScopedCapture() as capture:
+                    self.tape = wp.Tape()
+                    with self.tape:
+                        self.step()
+                        self.calculate_loss()
+                    self.tape.backward(self.loss)
+            else:
+                with wp.ScopedCapture() as capture:
+                    self.step()
+                    self.calculate_loss()
+        elif cfg.data_type == "synthetic":
+            if not self.disable_backward:
+                with wp.ScopedCapture() as capture:
+                    self.tape = wp.Tape()
+                    with self.tape:
+                        self.step()
+                        self.calculate_simple_loss()
+                    self.tape.backward(self.loss)
+            else:
+                with wp.ScopedCapture() as capture:
+                    self.step()
+                    self.calculate_simple_loss()
+        else:
+            raise NotImplementedError
+
+        self.graph = capture.graph
+        with wp.ScopedCapture() as forward_capture:
+            self.step()
+        self.forward_graph = forward_capture.graph
 
     def set_controller_target(self, frame_idx, pure_inference=False):
         if self.controller_points is not None:
@@ -1133,26 +1262,57 @@ class SpringMassSystemWarp:
                 )
                 self.controller_contact_count.zero_()
                 self.controller_active_contact_count.zero_()
-                wp.launch(
-                    controller_contact_force,
-                    dim=self.num_object_points,
-                    inputs=[
-                        self.wp_states[i].wp_x,
-                        self.wp_states[i].wp_v,
-                        self.wp_states[i].wp_contact_x,
-                        self.wp_states[i].wp_contact_v,
-                        self.controller_contact_grid.id,
-                        self.controller_contact_radius,
-                        self.controller_contact_activation_radius,
-                        self.controller_contact_release_radius,
-                        self.controller_contact_stiffness,
-                        self.controller_contact_friction,
-                        self.controller_contact_active,
-                        self.controller_contact_count,
-                        self.controller_active_contact_count,
-                    ],
-                    outputs=[self.wp_states[i].wp_vertice_forces],
+                contact_kernel = (
+                    controller_contact_force
+                    if self.learn_controller_contact
+                    else controller_contact_force_fixed
                 )
+                contact_inputs = [
+                    self.wp_states[i].wp_x,
+                    self.wp_states[i].wp_v,
+                    self.wp_states[i].wp_contact_x,
+                    self.wp_states[i].wp_contact_v,
+                    self.controller_contact_grid.id,
+                    self.controller_contact_radius,
+                    self.controller_contact_activation_radius,
+                    self.controller_contact_release_radius,
+                    self.controller_contact_stiffness,
+                    self.controller_contact_friction,
+                    self.controller_contact_active,
+                    self.controller_contact_count,
+                    self.controller_active_contact_count,
+                ]
+                if self.learn_controller_contact:
+                    wp.launch(
+                        contact_kernel,
+                        dim=self.num_object_points,
+                        inputs=contact_inputs,
+                        outputs=[
+                            self.wp_states[i].wp_vertice_forces,
+                            self.controller_contact_normal_force,
+                            self.controller_contact_friction_force,
+                        ],
+                    )
+                    wp.launch(
+                        apply_controller_contact_calibration,
+                        dim=self.num_object_points,
+                        inputs=[
+                            self.controller_contact_normal_force,
+                            self.controller_contact_friction_force,
+                            self.wp_controller_contact_stiffness,
+                            self.wp_controller_contact_friction,
+                            self.controller_contact_stiffness,
+                            self.controller_contact_friction,
+                        ],
+                        outputs=[self.wp_states[i].wp_vertice_forces],
+                    )
+                else:
+                    wp.launch(
+                        contact_kernel,
+                        dim=self.num_object_points,
+                        inputs=contact_inputs,
+                        outputs=[self.wp_states[i].wp_vertice_forces],
+                    )
 
             if self.object_collision_flag:
                 output_v = self.wp_states[i].wp_v_before_collision
@@ -1298,6 +1458,30 @@ class SpringMassSystemWarp:
             self.track_loss.zero_()
             self.acc_loss.zero_()
         self.loss.zero_()
+
+    def set_controller_contact(self, contact_stiffness, contact_friction):
+        stiffness = wp.from_torch(
+            torch.log(contact_stiffness).to(self.device).contiguous(),
+            dtype=wp.float32,
+            requires_grad=False,
+        )
+        friction = wp.from_torch(
+            contact_friction.to(self.device).contiguous(),
+            dtype=wp.float32,
+            requires_grad=False,
+        )
+        wp.launch(
+            copy_float,
+            dim=1,
+            inputs=[stiffness],
+            outputs=[self.wp_controller_contact_stiffness],
+        )
+        wp.launch(
+            copy_float,
+            dim=1,
+            inputs=[friction],
+            outputs=[self.wp_controller_contact_friction],
+        )
 
     # Functions used to load the parmeters
     def set_spring_Y(self, spring_Y):
