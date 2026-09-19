@@ -1,7 +1,13 @@
-- the rope didnt learn?? i think the depth maps were flipped or something
+- the rope didnt learn??
+    - yeah the issue is with the contact resolution
+    - i need to fix this, this is a fundamental learning issue
+
+- please fixc the controller points visualization script to actually produce video, its kinda bad right now
+
+
+
+
 - generate more softbody types
-- the claw model doesnt load, check validity
-- why does rope fail on alignment? something about the shape prior
 - test pipeline
 - integrate warp and mujoco sim
 - modify warp simulation to be able to work with claw trajectory inputs
