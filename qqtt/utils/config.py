@@ -55,7 +55,6 @@ class Config:
 
         # Other parameters for visualization
         self.overlay_path = None
-        self.live_visualization = False
 
     def to_dict(self):
         # Convert the class to dictionary

@@ -63,9 +63,9 @@ python scripts/train_warp_case.py \
 	--visualize
 ```
 
-This runs CMA initialization followed by differentiable warp training. The
-single `--visualize` flag enables both saved Warp training videos and the live
-Open3D trajectory window; without it, training is headless. The best weights are
+This runs CMA initialization followed by differentiable warp training.The single `--visualize` flag enables saved Warp training videos; training
+is headless otherwise.
+ The best weights are
 saved under `experiments/my_case/train/best_*.pth`, with a manifest at
 `experiments/my_case/train/training_manifest.json`. Use `--skip_cma` to skip
 the initialization stage only when
@@ -113,9 +113,8 @@ Gaussian pruning in order. Use `--dry_run` to inspect the resolved settings,
 Use `--no_shape_prior` to override a configured shape prior,
 or `--shape_prior` to enable it for a case configured without one. Use
 `--skip_segmentation` to resume after a completed segmentation stage.
-The full pipeline is headless by default. Pass the same `--visualize` flag to
-show preprocessing visualizations, save Warp training videos, and open the live
-Warp Open3D preview. Warp checkpoints are written under
+The full pipeline is headless by default. Pass the same `--visualize` flag to show preprocessing visualizations and save Warp training videos.
+ Warp checkpoints are written under
 `experiments/<case_name>/train/`. Runtime playback always selects the highest
 numbered available `best_<iteration>.pth` checkpoint rather than relying on
 filesystem glob order.
@@ -141,6 +140,7 @@ assets are:
 
 - `object_rope.xml` — simple flexible rope/twine scaffold
 - `object_box.xml` — validated rigid baseline box
+  so alignment and reconstruction have non-trivial visual features
 
 The previous procedural cloth, doll, sloth, zebra, package, and compound-plush
 stand-ins are not active in `models.json` because they are not proper connected

@@ -349,7 +349,6 @@ class InvPhyTrainerWarp:
         # Render the initial visualization
         video_path = f"{cfg.base_dir}/train/init.mp4"
         visualize_training = not getattr(cfg, "disable_visualization", False)
-        live_visualization = getattr(cfg, "live_visualization", False)
         if visualize_training:
             self.visualize_sim(save_only=True, video_path=video_path)
             self._reset_training_simulator_after_visualization()
@@ -550,8 +549,6 @@ class InvPhyTrainerWarp:
             if visualize_training and i % cfg.vis_interval == 0:
                 video_path = f"{cfg.base_dir}/train/sim_iter{i}.mp4"
                 self.visualize_sim(save_only=True, video_path=video_path)
-                if live_visualization:
-                    self.visualize_sim(save_only=False)
                 self._reset_training_simulator_after_visualization()
                 wandb.log(
                     {

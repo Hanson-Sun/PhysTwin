@@ -18,7 +18,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--visualize",
         action="store_true",
-        help="Save training videos and show the trajectory in an Open3D window every visualization interval.",
+        help="Save training videos every visualization interval.",
     )
     return parser
 
