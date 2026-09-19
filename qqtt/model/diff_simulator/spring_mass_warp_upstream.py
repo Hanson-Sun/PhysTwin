@@ -25,6 +25,7 @@ class State:
         self.wp_contact_x = wp.zeros(
             (num_contact_points), dtype=wp.vec3, requires_grad=False
         )
+        self.wp_contact_x_prev = wp.zeros_like(self.wp_contact_x, requires_grad=False)
         self.wp_contact_v = wp.zeros_like(self.wp_contact_x, requires_grad=False)
 
     def clear_forces(self):
@@ -81,6 +82,39 @@ def set_control_points(
     t = float(step + 1) / float(num_substeps)
     control_x[tid] = original_control_point[tid] + displacement * t
     control_v[tid] = displacement / (float(num_substeps) * substep_dt)
+
+
+@wp.kernel(enable_backward=False)
+def set_contact_points(
+    num_substeps: int,
+    substep_dt: float,
+    original_contact_point: wp.array(dtype=wp.vec3),
+    target_contact_point: wp.array(dtype=wp.vec3),
+    step: int,
+    contact_x: wp.array(dtype=wp.vec3),
+    contact_x_prev: wp.array(dtype=wp.vec3),
+    contact_v: wp.array(dtype=wp.vec3),
+):
+    # Store both ends of the controller segment swept during this substep.
+    tid = wp.tid()
+    displacement = target_contact_point[tid] - original_contact_point[tid]
+    t_prev = float(step) / float(num_substeps)
+    t = float(step + 1) / float(num_substeps)
+    contact_x_prev[tid] = original_contact_point[tid] + displacement * t_prev
+    contact_x[tid] = original_contact_point[tid] + displacement * t
+    contact_v[tid] = displacement / (float(num_substeps) * substep_dt)
+
+
+@wp.func
+def closest_point_on_segment(point: wp.vec3, segment_start: wp.vec3, segment_end: wp.vec3):
+    segment = segment_end - segment_start
+    segment_length_squared = wp.dot(segment, segment)
+    segment_t = wp.clamp(
+        wp.dot(point - segment_start, segment) / wp.max(segment_length_squared, 1e-12),
+        0.0,
+        1.0,
+    )
+    return segment_start + segment_t * segment
 
 
 @wp.kernel
@@ -147,8 +181,10 @@ def controller_contact_force(
     x: wp.array(dtype=wp.vec3),
     v: wp.array(dtype=wp.vec3),
     controller_x: wp.array(dtype=wp.vec3),
+    controller_x_prev: wp.array(dtype=wp.vec3),
     controller_v: wp.array(dtype=wp.vec3),
     controller_grid: wp.uint64,
+    controller_sweep_radius: float,
     contact_radius: float,
     activation_radius: float,
     release_radius: float,
@@ -173,9 +209,14 @@ def controller_contact_force(
     was_active = contact_active[object_idx] != 0
     has_activation = int(0)
     has_release = int(0)
-    neighbors = wp.hash_grid_query(controller_grid, object_position, release_radius)
+    neighbors = wp.hash_grid_query(
+        controller_grid, object_position, release_radius + controller_sweep_radius
+    )
     for controller_idx in neighbors:
-        delta = object_position - controller_x[controller_idx]
+        closest = closest_point_on_segment(
+            object_position, controller_x_prev[controller_idx], controller_x[controller_idx]
+        )
+        delta = object_position - closest
         distance = wp.length(delta)
         if distance <= activation_radius:
             has_activation = 1
@@ -188,9 +229,14 @@ def controller_contact_force(
         wp.atomic_add(active_count, 0, 1)
 
     if is_active:
-        neighbors = wp.hash_grid_query(controller_grid, object_position, contact_radius)
+        neighbors = wp.hash_grid_query(
+            controller_grid, object_position, contact_radius + controller_sweep_radius
+        )
         for controller_idx in neighbors:
-            delta = object_position - controller_x[controller_idx]
+            closest = closest_point_on_segment(
+                object_position, controller_x_prev[controller_idx], controller_x[controller_idx]
+            )
+            delta = object_position - closest
             distance = wp.length(delta)
             penetration = contact_radius - distance
             if penetration > 0.0:
@@ -222,8 +268,10 @@ def controller_contact_force_fixed(
     x: wp.array(dtype=wp.vec3),
     v: wp.array(dtype=wp.vec3),
     controller_x: wp.array(dtype=wp.vec3),
+    controller_x_prev: wp.array(dtype=wp.vec3),
     controller_v: wp.array(dtype=wp.vec3),
     controller_grid: wp.uint64,
+    controller_sweep_radius: float,
     contact_radius: float,
     activation_radius: float,
     release_radius: float,
@@ -242,9 +290,14 @@ def controller_contact_force_fixed(
     was_active = contact_active[object_idx] != 0
     has_activation = int(0)
     has_release = int(0)
-    neighbors = wp.hash_grid_query(controller_grid, object_position, release_radius)
+    neighbors = wp.hash_grid_query(
+        controller_grid, object_position, release_radius + controller_sweep_radius
+    )
     for controller_idx in neighbors:
-        delta = object_position - controller_x[controller_idx]
+        closest = closest_point_on_segment(
+            object_position, controller_x_prev[controller_idx], controller_x[controller_idx]
+        )
+        delta = object_position - closest
         distance = wp.length(delta)
         if distance <= activation_radius:
             has_activation = 1
@@ -257,9 +310,14 @@ def controller_contact_force_fixed(
         wp.atomic_add(active_count, 0, 1)
 
     if is_active:
-        neighbors = wp.hash_grid_query(controller_grid, object_position, contact_radius)
+        neighbors = wp.hash_grid_query(
+            controller_grid, object_position, contact_radius + controller_sweep_radius
+        )
         for controller_idx in neighbors:
-            delta = object_position - controller_x[controller_idx]
+            closest = closest_point_on_segment(
+                object_position, controller_x_prev[controller_idx], controller_x[controller_idx]
+            )
+            delta = object_position - closest
             distance = wp.length(delta)
             penetration = contact_radius - distance
             if penetration > 0.0:
@@ -820,6 +878,14 @@ class SpringMassSystemWarp:
         self.controller_contact_release_radius = float(
             getattr(cfg, "controller_contact_release_radius", self.controller_contact_radius * 1.25)
         )
+        if self.controller_contact_points is not None and self.controller_contact_points.shape[0] > 1:
+            contact_motion = self.controller_contact_points[1:] - self.controller_contact_points[:-1]
+            self.controller_contact_sweep_radius = float(
+                torch.linalg.vector_norm(contact_motion, dim=-1).amax().item()
+                / max(self.num_substeps, 1)
+            )
+        else:
+            self.controller_contact_sweep_radius = 0.0
         if self.controller_contact_activation_radius > self.controller_contact_release_radius:
             raise ValueError("controller contact activation radius must not exceed release radius")
         if controller_contact_stiffness is None:
@@ -1220,7 +1286,7 @@ class SpringMassSystemWarp:
                 )
                 if self.num_contact_points:
                     wp.launch(
-                        set_control_points,
+                        set_contact_points,
                         dim=self.num_contact_points,
                         inputs=[
                             self.num_substeps,
@@ -1231,6 +1297,7 @@ class SpringMassSystemWarp:
                         ],
                         outputs=[
                             self.wp_states[i].wp_contact_x,
+                            self.wp_states[i].wp_contact_x_prev,
                             self.wp_states[i].wp_contact_v,
                         ],
                     )
@@ -1271,8 +1338,10 @@ class SpringMassSystemWarp:
                     self.wp_states[i].wp_x,
                     self.wp_states[i].wp_v,
                     self.wp_states[i].wp_contact_x,
+                    self.wp_states[i].wp_contact_x_prev,
                     self.wp_states[i].wp_contact_v,
                     self.controller_contact_grid.id,
+                    self.controller_contact_sweep_radius,
                     self.controller_contact_radius,
                     self.controller_contact_activation_radius,
                     self.controller_contact_release_radius,
