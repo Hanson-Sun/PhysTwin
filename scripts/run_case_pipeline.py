@@ -70,7 +70,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skip_process", action="store_true")
     parser.add_argument("--skip_segmentation", action="store_true")
     parser.add_argument("--visualize_processing", action="store_true")
-    parser.add_argument("--visualize_training", action="store_true")
+    parser.add_argument(
+        "--visualize",
+        "--visualize_training",
+        dest="visualize_training",
+        action="store_true",
+        help="Generate Warp training visualizations every 20 iterations.",
+    )
     parser.add_argument("--skip_warp", action="store_true")
     parser.add_argument("--skip_gaussians", action="store_true")
     parser.add_argument("--skip_cma", action="store_true")
@@ -156,7 +162,9 @@ def main() -> None:
             warp_command.append("--skip_cma")
         if warp_iterations is not None:
             warp_command.extend(["--iterations", str(warp_iterations)])
-        if not args.visualize_training:
+        if args.visualize_training:
+            warp_command.append("--visualize")
+        else:
             warp_command.append("--no_visualize")
         run(warp_command, "Warp parameter training")
         require(

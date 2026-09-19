@@ -14,7 +14,7 @@ class Config:
         self.drag_damping = 3
         self.base_lr = 1e-3
         self.iterations = 250
-        self.vis_interval = 10
+        self.vis_interval = 20
         self.init_spring_Y = 3e3
         self.collide_elas = 0.5
         self.collide_fric = 0.3
