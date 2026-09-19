@@ -75,9 +75,28 @@ def pose_selection_render_superglue(
     grays = [cv2.cvtColor(color, cv2.COLOR_BGR2GRAY) for color in colors]
     # Use superglue to match the features
     best_idx, match_result = image_pair_matching(
-        grays, crop_img, output_dir, viz_best=True
+        grays,
+        crop_img,
+        output_dir,
+        viz_best=True,
+        valid_depth_masks=depths > 0,
     )
-    print("matched point number", np.sum(match_result["matches"] > -1))
+    matched_count = int(np.sum(match_result["matches"] > -1))
+    valid_depth_count = 0
+    for keypoint, match_index in zip(
+        match_result["keypoints0"], match_result["matches"]
+    ):
+        if match_index < 0:
+            continue
+        x, y = np.rint(keypoint).astype(int)
+        if 0 <= x < depths[best_idx].shape[1] and 0 <= y < depths[best_idx].shape[0]:
+            valid_depth_count += int(depths[best_idx][y, x] > 0)
+    print(
+        "matched point number",
+        matched_count,
+        "with valid rendered depth",
+        valid_depth_count,
+    )
 
     best_color = colors[best_idx]
     best_depth = depths[best_idx]
@@ -334,7 +353,8 @@ if __name__ == "__main__":
     # Calculate camera parameters
     fov = 2 * np.arctan(raw_img.shape[1] / (2 * intrinsic[0, 0]))
 
-    if not os.path.exists(f"{output_dir}/best_match.pkl"):
+    best_match_path = f"{output_dir}/best_match_v2.pkl"
+    if not os.path.exists(best_match_path):
         # 2D feature Matching to get the best pose of the object
         bbox = np.argwhere(mask_img > 0.8 * 255)
         bbox = (
@@ -365,6 +385,13 @@ if __name__ == "__main__":
         crop_img[~mask_bool] = 0
         crop_img = crop_img[bbox[1] : bbox[3], bbox[0] : bbox[2]]
         crop_img = cv2.cvtColor(crop_img, cv2.COLOR_RGB2GRAY)
+        crop_h, crop_w = crop_img.shape[:2]
+        crop_scale = 320.0 / max(crop_w, crop_h)
+        crop_img = cv2.resize(
+            crop_img,
+            (max(1, int(round(crop_w * crop_scale))), max(1, int(round(crop_h * crop_scale)))),
+            interpolation=cv2.INTER_CUBIC,
+        )
 
         # Render the object and match the features
         best_color, best_depth, best_pose, match_result, camera_intrinsics = (
@@ -377,7 +404,7 @@ if __name__ == "__main__":
                 output_dir=output_dir,
             )
         )
-        with open(f"{output_dir}/best_match.pkl", "wb") as f:
+        with open(best_match_path, "wb") as f:
             pickle.dump(
                 [
                     best_color,
@@ -386,12 +413,13 @@ if __name__ == "__main__":
                     match_result,
                     camera_intrinsics,
                     bbox,
+                    crop_scale,
                 ],
                 f,
             )
     else:
-        with open(f"{output_dir}/best_match.pkl", "rb") as f:
-            best_color, best_depth, best_pose, match_result, camera_intrinsics, bbox = (
+        with open(best_match_path, "rb") as f:
+            best_color, best_depth, best_pose, match_result, camera_intrinsics, bbox, crop_scale = (
                 pickle.load(f)
             )
 
@@ -408,7 +436,9 @@ if __name__ == "__main__":
         match_result["matches"][valid_matches]
     ]
     raw_matching_points_box = raw_matching_points_box[valid_mask]
-    raw_matching_points = raw_matching_points_box + np.array([bbox[0], bbox[1]])
+    raw_matching_points = raw_matching_points_box / crop_scale + np.array(
+        [bbox[0], bbox[1]]
+    )
 
     if VIS:
         # Do visualization for the matching

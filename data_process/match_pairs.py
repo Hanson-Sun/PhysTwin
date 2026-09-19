@@ -83,6 +83,7 @@ def image_pair_matching(
     viz_extension="png",
     save=False,
     viz_best=True,
+    valid_depth_masks=None,
 ):
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -164,9 +165,25 @@ def image_pair_matching(
             match_result.append(results)
 
         valid = matches > -1
-        mkpts0 = kpts0[valid]
-        mkpts1 = kpts1[matches[valid]]
-        mconf = conf[valid]
+        score_valid = valid.copy()
+        if valid_depth_masks is not None:
+            depth_mask = np.asarray(valid_depth_masks[i])
+            score_valid[:] = False
+            valid_indices = np.flatnonzero(valid)
+            coords = np.rint(kpts0[valid_indices]).astype(np.int64)
+            in_bounds = (
+                (coords[:, 0] >= 0)
+                & (coords[:, 0] < depth_mask.shape[1])
+                & (coords[:, 1] >= 0)
+                & (coords[:, 1] < depth_mask.shape[0])
+            )
+            valid_indices = valid_indices[in_bounds]
+            coords = coords[in_bounds]
+            score_valid[valid_indices] = depth_mask[coords[:, 1], coords[:, 0]]
+
+        mkpts0 = kpts0[score_valid]
+        mkpts1 = kpts1[matches[score_valid]]
+        mconf = conf[score_valid]
         match_nums.append(len(mkpts0))
 
         if len(mkpts0) > best_match_num:
