@@ -2,12 +2,94 @@
   <!-- Default object: a free box with a freejoint, ready to be poked/pushed.
        Swap this file for any object with the same shape (one body, a
        freejoint, and one or more geoms) -- e.g. a soft-body/PhysTwin
-       reconstruction later. -->
+       reconstruction later.
+
+       Physics stays intentionally plain: one rigid box body. Visual texture
+       is added so RGB-D frames from sim are easier to track, match, and
+       reconstruct than a uniform-red cube. -->
+  <asset>
+    <!-- Per-face identity textures. Each face gets a different coarse pattern
+         so SuperPoint/SuperGlue and shape completion have non-trivial cues.
+         Built-in procedural textures are used so no external image assets are
+         required to render the rigid box case. -->
+    <!-- Front (+z in MuJoCo box-local space) -->
+    <texture name="tex_front" type="2d" builtin="checker" rgb1="0.95 0.85 0.45"
+             rgb2="0.60 0.70 0.85" width="128" height="128"/>
+    <!-- Back (-z) -->
+    <texture name="tex_back" type="2d" builtin="checker" rgb1="0.80 0.35 0.35"
+             rgb2="0.20 0.25 0.35" width="128" height="128"/>
+    <!-- Right (+x) -->
+    <texture name="tex_right" type="2d" builtin="checker" rgb1="0.35 0.75 0.45"
+             rgb2="0.20 0.30 0.60" width="128" height="128"/>
+    <!-- Left (-x) -->
+    <texture name="tex_left" type="2d" builtin="checker" rgb1="0.95 0.55 0.25"
+             rgb2="0.40 0.20 0.35" width="128" height="128"/>
+    <!-- Top (+y) -->
+    <texture name="tex_top" type="2d" builtin="checker" rgb1="0.85 0.85 0.90"
+             rgb2="0.40 0.45 0.55" width="128" height="128"/>
+    <!-- Bottom (-y) -->
+    <texture name="tex_bottom" type="2d" builtin="checker" rgb1="0.45 0.45 0.45"
+             rgb2="0.20 0.20 0.22" width="128" height="128"/>
+
+    <!-- Secondary fine-grained noise-like pattern used on two faces to avoid
+         perfectly periodic checker saturation under rotation. -->
+    <texture name="tex_stripe" type="2d" builtin="checker" rgb1="0.98 0.98 0.98"
+             rgb2="0.55 0.55 0.55" width="64" height="64"/>
+
+    <material name="mat_front" texture="tex_front" texrepeat="6 6" texuniform="true"
+              rgba="1 1 1 1" specular="0.3" shininess="0.4"/>
+    <material name="mat_back" texture="tex_back" texrepeat="6 6" texuniform="true"
+              rgba="1 1 1 1" specular="0.3" shininess="0.4"/>
+    <material name="mat_right" texture="tex_right" texrepeat="6 6" texuniform="true"
+              rgba="1 1 1 1" specular="0.3" shininess="0.4"/>
+    <material name="mat_left" texture="tex_left" texrepeat="6 6" texuniform="true"
+              rgba="1 1 1 1" specular="0.3" shininess="0.4"/>
+    <material name="mat_top" texture="tex_top" texrepeat="8 8" texuniform="true"
+              rgba="1 1 1 1" specular="0.25" shininess="0.45"/>
+    <material name="mat_bottom" texture="tex_bottom" texrepeat="4 4" texuniform="true"
+              rgba="1 1 1 1" specular="0.2" shininess="0.35"/>
+
+    <!-- Accent stripe used on top and bottom faces for additional orientation
+         cues. -->
+    <material name="mat_top_stripe" texture="tex_stripe" texrepeat="1 12"
+              texuniform="true" rgba="1 1 1 1"/>
+    <material name="mat_bottom_stripe" texture="tex_stripe" texrepeat="1 12"
+              texuniform="true" rgba="1 1 1 1"/>
+  </asset>
+
   <worldbody>
     <body name="object" pos="0 0 0.05">
       <freejoint name="object_joint"/>
+      <!-- MuJoCo box geom uses the same material on all six faces, so the shape
+           is still a single rigid box. To make each visible face visually
+           distinct, six offset thin shell boxes are attached around the core
+           box with contype=0 / conaffinity=0 so they are non-colliding visual
+           shells. This keeps simulation identical to a plain box while giving
+           every side a different texture. -->
       <geom name="object_geom" type="box" size="0.05 0.05 0.05"
-            rgba="0.8 0.2 0.2 1" mass="0.2" friction="1.0 0.005 0.0001" solref="0.004 1"/>
+            rgba="0.8 0.2 0.2 1" mass="0.2" friction="1.0 0.005 0.0001"
+            solref="0.004 1"/>
+
+      <!-- Visual shells with per-face textures. Sizes are slightly larger than
+           the physics box so each face is readable from outside. -->
+      <geom name="face_front" type="box" pos="0 0 0.0501"
+            size="0.0502 0.0502 0.001" material="mat_front"
+            contype="0" conaffinity="0"/>
+      <geom name="face_back" type="box" pos="0 0 -0.0501"
+            size="0.0502 0.0502 0.001" material="mat_back"
+            contype="0" conaffinity="0"/>
+      <geom name="face_right" type="box" pos="0.0501 0 0"
+            size="0.001 0.0502 0.0502" material="mat_right"
+            contype="0" conaffinity="0"/>
+      <geom name="face_left" type="box" pos="-0.0501 0 0"
+            size="0.001 0.0502 0.0502" material="mat_left"
+            contype="0" conaffinity="0"/>
+      <geom name="face_top" type="box" pos="0 0.0501 0"
+            size="0.0502 0.001 0.0502" material="mat_top_stripe"
+            contype="0" conaffinity="0"/>
+      <geom name="face_bottom" type="box" pos="0 -0.0501 0"
+            size="0.0502 0.001 0.0502" material="mat_bottom_stripe"
+            contype="0" conaffinity="0"/>
     </body>
   </worldbody>
 </mujoco>

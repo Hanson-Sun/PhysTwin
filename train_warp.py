@@ -32,7 +32,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--visualize",
         action="store_true",
-        help="Save training videos and show the trajectory in an Open3D window every visualization interval.",
+        help="Save training videos every visualization interval.",
     )
     args = parser.parse_args()
 
@@ -48,9 +48,8 @@ if __name__ == "__main__":
         if args.iterations < 1:
             raise ValueError("--iterations must be at least 1")
         cfg.iterations = args.iterations
-    # One flag controls both saved videos and the live Open3D preview.
+    # Saved training videos are opt-in via --visualize.
     cfg.disable_visualization = not args.visualize
-    cfg.live_visualization = args.visualize
 
     print(f"[DATA TYPE]: {cfg.data_type}")
 

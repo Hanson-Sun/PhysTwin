@@ -72,7 +72,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--visualize",
         action="store_true",
-        help="Visualize all enabled stages, including saved Warp videos and its live Open3D preview.",
+        help="Visualize all enabled stages, including saved Warp videos.",
     )
     parser.add_argument("--skip_warp", action="store_true")
     parser.add_argument("--skip_gaussians", action="store_true")
@@ -96,6 +96,7 @@ def main() -> None:
         )
     if args.shape_prior and args.no_shape_prior:
         raise ValueError("--shape_prior and --no_shape_prior are mutually exclusive")
+
     use_shape_prior = configured_shape_prior
     if args.shape_prior:
         use_shape_prior = True

@@ -1,3 +1,14 @@
+- visualize runs twice, why dont we just display?? thats kinda dumb in training
+- rigid body not working? arent we supposed to have a dense spring mass system? this should be wayyy better at simulating rigid bodies whats going on??
+    - missing bottom fgace since not shape prior
+    - need volumetric dense representation somehow
+    - maybe we add a new config for a rigid body?
+    - we need a way to make this system more adaptable...
+    - need better alignment system, look at digital twin v2. 
+- take a look at the loss function, what is the criteria?
+
+- do a simulation run where we grab a box with the claw and lift it up
+
 - the rope didnt learn??
     - yeah the issue is with the contact resolution
     - i need to fix this, this is a fundamental learning issue
