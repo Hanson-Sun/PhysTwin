@@ -122,10 +122,24 @@ def main() -> None:
     parser.add_argument("--output_dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--dry_run", action="store_true")
+    parser.add_argument(
+        "--case",
+        action="append",
+        dest="cases",
+        help="Only generate the named case(s); repeatable. Defaults to every model in the manifest.",
+    )
     args = parser.parse_args()
 
     manifest = args.manifest.resolve()
     models = [normalize(model, manifest) for model in load_manifest(manifest)]
+    if args.cases:
+        known = {model["case_name"] for model in models}
+        missing = [case for case in args.cases if case not in known]
+        if missing:
+            raise ValueError(
+                f"case(s) not in manifest {manifest.name}: {', '.join(missing)}"
+            )
+        models = [model for model in models if model["case_name"] in args.cases]
     output_dir = args.output_dir.resolve()
     for model in models:
         print(f"{model['case_name']}: {model['object_file']}")

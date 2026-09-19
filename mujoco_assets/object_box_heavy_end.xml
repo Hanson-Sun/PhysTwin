@@ -5,7 +5,9 @@
     <material name="heavy_end_ballast" rgba="0.18 0.18 0.22 1"/>
   </asset>
   <worldbody>
-    <body name="object" pos="0 0 0.035">
+    <!-- quat rotates the long axis ~70 deg about Z (like object_rope.xml), so
+         the claw pushes across the box at an angle instead of end-on. -->
+    <body name="object" pos="0 0 0.035" quat="0.819152 0 0 0.573576">
       <freejoint name="object_joint"/>
       <geom name="object_shell" type="box" size="0.18 0.04 0.025"
             rgba="0.8 0.2 0.2 1" mass="0.2"
