@@ -118,7 +118,7 @@ if PROCESS_SEG:
     # Get the masks of the controller and the object using GroundedSAM2
     with Timer("Video Segmentation"):
         run_stage(
-            f"{sys.executable} ./data_process/segment.py --base_path {shlex.quote(base_path)} --case_name {shlex.quote(case_name)} --TEXT_PROMPT {shlex.quote(TEXT_PROMPT)}"
+            f"{sys.executable} ./data_process/segment.py --base_path {shlex.quote(base_path)} --case_name {shlex.quote(case_name)} --TEXT_PROMPT {shlex.quote(TEXT_PROMPT)} --controller_names {shlex.quote(','.join(CONTROLLER_NAMES))}"
         )
 
 

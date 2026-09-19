@@ -47,8 +47,10 @@ Use `--depth_scale 1000` when the depth video stores metres. The segmentation pi
 `robot gripper` as controller labels while preserving the downstream
 `controller` mask name. Use
 `--controller_prompt` and `--controller_names` on `process_data.py` to override
-those defaults. Add `--shape_prior` to enable shape-prior processing. The
-command writes
+those defaults. Add `--shape_prior` to enable shape-prior processing. During
+GroundingDINO segmentation, the highest-confidence non-controller detection is
+kept per camera, while controller detections are preserved. This prevents one
+object from becoming multiple tracked objects. The command writes
 `final_data.pkl`, `metadata.json`, `calibrate.pkl`, and intermediate data under
 `<output_dir>/my_case/`.
 
