@@ -29,7 +29,13 @@ if __name__ == "__main__":
     parser.add_argument("--case_name", type=str, required=True)
     parser.add_argument("--train_frame", type=int, required=True)
     parser.add_argument("--iterations", type=int)
-    parser.add_argument("--no_visualize", action="store_true")
+    visualization_group = parser.add_mutually_exclusive_group()
+    visualization_group.add_argument(
+        "--visualize",
+        action="store_true",
+        help="Generate Warp training visualizations every 20 iterations.",
+    )
+    visualization_group.add_argument("--no_visualize", action="store_true")
     parser.add_argument(
         "--live_visualize",
         action="store_true",
