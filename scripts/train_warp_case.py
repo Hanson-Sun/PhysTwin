@@ -16,6 +16,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--iterations", type=int)
     parser.add_argument("--skip_cma", action="store_true")
     parser.add_argument("--no_visualize", action="store_true")
+    parser.add_argument(
+        "--live_visualize",
+        action="store_true",
+        help="Show the predicted trajectory in an Open3D window at visualization intervals.",
+    )
     return parser
 
 
@@ -47,6 +52,8 @@ def main() -> None:
         train_command.extend(["--iterations", str(args.iterations)])
     if args.no_visualize:
         train_command.append("--no_visualize")
+    if args.live_visualize:
+        train_command.append("--live_visualize")
     subprocess.run(train_command, check=True)
 
     train_dir = Path("experiments") / args.case_name / "train"

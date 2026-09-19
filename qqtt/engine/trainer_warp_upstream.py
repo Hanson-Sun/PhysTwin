@@ -78,6 +78,14 @@ class InvPhyTrainerWarp:
             self.object_motions_valid = self.dataset.object_motions_valid
             self.controller_points = self.dataset.controller_points
             self.controller_points_dense = self.dataset.controller_points_dense
+            visual_point_count = min(200, self.controller_points_dense.shape[1])
+            visual_indices = torch.linspace(
+                0,
+                self.controller_points_dense.shape[1] - 1,
+                visual_point_count,
+                device=cfg.device,
+            ).long()
+            self.controller_points_visual = self.controller_points_dense[:, visual_indices]
             self.structure_points = self.dataset.structure_points
             self.num_original_points = self.dataset.num_original_points
             self.num_surface_points = self.dataset.num_surface_points
@@ -91,6 +99,7 @@ class InvPhyTrainerWarp:
             self.object_visibilities = None
             self.object_motions_valid = None
             self.controller_points = None
+            self.controller_points_visual = None
             self.structure_points = self.dataset.data[0]
             self.num_original_points = None
             self.num_surface_points = None
@@ -152,6 +161,9 @@ class InvPhyTrainerWarp:
             num_original_points=self.num_original_points,
             controller_points=self.controller_points,
             controller_contact_points=self.controller_points_dense,
+            controller_contact_stiffness=cfg.controller_contact_stiffness,
+            controller_contact_friction=cfg.controller_contact_friction,
+            learn_controller_contact=True,
             reverse_z=cfg.reverse_z,
             spring_Y_min=cfg.spring_Y_min,
             spring_Y_max=cfg.spring_Y_max,
@@ -175,6 +187,19 @@ class InvPhyTrainerWarp:
                     wp.to_torch(self.simulator.wp_collide_object_fric),
                 ),
             ]
+            if self.simulator.controller_contact_enabled:
+                self.trainable_parameters.extend(
+                    [
+                        (
+                            "controller_contact_stiffness",
+                            wp.to_torch(self.simulator.wp_controller_contact_stiffness),
+                        ),
+                        (
+                            "controller_contact_friction",
+                            wp.to_torch(self.simulator.wp_controller_contact_friction),
+                        ),
+                    ]
+                )
             self.optimizer = torch.optim.Adam(
                 [parameter for _, parameter in self.trainable_parameters],
                 lr=cfg.base_lr,
@@ -324,8 +349,10 @@ class InvPhyTrainerWarp:
         # Render the initial visualization
         video_path = f"{cfg.base_dir}/train/init.mp4"
         visualize_training = not getattr(cfg, "disable_visualization", False)
+        live_visualization = getattr(cfg, "live_visualization", False)
         if visualize_training:
             self.visualize_sim(save_only=True, video_path=video_path)
+            self._reset_training_simulator_after_visualization()
 
         best_loss = None
         best_epoch = None
@@ -476,7 +503,24 @@ class InvPhyTrainerWarp:
                     "collide_object_fric": wp.to_torch(
                         self.simulator.wp_collide_object_fric, requires_grad=False
                     ).item(),
-                    "controller_contact_friction": self.simulator.controller_contact_friction,
+                    "controller_contact_stiffness": float(
+                        torch.exp(
+                            wp.to_torch(
+                                self.simulator.wp_controller_contact_stiffness,
+                                requires_grad=False,
+                            )
+                        ).item()
+                    ),
+                    "controller_contact_friction": float(
+                        torch.clamp(
+                            wp.to_torch(
+                                self.simulator.wp_controller_contact_friction,
+                                requires_grad=False,
+                            ),
+                            0.0,
+                            2.0,
+                        ).item()
+                    ),
                     "controller_contact_count": total_controller_contacts,
                     "controller_active_contact_count": total_active_controller_contacts,
                     "max_object_displacement": max_object_displacement,
@@ -503,9 +547,12 @@ class InvPhyTrainerWarp:
                 f"max_gradient_norms={max_gradient_norms}"
             )
 
-            if visualize_training and (i % cfg.vis_interval == 0 or i == cfg.iterations - 1):
+            if visualize_training and i % cfg.vis_interval == 0:
                 video_path = f"{cfg.base_dir}/train/sim_iter{i}.mp4"
                 self.visualize_sim(save_only=True, video_path=video_path)
+                if live_visualization:
+                    self.visualize_sim(save_only=False)
+                self._reset_training_simulator_after_visualization()
                 wandb.log(
                     {
                         "video": wandb.Video(
@@ -535,6 +582,20 @@ class InvPhyTrainerWarp:
                     "collide_object_fric": wp.to_torch(
                         self.simulator.wp_collide_object_fric, requires_grad=False
                     ),
+                    "controller_contact_stiffness": torch.exp(
+                        wp.to_torch(
+                            self.simulator.wp_controller_contact_stiffness,
+                            requires_grad=False,
+                        )
+                    ),
+                    "controller_contact_friction": torch.clamp(
+                        wp.to_torch(
+                            self.simulator.wp_controller_contact_friction,
+                            requires_grad=False,
+                        ),
+                        0.0,
+                        2.0,
+                    ),
                     "optimizer_state_dict": self.optimizer.state_dict(),
             }
             if best_loss is None or total_loss < best_loss:
@@ -562,6 +623,21 @@ class InvPhyTrainerWarp:
 
         wandb.finish()
 
+    def _reset_training_simulator_after_visualization(self):
+        """Restore eager-replay state and recapture resources used by training."""
+        if self.simulator.controller_contact_enabled:
+            self.simulator.controller_contact_grid = wp.HashGrid(128, 128, 128)
+            self.simulator.controller_contact_active.zero_()
+        self.simulator.set_init_state(
+            self.simulator.wp_init_vertices,
+            self.simulator.wp_init_velocities,
+        )
+        if cfg.data_type == "real":
+            self.simulator.set_controller_target(1)
+        self.simulator.clear_loss()
+        if cfg.use_graph:
+            self.simulator.rebuild_graphs()
+
     def test(self, model_path=None):
         if model_path is not None:
             # Load the model
@@ -587,6 +663,11 @@ class InvPhyTrainerWarp:
                 collide_object_elas.detach().clone(),
                 collide_object_fric.detach().clone(),
             )
+            if "controller_contact_stiffness" in checkpoint:
+                self.simulator.set_controller_contact(
+                    checkpoint["controller_contact_stiffness"].detach().clone(),
+                    checkpoint["controller_contact_friction"].detach().clone(),
+                )
 
         # Render the initial visualization
         video_path = f"{cfg.base_dir}/inference.mp4"
@@ -604,6 +685,11 @@ class InvPhyTrainerWarp:
         logger.info("Visualizing the simulation")
         # Visualize the whole simulation using current set of parameters in the physical simulator
         frame_len = self.dataset.frame_len
+        training_contact_grid = self.simulator.controller_contact_grid
+        if self.simulator.controller_contact_enabled:
+            # Graph capture leaves the training hash grid bound to captured
+            # state; visualization replays eagerly with a fresh grid.
+            self.simulator.controller_contact_grid = wp.HashGrid(128, 128, 128)
         self.simulator.set_init_state(
             self.simulator.wp_init_vertices, self.simulator.wp_init_velocities
         )
@@ -618,10 +704,11 @@ class InvPhyTrainerWarp:
                 if self.simulator.object_collision_flag:
                     self.simulator.update_collision_graph()
 
-                if cfg.use_graph:
-                    wp.capture_launch(self.simulator.forward_graph)
-                else:
-                    self.simulator.step()
+                # Replay visualization eagerly. The forward-only graph is not
+                # valid with the trainable contact-calibration buffers, while
+                # the combined training graph remains accelerated.
+                self.simulator.step()
+                wp.synchronize()
                 x = wp.to_torch(self.simulator.wp_states[-1].wp_x, requires_grad=False)
                 vertices.append(x.cpu())
                 # Set the intial state for the next step
@@ -630,6 +717,8 @@ class InvPhyTrainerWarp:
                     self.simulator.wp_states[-1].wp_v,
                 )
 
+        if self.simulator.controller_contact_enabled:
+            self.simulator.controller_contact_grid = training_contact_grid
         vertices = torch.stack(vertices, dim=0)
 
         if save_trajectory:
@@ -642,7 +731,7 @@ class InvPhyTrainerWarp:
             visualize_pc(
                 vertices[:, : self.num_all_points, :],
                 self.object_colors,
-                self.controller_points,
+                self.controller_points_visual,
                 visualize=True,
             )
         else:
@@ -650,10 +739,11 @@ class InvPhyTrainerWarp:
             visualize_pc(
                 vertices[:, : self.num_all_points, :],
                 self.object_colors,
-                self.controller_points,
+                self.controller_points_visual,
                 visualize=False,
                 save_video=True,
                 save_path=video_path,
+                mirror_saved_frame=True,
             )
 
     def on_press(self, key):

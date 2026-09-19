@@ -18,6 +18,7 @@ def visualize_pc(
     save_video=False,
     save_path=None,
     vis_cam_idx=0,
+    mirror_saved_frame=False,
 ):
     # Deprecated function, use visualize_pc instead
     FPS = cfg.FPS
@@ -130,6 +131,8 @@ def visualize_pc(
         if save_video:
             frame = np.asarray(vis.capture_screen_float_buffer(do_render=True))
             frame = (frame * 255).astype(np.uint8)
+            if mirror_saved_frame:
+                frame = cv2.flip(frame, 1)
             if cfg.overlay_path is not None:
                 # Get the mask where the pixel is white
                 mask = np.all(frame == [255, 255, 255], axis=-1)
