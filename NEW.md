@@ -57,15 +57,19 @@ command writes
 ```bash
 python scripts/train_warp_case.py \
 	--base_path data/different_types \
-	--case_name my_case
+	--case_name my_case \
+	--visualize
 ```
 
-This runs CMA initialization followed by differentiable warp training. The best
-weights are saved under `experiments/my_case/train/best_*.pth`, with a manifest
-at `experiments/my_case/train/training_manifest.json`. Use `--skip_cma` to skip
+This runs CMA initialization followed by differentiable warp training. The
+single `--visualize` flag enables both saved Warp training videos and the live
+Open3D trajectory window; without it, training is headless. The best weights are
+saved under `experiments/my_case/train/best_*.pth`, with a manifest at
+`experiments/my_case/train/training_manifest.json`. Use `--skip_cma` to skip
 the initialization stage only when
-`experiments_optimization/my_case/optimal_params.pkl` already exists. Use
-`--iterations 1 --cma_max_iter 1 --no_visualize` for a small end-to-end test.
+`experiments_optimization/my_case/optimal_params.pkl` already exists. For a
+small headless end-to-end test, use `--iterations 1 --cma_max_iter 1` without
+`--visualize`.
 
 ## Reconstruct Gaussians
 
@@ -94,7 +98,8 @@ setting are selected automatically:
 
 ```bash
 python scripts/run_case_pipeline.py \
-	--case_name double_lift_sloth
+	--case_name double_lift_sloth \
+	--visualize
 ```
 
 This runs RGB-D processing, CMA and warp training, Gaussian reconstruction, and
@@ -106,8 +111,12 @@ Gaussian pruning in order. Use `--dry_run` to inspect the resolved settings,
 Use `--no_shape_prior` to override a configured shape prior,
 or `--shape_prior` to enable it for a case configured without one. Use
 `--skip_segmentation` to resume after a completed segmentation stage.
-Warp training is headless by default and writes checkpoints under
-`experiments/<case_name>/train/`.
+The full pipeline is headless by default. Pass the same `--visualize` flag to
+show preprocessing visualizations, save Warp training videos, and open the live
+Warp Open3D preview. Warp checkpoints are written under
+`experiments/<case_name>/train/`. Runtime playback always selects the highest
+numbered available `best_<iteration>.pth` checkpoint rather than relying on
+filesystem glob order.
 
 RGB-D processing automatically runs in the `phystwin-data` environment (see
 [Environments](#environments)).

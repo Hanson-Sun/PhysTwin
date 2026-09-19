@@ -33,7 +33,11 @@ parser.add_argument(
 )
 parser.add_argument("--shape_prior", action="store_true", default=False)
 parser.add_argument("--skip_segmentation", action="store_true")
-parser.add_argument("--no_visualize", action="store_true")
+parser.add_argument(
+    "--visualize",
+    action="store_true",
+    help="Show preprocessing visualizations; disabled by default.",
+)
 args = parser.parse_args()
 
 # Grounded-SAM2 is intentionally isolated in the data-processing environment.
@@ -173,7 +177,7 @@ if PROCESS_3D:
     with Timer("Data Tracking"):
         run_stage(
             f"{sys.executable} ./data_process/data_process_track.py --base_path {base_path} --case_name {case_name}"
-            + (" --no_visualize" if args.no_visualize else "")
+            + ("" if args.visualize else " --no_visualize")
         )
 
 if PROCESS_ALIGN and SHAPE_PRIOR:
@@ -189,12 +193,12 @@ if PROCESS_FINAL:
         if SHAPE_PRIOR:
             run_stage(
                 f"{sys.executable} ./data_process/data_process_sample.py --base_path {base_path} --case_name {case_name} --shape_prior"
-                + (" --no_visualize" if args.no_visualize else "")
+                + ("" if args.visualize else " --no_visualize")
             )
         else:
             run_stage(
                 f"{sys.executable} ./data_process/data_process_sample.py --base_path {base_path} --case_name {case_name}"
-                + (" --no_visualize" if args.no_visualize else "")
+                + ("" if args.visualize else " --no_visualize")
             )
 
     # Save the train test split

@@ -29,17 +29,10 @@ if __name__ == "__main__":
     parser.add_argument("--case_name", type=str, required=True)
     parser.add_argument("--train_frame", type=int, required=True)
     parser.add_argument("--iterations", type=int)
-    visualization_group = parser.add_mutually_exclusive_group()
-    visualization_group.add_argument(
+    parser.add_argument(
         "--visualize",
         action="store_true",
-        help="Generate Warp training visualizations every 20 iterations.",
-    )
-    visualization_group.add_argument("--no_visualize", action="store_true")
-    parser.add_argument(
-        "--live_visualize",
-        action="store_true",
-        help="Show the predicted trajectory in an Open3D window at visualization intervals.",
+        help="Save training videos and show the trajectory in an Open3D window every visualization interval.",
     )
     args = parser.parse_args()
 
@@ -55,8 +48,9 @@ if __name__ == "__main__":
         if args.iterations < 1:
             raise ValueError("--iterations must be at least 1")
         cfg.iterations = args.iterations
-    cfg.disable_visualization = args.no_visualize
-    cfg.live_visualization = args.live_visualize
+    # One flag controls both saved videos and the live Open3D preview.
+    cfg.disable_visualization = not args.visualize
+    cfg.live_visualization = args.visualize
 
     print(f"[DATA TYPE]: {cfg.data_type}")
 

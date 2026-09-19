@@ -4,6 +4,7 @@
 
 - please fixc the controller points visualization script to actually produce video, its kinda bad right now
 
+- default should be visualization on!!! IMPORTANT
 
 
 

@@ -1,6 +1,7 @@
 import glob
 import json
 import os
+import re
 import pickle
 import random
 import subprocess
@@ -222,7 +223,21 @@ def main():
             f"{args.gaussian_path}/{args.case_name}/{exp_name}/point_cloud/"
             "iteration_10000/point_cloud.ply"
         )
-        best_model_path = glob.glob(f"experiments/{args.case_name}/train/best_*.pth")[0]
+        best_model_candidates = glob.glob(
+            f"experiments/{args.case_name}/train/best_*.pth"
+        )
+        if not best_model_candidates:
+            raise FileNotFoundError(
+                f"No best checkpoint found under experiments/{args.case_name}/train"
+            )
+
+        def checkpoint_sort_key(path):
+            match = re.search(r"best_(\d+)\.pth$", path)
+            iteration = int(match.group(1)) if match else -1
+            return iteration, os.path.getmtime(path)
+
+        # Always use the latest numbered best checkpoint, not arbitrary glob order.
+        best_model_path = max(best_model_candidates, key=checkpoint_sort_key)
 
         logger.set_log_file(path=output_dir, name="inference_log")
         trainer = TrainerWarp(
