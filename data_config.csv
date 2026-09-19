@@ -22,5 +22,5 @@ single_push_sloth,sloth,True
 weird_package,package,False
 sim_rope, twine, False
 sim_rigid_box, box, False
-sim_rigid_box_heavy_end, box, False
+sim_rigid_box_heavy_end, red box, False
 

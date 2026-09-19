@@ -12,6 +12,7 @@ from sam2.sam2_image_predictor import SAM2ImagePredictor
 from groundingdino.util.inference import load_model, load_image, predict
 import json
 from argparse import ArgumentParser
+from controller_labels import is_controller_label, parse_controller_names
 
 """
 Hyperparam for Ground and Tracking
@@ -23,6 +24,12 @@ parser.add_argument("--base_path", type=str, default="/home/hanxiao/Desktop/Rese
 parser.add_argument("--case_name", type=str)
 parser.add_argument("--TEXT_PROMPT", type=str)
 parser.add_argument("--camera_idx", type=int)
+parser.add_argument(
+    "--controller_names",
+    type=str,
+    default="hand,claw,gripper,robot gripper,robotic gripper,robot",
+    help="Comma-separated labels that should remain as controller detections.",
+)
 parser.add_argument("--output_path", type=str, default="NONE")
 args = parser.parse_args()
 
@@ -30,6 +37,7 @@ base_path = args.base_path
 case_name = args.case_name
 TEXT_PROMPT = args.TEXT_PROMPT
 camera_idx = args.camera_idx
+controller_names = parse_controller_names(args.controller_names)
 if args.output_path == "NONE":
     output_path = f"{base_path}/{case_name}"
 else:
@@ -122,6 +130,33 @@ boxes = boxes * torch.Tensor([w, h, w, h])
 input_boxes = box_convert(boxes=boxes, in_fmt="cxcywh", out_fmt="xyxy").numpy()
 confidences = confidences.numpy().tolist()
 class_names = labels
+
+# Keep one object detection per camera while preserving all controller detections.
+# GroundingDINO may return several boxes for the same object phrase; using the
+# highest-confidence non-controller box avoids creating duplicate tracked objects.
+object_indices = [
+    index
+    for index, label in enumerate(class_names)
+    if not is_controller_label(label, controller_names)
+]
+if len(object_indices) > 1:
+    best_object_index = max(
+        object_indices, key=lambda index: confidences[index]
+    )
+    controller_indices = [
+        index
+        for index, label in enumerate(class_names)
+        if is_controller_label(label, controller_names)
+    ]
+    keep_indices = [best_object_index, *controller_indices]
+    boxes = boxes[keep_indices]
+    confidences = [confidences[index] for index in keep_indices]
+    class_names = [class_names[index] for index in keep_indices]
+    input_boxes = input_boxes[keep_indices]
+    print(
+        "Selected highest-confidence object detection: "
+        f"label={class_names[0]!r}, confidence={confidences[0]:.4f}"
+    )
 
 print(input_boxes)
 
