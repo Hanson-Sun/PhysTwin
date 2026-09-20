@@ -15,11 +15,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cma_max_iter", type=int, default=20)
     parser.add_argument("--iterations", type=int)
     parser.add_argument("--skip_cma", action="store_true")
-    parser.add_argument(
+    visualization = parser.add_mutually_exclusive_group()
+    visualization.add_argument(
         "--visualize",
+        dest="visualize",
         action="store_true",
-        help="Save training videos every visualization interval.",
+        help="Save training videos every visualization interval (default).",
     )
+    visualization.add_argument(
+        "--no_visualize",
+        dest="visualize",
+        action="store_false",
+        help="Disable saved training videos.",
+    )
+    parser.set_defaults(visualize=True)
     return parser
 
 
@@ -49,8 +58,7 @@ def main() -> None:
     train_command = [sys.executable, "train_warp.py", *common]
     if args.iterations is not None:
         train_command.extend(["--iterations", str(args.iterations)])
-    if args.visualize:
-        train_command.append("--visualize")
+    train_command.append("--visualize" if args.visualize else "--no_visualize")
     subprocess.run(train_command, check=True)
 
     train_dir = Path("experiments") / args.case_name / "train"

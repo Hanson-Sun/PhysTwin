@@ -50,7 +50,9 @@ Use `--depth_scale 1000` when the depth video stores metres. The segmentation pi
 those defaults. Add `--shape_prior` to enable shape-prior processing. During
 GroundingDINO segmentation, the highest-confidence non-controller detection is
 kept per camera, while controller detections are preserved. This prevents one
-object from becoming multiple tracked objects. The command writes
+object from becoming multiple tracked objects. Shape-prior alignment upsamples
+the masked crop and selects render views using matches with valid rendered depth.
+The command writes
 `final_data.pkl`, `metadata.json`, `calibrate.pkl`, and intermediate data under
 `<output_dir>/my_case/`.
 
@@ -63,15 +65,14 @@ python scripts/train_warp_case.py \
 	--visualize
 ```
 
-This runs CMA initialization followed by differentiable warp training.The single `--visualize` flag enables saved Warp training videos; training
-is headless otherwise.
+This runs CMA initialization followed by differentiable warp training. Saved Warp
+training videos are enabled by default; use `--no_visualize` for a headless run.
  The best weights are
 saved under `experiments/my_case/train/best_*.pth`, with a manifest at
 `experiments/my_case/train/training_manifest.json`. Use `--skip_cma` to skip
 the initialization stage only when
 `experiments_optimization/my_case/optimal_params.pkl` already exists. For a
-small headless end-to-end test, use `--iterations 1 --cma_max_iter 1` without
-`--visualize`.
+small headless end-to-end test, use `--iterations 1 --cma_max_iter 1 --no_visualize`.
 
 ## Reconstruct Gaussians
 
@@ -113,7 +114,8 @@ Gaussian pruning in order. Use `--dry_run` to inspect the resolved settings,
 Use `--no_shape_prior` to override a configured shape prior,
 or `--shape_prior` to enable it for a case configured without one. Use
 `--skip_segmentation` to resume after a completed segmentation stage.
-The full pipeline is headless by default. Pass the same `--visualize` flag to show preprocessing visualizations and save Warp training videos.
+The full pipeline enables preprocessing visualizations and saved Warp training
+videos by default. Pass `--no_visualize` for a headless run.
  Warp checkpoints are written under
 `experiments/<case_name>/train/`. Runtime playback always selects the highest
 numbered available `best_<iteration>.pth` checkpoint rather than relying on

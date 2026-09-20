@@ -1,7 +1,6 @@
 import glob
 import json
 import os
-import re
 import pickle
 import random
 import subprocess
@@ -174,6 +173,35 @@ def load_quality_metrics(output_dir):
         return json.load(file)
 
 
+def resolve_best_model_path(case_name):
+    """Resolve the checkpoint selected by the most recent training manifest."""
+    train_dir = os.path.join("experiments", case_name, "train")
+    manifest_path = os.path.join(train_dir, "training_manifest.json")
+    if os.path.isfile(manifest_path):
+        with open(manifest_path, "r", encoding="utf-8") as file:
+            manifest = json.load(file)
+        manifest_checkpoint = manifest.get("best_checkpoint")
+        if manifest_checkpoint:
+            checkpoint_path = os.path.normpath(manifest_checkpoint)
+            if not os.path.isabs(checkpoint_path):
+                checkpoint_path = os.path.normpath(checkpoint_path)
+            if os.path.isfile(checkpoint_path):
+                return checkpoint_path
+            raise FileNotFoundError(
+                "Training manifest points to a missing checkpoint: "
+                f"{checkpoint_path}"
+            )
+
+    candidates = glob.glob(os.path.join(train_dir, "best_*.pth"))
+    if not candidates:
+        raise FileNotFoundError(
+            f"No best checkpoint found under {train_dir}"
+        )
+    # Without a manifest, use the most recently modified checkpoint rather than
+    # assuming the largest epoch number belongs to the current training run.
+    return max(candidates, key=os.path.getmtime)
+
+
 def main():
     args = build_parser().parse_args()
     if args.num_views < 1 or args.num_views > 3:
@@ -223,21 +251,8 @@ def main():
             f"{args.gaussian_path}/{args.case_name}/{exp_name}/point_cloud/"
             "iteration_10000/point_cloud.ply"
         )
-        best_model_candidates = glob.glob(
-            f"experiments/{args.case_name}/train/best_*.pth"
-        )
-        if not best_model_candidates:
-            raise FileNotFoundError(
-                f"No best checkpoint found under experiments/{args.case_name}/train"
-            )
-
-        def checkpoint_sort_key(path):
-            match = re.search(r"best_(\d+)\.pth$", path)
-            iteration = int(match.group(1)) if match else -1
-            return iteration, os.path.getmtime(path)
-
-        # Always use the latest numbered best checkpoint, not arbitrary glob order.
-        best_model_path = max(best_model_candidates, key=checkpoint_sort_key)
+        best_model_path = resolve_best_model_path(args.case_name)
+        logger.info(f"Using warp checkpoint: {best_model_path}")
 
         logger.set_log_file(path=output_dir, name="inference_log")
         trainer = TrainerWarp(
