@@ -1,7 +1,7 @@
 <mujoco model="sim_object_box">
   <!-- Default object: a free box with a freejoint, ready to be poked/pushed.
        Swap this file for any object with the same shape (one body, a
-       freejoint, and one or more geoms) -- e.g. a soft-body/PhysTwin
+       freejoint, and one or more geoms) - e.g. a soft-body/PhysTwin
        reconstruction later.
 
        Physics stays intentionally plain: one rigid box body. Visual texture
@@ -13,28 +13,24 @@
          Built-in procedural textures are used so no external image assets are
          required to render the rigid box case. -->
     <!-- Front (+z in MuJoCo box-local space) -->
-    <texture name="tex_front" type="2d" builtin="checker" rgb1="0.95 0.85 0.45"
-             rgb2="0.60 0.70 0.85" width="128" height="128"/>
+    <texture name="tex_front" type="2d" builtin="checker" rgb1="0.04 0.22 0.60"
+             rgb2="0.10 0.48 0.90" width="128" height="128"/>
     <!-- Back (-z) -->
-    <texture name="tex_back" type="2d" builtin="checker" rgb1="0.80 0.35 0.35"
-             rgb2="0.20 0.25 0.35" width="128" height="128"/>
+    <texture name="tex_back" type="2d" builtin="checker" rgb1="0.65 0.04 0.04"
+             rgb2="0.95 0.16 0.08" width="128" height="128"/>
     <!-- Right (+x) -->
-    <texture name="tex_right" type="2d" builtin="checker" rgb1="0.35 0.75 0.45"
-             rgb2="0.20 0.30 0.60" width="128" height="128"/>
+    <texture name="tex_right" type="2d" builtin="checker" rgb1="0.04 0.32 0.10"
+             rgb2="0.16 0.72 0.20" width="128" height="128"/>
     <!-- Left (-x) -->
-    <texture name="tex_left" type="2d" builtin="checker" rgb1="0.95 0.55 0.25"
-             rgb2="0.40 0.20 0.35" width="128" height="128"/>
+    <texture name="tex_left" type="2d" builtin="checker" rgb1="0.24 0.07 0.025"
+             rgb2="0.58 0.24 0.05" width="128" height="128"/>
     <!-- Top (+y) -->
-    <texture name="tex_top" type="2d" builtin="checker" rgb1="0.85 0.85 0.90"
-             rgb2="0.40 0.45 0.55" width="128" height="128"/>
+    <texture name="tex_top" type="2d" builtin="checker" rgb1="0.55 0.32 0.015"
+             rgb2="0.95 0.62 0.03" width="128" height="128"/>
     <!-- Bottom (-y) -->
-    <texture name="tex_bottom" type="2d" builtin="checker" rgb1="0.45 0.45 0.45"
-             rgb2="0.20 0.20 0.22" width="128" height="128"/>
+    <texture name="tex_bottom" type="2d" builtin="checker" rgb1="0.10 0.04 0.16"
+             rgb2="0.35 0.10 0.48" width="128" height="128"/>
 
-    <!-- Secondary fine-grained noise-like pattern used on two faces to avoid
-         perfectly periodic checker saturation under rotation. -->
-    <texture name="tex_stripe" type="2d" builtin="checker" rgb1="0.98 0.98 0.98"
-             rgb2="0.55 0.55 0.55" width="64" height="64"/>
 
     <material name="mat_front" texture="tex_front" texrepeat="6 6" texuniform="true"
               rgba="1 1 1 1" specular="0.3" shininess="0.4"/>
@@ -49,12 +45,6 @@
     <material name="mat_bottom" texture="tex_bottom" texrepeat="4 4" texuniform="true"
               rgba="1 1 1 1" specular="0.2" shininess="0.35"/>
 
-    <!-- Accent stripe used on top and bottom faces for additional orientation
-         cues. -->
-    <material name="mat_top_stripe" texture="tex_stripe" texrepeat="1 12"
-              texuniform="true" rgba="1 1 1 1"/>
-    <material name="mat_bottom_stripe" texture="tex_stripe" texrepeat="1 12"
-              texuniform="true" rgba="1 1 1 1"/>
   </asset>
 
   <worldbody>
@@ -85,10 +75,10 @@
             size="0.001 0.0502 0.0502" material="mat_left"
             contype="0" conaffinity="0"/>
       <geom name="face_top" type="box" pos="0 0.0501 0"
-            size="0.0502 0.001 0.0502" material="mat_top_stripe"
+            size="0.0502 0.001 0.0502" material="mat_top"
             contype="0" conaffinity="0"/>
       <geom name="face_bottom" type="box" pos="0 -0.0501 0"
-            size="0.0502 0.001 0.0502" material="mat_bottom_stripe"
+            size="0.0502 0.001 0.0502" material="mat_bottom"
             contype="0" conaffinity="0"/>
     </body>
   </worldbody>

@@ -143,6 +143,8 @@ assets are:
 - `object_rope.xml` — simple flexible rope/twine scaffold
 - `object_box.xml` — validated rigid baseline box
   so alignment and reconstruction have non-trivial visual features
+- `sim_rigid_box_grip_lift` — single-claw open/close grip-and-lift case using
+  the textured rigid box
 
 The previous procedural cloth, doll, sloth, zebra, package, and compound-plush
 stand-ins are not active in `models.json` because they are not proper connected

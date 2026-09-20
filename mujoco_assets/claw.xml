@@ -1,36 +1,41 @@
 <mujoco model="claw">
   <include file="claw_materials.xml"/>
 
-  <!-- A visually distinctive two-prong claw. The mocap origin remains the
-       pinch point so existing interaction trajectories stay compatible. -->
+  <!-- A visually distinctive two-prong claw with a widened base stance. -->
   <worldbody>
     <body name="__NAME__" mocap="true" pos="0 0 0.3">
-      <!-- Large colored pads make the contact point easy to segment. -->
-      <geom name="__NAME___pad_l" type="sphere" pos="-0.016 0 0" size="0.012"
-            material="claw_pad" solref="0.01 1" contype="1" conaffinity="1"/>
-      <geom name="__NAME___pad_r" type="sphere" pos="0.016 0 0" size="0.012"
-            material="claw_pad" solref="0.01 1" contype="1" conaffinity="1"/>
+      <!-- Hinges widened from x = ±0.048 to x = ±0.068 -->
+      <body name="__NAME___finger_l" pos="-0.068 0 0.13">
+        <joint name="__NAME___finger_l_hinge" type="hinge" axis="0 1 0"
+               range="-0.8 0.8" damping="0.2"/>
+        <geom name="__NAME___finger_l_geom" type="capsule"
+              fromto="0 0 0 0.052 0 -0.13" size="0.009"
+              material="claw_metal" solref="0.01 1" contype="1" conaffinity="1"/>
+        <geom name="__NAME___tip_l" type="capsule"
+              fromto="0 0 0 0.013 0 0.03" size="0.010"
+              material="claw_metal" solref="0.01 1" contype="1" conaffinity="1"/>
+        <geom name="__NAME___pad_l" type="sphere" pos="0.052 0 -0.13" size="0.012"
+              material="claw_pad" solref="0.01 1" contype="1" conaffinity="1"/>
+      </body>
+      <body name="__NAME___finger_r" pos="0.068 0 0.13">
+        <joint name="__NAME___finger_r_hinge" type="hinge" axis="0 1 0"
+               range="-0.8 0.8" damping="0.2"/>
+        <geom name="__NAME___finger_r_geom" type="capsule"
+              fromto="0 0 0 -0.052 0 -0.13" size="0.009"
+              material="claw_metal" solref="0.01 1" contype="1" conaffinity="1"/>
+        <geom name="__NAME___tip_r" type="capsule"
+              fromto="0 0 0 -0.013 0 0.03" size="0.010"
+              material="claw_metal" solref="0.01 1" contype="1" conaffinity="1"/>
+        <geom name="__NAME___pad_r" type="sphere" pos="-0.052 0 -0.13" size="0.012"
+              material="claw_pad" solref="0.01 1" contype="1" conaffinity="1"/>
+      </body>
 
-      <!-- Splayed prongs provide a recognizable claw silhouette. -->
-      <geom name="__NAME___finger_l" type="capsule"
-            fromto="-0.016 0 0 -0.048 0 0.13" size="0.009"
-            material="claw_metal" solref="0.01 1" contype="1" conaffinity="1"/>
-      <geom name="__NAME___finger_r" type="capsule"
-            fromto="0.016 0 0 0.048 0 0.13" size="0.009"
-            material="claw_metal" solref="0.01 1" contype="1" conaffinity="1"/>
-      <geom name="__NAME___tip_l" type="capsule"
-            fromto="-0.048 0 0.13 -0.035 0 0.16" size="0.010"
-            material="claw_metal" solref="0.01 1" contype="1" conaffinity="1"/>
-      <geom name="__NAME___tip_r" type="capsule"
-            fromto="0.048 0 0.13 0.035 0 0.16" size="0.010"
-            material="claw_metal" solref="0.01 1" contype="1" conaffinity="1"/>
-
-      <!-- Palm and thick wrist make the tool readable in RGB frames. -->
+      <!-- Palm and housing half-widths widened to enclose the new hinge positions -->
       <geom name="__NAME___palm" type="box" pos="0 0 0.17"
-            size="0.065 0.035 0.022" material="claw_metal"
+            size="0.085 0.035 0.022" material="claw_metal"
             contype="1" conaffinity="1"/>
       <geom name="__NAME___housing" type="box" pos="0 0 0.215"
-            size="0.045 0.030 0.025" material="claw_metal"
+            size="0.065 0.030 0.025" material="claw_metal"
             contype="1" conaffinity="1"/>
       <geom name="__NAME___wrist" type="capsule"
             fromto="0 0 0.23 0 0 0.34" size="0.022"
@@ -39,4 +44,11 @@
             size="0.028" material="claw_pad" contype="1" conaffinity="1"/>
     </body>
   </worldbody>
+
+  <actuator>
+    <position name="__NAME___finger_l_motor" joint="__NAME___finger_l_hinge"
+              kp="100" ctrlrange="-0.8 0.8"/>
+    <position name="__NAME___finger_r_motor" joint="__NAME___finger_r_hinge"
+              kp="100" ctrlrange="-0.8 0.8"/>
+  </actuator>
 </mujoco>

@@ -23,4 +23,4 @@ weird_package,package,False
 sim_rope, twine, True
 sim_rigid_box, box, True
 sim_rigid_box_heavy_end, box, True
-
+sim_rigid_box_grip_lift, box, True

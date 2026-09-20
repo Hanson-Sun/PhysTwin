@@ -65,7 +65,12 @@ def build_scene(n_interactors: int = 1, object_file: str = DEFAULT_OBJECT_FILE):
     for i in range(n_interactors):
         name = f"interactor{i}"
         claw_file = f"claw_{name}.xml"
-        assets[claw_file] = claw_template.replace("__NAME__", name).encode()
+        claw_text = claw_template.replace("__NAME__", name)
+        if i > 0:
+            claw_text = claw_text.replace(
+                f'<include file="{CLAW_MATERIALS_FILE}"/>', ""
+            )
+        assets[claw_file] = claw_text.encode()
         includes.append(f'<include file="{claw_file}"/>')
 
     xml = (
