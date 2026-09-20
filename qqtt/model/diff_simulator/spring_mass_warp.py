@@ -10,6 +10,9 @@ if not cfg.use_graph:
     wp.config.verify_autograd_array_access = True
 
 
+GROUND_GRAVITY = 9.81
+GROUND_CONTACT_EPSILON = 1e-5
+
 SIM_FORCE_MODE_GATHER = "gather"
 SIM_FORCE_MODE_TEMPLATE_STATE_BATCHED_ATOMIC = "template_state_batched_atomic"
 SIM_FORCE_MODES = (
@@ -573,55 +576,70 @@ def build_resting_collision_pairs(
             resting_collision_pairs[index][i] = wp.bool(1)
 
 @wp.kernel
+def ground_friction_force(
+    x: wp.array(dtype=wp.vec3),
+    v: wp.array(dtype=wp.vec3),
+    masses: wp.array(dtype=float),
+    collide_fric: wp.array(dtype=float),
+    dt: float,
+    reverse_factor: float,
+    forces: wp.array(dtype=wp.vec3),
+):
+    tid = wp.tid()
+    position = x[tid]
+    velocity = v[tid]
+    normal = wp.vec3(0.0, 0.0, 1.0) * reverse_factor
+    next_signed_z = (position[2] + velocity[2] * dt) * reverse_factor
+    if next_signed_z <= GROUND_CONTACT_EPSILON:
+        tangent_velocity = velocity - wp.dot(velocity, normal) * normal
+        tangent_speed = wp.length(tangent_velocity)
+        mass = wp.max(masses[tid], 1e-6)
+        penetration = wp.max(-next_signed_z, 0.0)
+        normal_force = mass * (
+            GROUND_GRAVITY + penetration / wp.max(dt * dt, 1e-12)
+        )
+        friction_limit = wp.clamp(collide_fric[0], low=0.0, high=2.0) * normal_force
+        requested_friction = mass * tangent_speed / wp.max(dt, 1e-6)
+        friction_force = wp.min(friction_limit, requested_friction)
+        if tangent_speed > 1e-6:
+            wp.atomic_sub(
+                forces,
+                tid,
+                friction_force * tangent_velocity / tangent_speed,
+            )
+
+
+@wp.kernel
 def integrate_ground_collision(
     x: wp.array(dtype=wp.vec3),
     v: wp.array(dtype=wp.vec3),
     collide_elas: wp.array(dtype=float),
-    collide_fric: wp.array(dtype=float),
     dt: float,
     reverse_factor: float,
     x_new: wp.array(dtype=wp.vec3),
     v_new: wp.array(dtype=wp.vec3),
 ):
     tid = wp.tid()
-
-    x0 = x[tid]
-    v0 = v[tid]
-
+    position = x[tid]
+    velocity = v[tid]
     normal = wp.vec3(0.0, 0.0, 1.0) * reverse_factor
+    signed_z = position[2] * reverse_factor
+    signed_v_z = velocity[2] * reverse_factor
+    next_signed_z = (position[2] + velocity[2] * dt) * reverse_factor
 
-    x_z = x0[2]
-    v_z = v0[2]
-    next_x_z = (x_z + v_z * dt) * reverse_factor
-
-    if next_x_z < 0.0 and v_z * reverse_factor < -1e-4:
-        # Ground Collision
-        v_normal = wp.dot(v0, normal) * normal
-        v_tao = v0 - v_normal
-        v_normal_length = wp.length(v_normal)
-        v_tao_length = wp.max(wp.length(v_tao), 1e-6)
-        clamp_collide_elas = wp.clamp(collide_elas[0], low=0.0, high=1.0)
-        clamp_collide_fric = wp.clamp(collide_fric[0], low=0.0, high=2.0)
-
-        v_normal_new = -clamp_collide_elas * v_normal
-        a = wp.max(
-            0.0,
-            1.0
-            - clamp_collide_fric
-            * (1.0 + clamp_collide_elas)
-            * v_normal_length
-            / v_tao_length,
-        )
-        v_tao_new = a * v_tao
-
-        v1 = v_normal_new + v_tao_new
-        toi = -x_z / v_z
+    impact = next_signed_z < 0.0 and signed_v_z < -1e-4
+    if impact:
+        normal_velocity = wp.dot(velocity, normal) * normal
+        tangent_velocity = velocity - normal_velocity
+        elasticity = wp.clamp(collide_elas[0], low=0.0, high=1.0)
+        velocity_after = -elasticity * normal_velocity + tangent_velocity
+        toi = wp.clamp(-signed_z / signed_v_z, low=0.0, high=dt)
     else:
-        v1 = v0
+        velocity_after = velocity
         toi = 0.0
 
-    x_new[tid] = x0 + v0 * toi + v1 * (dt - toi)
-    v_new[tid] = v1
+    x_new[tid] = position + velocity * toi + velocity_after * (dt - toi)
+    v_new[tid] = velocity_after
 
 class SpringMassSystemWarp:
     def __init__(
@@ -1049,6 +1067,20 @@ class SpringMassSystemWarp:
                 outputs=[self.wp_states[i].wp_vertice_forces],
             )
 
+            wp.launch(
+                ground_friction_force,
+                dim=self.object_massnode_total,
+                inputs=[
+                    self.wp_states[i].wp_x,
+                    self.wp_states[i].wp_v,
+                    self.wp_masses,
+                    self.wp_collide_fric,
+                    self.dt,
+                    self.reverse_factor,
+                ],
+                outputs=[self.wp_states[i].wp_vertice_forces],
+            )
+
             if self.object_collision_flag:
                 output_v = self.wp_states[i].wp_v_before_collision
             else:
@@ -1102,7 +1134,6 @@ class SpringMassSystemWarp:
                     self.wp_states[i].wp_x,
                     self.wp_states[i].wp_v_before_ground,
                     self.wp_collide_elas,
-                    self.wp_collide_fric,
                     self.dt,
                     self.reverse_factor,
                 ],

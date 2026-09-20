@@ -4,10 +4,11 @@
 # e.g.  ./run.sh --skip_process
 # Visualization is enabled by default; pass --no_visualize for a headless run.
 # Live Open3D preview has been removed from the simulation path.
+# sim_rigid_box 
 
 set -euo pipefail
 
-CASES=(sim_rigid_box sim_rigid_box_heavy_end sim_rope sim_rigid_box_grip_lift)
+CASES=(sim_rigid_box_heavy_end sim_rope sim_rigid_box_grip_lift)
 
 for case_name in "${CASES[@]}"; do
     echo ">>> Running case: $case_name"
