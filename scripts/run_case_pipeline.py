@@ -69,11 +69,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pruned_output_dir", type=Path)
     parser.add_argument("--skip_process", action="store_true")
     parser.add_argument("--skip_segmentation", action="store_true")
-    parser.add_argument(
+    visualization = parser.add_mutually_exclusive_group()
+    visualization.add_argument(
         "--visualize",
+        dest="visualize",
         action="store_true",
-        help="Visualize all enabled stages, including saved Warp videos.",
+        help="Enable visualizations for all enabled stages (default).",
     )
+    visualization.add_argument(
+        "--no_visualize",
+        dest="visualize",
+        action="store_false",
+        help="Disable preprocessing visualizations and saved Warp videos.",
+    )
+    parser.set_defaults(visualize=True)
     parser.add_argument("--skip_warp", action="store_true")
     parser.add_argument("--skip_gaussians", action="store_true")
     parser.add_argument("--skip_cma", action="store_true")
@@ -122,6 +131,7 @@ def main() -> None:
         print(f"CMA iterations: {cma_max_iter}")
         print(f"Warp iterations: {warp_iterations or '<config default>'}")
         print(f"Gaussian iterations: {gaussian_iterations}")
+        print(f"Visualization: {args.visualize}")
         return
 
     if not args.skip_process:
@@ -160,8 +170,7 @@ def main() -> None:
             warp_command.append("--skip_cma")
         if warp_iterations is not None:
             warp_command.extend(["--iterations", str(warp_iterations)])
-        if args.visualize:
-            warp_command.append("--visualize")
+        warp_command.append("--visualize" if args.visualize else "--no_visualize")
         run(warp_command, "Warp parameter training")
         require(
             REPO_ROOT / "experiments" / args.case_name / "train" / "training_manifest.json",

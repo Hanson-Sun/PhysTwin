@@ -29,11 +29,20 @@ if __name__ == "__main__":
     parser.add_argument("--case_name", type=str, required=True)
     parser.add_argument("--train_frame", type=int, required=True)
     parser.add_argument("--iterations", type=int)
-    parser.add_argument(
+    visualization = parser.add_mutually_exclusive_group()
+    visualization.add_argument(
         "--visualize",
+        dest="visualize",
         action="store_true",
-        help="Save training videos every visualization interval.",
+        help="Save training videos every visualization interval (default).",
     )
+    visualization.add_argument(
+        "--no_visualize",
+        dest="visualize",
+        action="store_false",
+        help="Disable saved training videos.",
+    )
+    parser.set_defaults(visualize=True)
     args = parser.parse_args()
 
     base_path = args.base_path
@@ -48,7 +57,6 @@ if __name__ == "__main__":
         if args.iterations < 1:
             raise ValueError("--iterations must be at least 1")
         cfg.iterations = args.iterations
-    # Saved training videos are opt-in via --visualize.
     cfg.disable_visualization = not args.visualize
 
     print(f"[DATA TYPE]: {cfg.data_type}")
