@@ -89,3 +89,49 @@ def object_push_trajectory(
         (exit_x, y, contact_z + approach_height),
     ]
     return multi_poke_trajectory(points, steps_per_segment)
+
+
+def object_grip_lift_trajectory(
+    model,
+    data,
+    steps_per_segment: int = 30,
+    body_name: str = "object",
+    approach_height: float = 0.14,
+    lift_height: float = 0.16,
+) -> tuple[list, list[float]]:
+    """Open one claw, approach the box, close its fingers, and lift."""
+    body_id = model.body(body_name).id
+    box_bounds = []
+    for geom_id in range(model.ngeom):
+        if model.geom_bodyid[geom_id] != body_id:
+            continue
+        if model.geom_type[geom_id] != mujoco.mjtGeom.mjGEOM_BOX:
+            continue
+        half_extents = model.geom_size[geom_id]
+        rotation = data.geom_xmat[geom_id].reshape(3, 3)
+        world_extents = np.abs(rotation) @ half_extents
+        center = data.geom_xpos[geom_id]
+        box_bounds.append((center - world_extents, center + world_extents))
+
+    if not box_bounds:
+        raise ValueError(f"grip_lift requires a box geometry on body '{body_name}'")
+    lower = np.min([bounds[0] for bounds in box_bounds], axis=0)
+    upper = np.max([bounds[1] for bounds in box_bounds], axis=0)
+    center = (lower + upper) * 0.5
+    contact_z = max(0.012, center[2])
+    y = center[1]
+    approach_x = center[0]
+
+    waypoints = [
+        (approach_x, y, contact_z + approach_height),
+        (approach_x, y, contact_z),
+        (approach_x, y, contact_z),
+        (approach_x, y, contact_z + lift_height),
+    ]
+    trajectory = multi_poke_trajectory(waypoints, steps_per_segment)
+    closing = (
+        [0.0] * steps_per_segment
+        + list(np.linspace(0.0, 1.0, steps_per_segment))
+        + [1.0] * steps_per_segment
+    )
+    return trajectory, closing

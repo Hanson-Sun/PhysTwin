@@ -17,7 +17,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from mujoco_sim.interactor import object_push_trajectory
+from mujoco_sim.interactor import (
+    object_grip_lift_trajectory,
+    object_push_trajectory,
+)
 from mujoco_sim.phystwin_export import export_case
 from mujoco_sim.scene import DEFAULT_OBJECT_FILE, load_model
 from mujoco_sim.simulation import DigitalTwinSim
@@ -67,6 +70,7 @@ def normalize(model: dict, manifest: Path) -> dict:
         "case_name": str(case_name),
         "object_file": str(object_file),
         "n_interactors": integer(model, "n_interactors", 1),
+        "trajectory": str(model.get("trajectory", "push")),
         "width": integer(model, "width", 848),
         "height": integer(model, "height", 480),
         "steps_per_segment": integer(model, "steps_per_segment", 300),
@@ -86,16 +90,33 @@ def generate(model: dict, output_dir: Path, overwrite: bool) -> Path:
         width=model["width"],
         height=model["height"],
     )
-    trajectory = object_push_trajectory(
-        sim.model,
-        sim.data,
-        steps_per_segment=model["steps_per_segment"],
-    )
-    trajectories = {
-        f"interactor{i}": trajectory for i in range(model["n_interactors"])
-    }
+    gripper_opening = None
+    if model["trajectory"] == "grip_lift":
+        if model["n_interactors"] != 1:
+            raise ValueError("grip_lift requires exactly one interactor")
+        trajectory, closing = object_grip_lift_trajectory(
+            sim.model,
+            sim.data,
+            steps_per_segment=model["steps_per_segment"],
+        )
+        trajectories = {"interactor0": trajectory}
+        gripper_opening = {"interactor0": closing}
+    elif model["trajectory"] == "push":
+        trajectory = object_push_trajectory(
+            sim.model,
+            sim.data,
+            steps_per_segment=model["steps_per_segment"],
+        )
+        trajectories = {
+            f"interactor{i}": trajectory for i in range(model["n_interactors"])
+        }
+    else:
+        raise ValueError(
+            f"unsupported trajectory '{model['trajectory']}' for {model['case_name']}"
+        )
+    trajectory_length = len(next(iter(trajectories.values())))
     with tqdm(
-        total=len(trajectory),
+        total=trajectory_length,
         desc=model["case_name"],
         unit="step",
         dynamic_ncols=True,
@@ -106,6 +127,9 @@ def generate(model: dict, output_dir: Path, overwrite: bool) -> Path:
             capture_every=model["capture_every"],
             substeps=model["substeps"],
             progress=progress.update,
+            gripper_opening=gripper_opening,
+            grasped_body="object" if model["trajectory"] == "grip_lift" else None,
+            grasp_offset=(0.0, 0.0, 0.0),
         )
     if len(frames) < 2:
         raise ValueError(
@@ -142,7 +166,10 @@ def main() -> None:
         models = [model for model in models if model["case_name"] in args.cases]
     output_dir = args.output_dir.resolve()
     for model in models:
-        print(f"{model['case_name']}: {model['object_file']}")
+        print(
+            f"{model['case_name']}: {model['object_file']} "
+            f"({model['trajectory']}, interactors={model['n_interactors']})"
+        )
         if not args.dry_run:
             print(f"  wrote {generate(model, output_dir, args.overwrite)}")
 

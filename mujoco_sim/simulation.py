@@ -44,6 +44,20 @@ class DigitalTwinSim:
         for _ in range(n):
             mujoco.mj_step(self.model, self.data)
 
+    def set_gripper_opening(self, name: str, closing: float) -> None:
+        """Set one claw's normalized hinge closing target in [0, 1]."""
+        if not 0.0 <= closing <= 1.0:
+            raise ValueError("gripper closing must be between 0 and 1")
+        # Increased open_angle from 0.35 to 0.70 rad to provide ~4.5cm clearance per side
+        open_angle = 0.70
+        close_angle = 0.45
+        left_motor = self.model.actuator(f"{name}_finger_l_motor").id
+        right_motor = self.model.actuator(f"{name}_finger_r_motor").id
+        # The left hinge opens toward +q and closes toward -q; the right
+        # hinge opens toward -q and closes toward +q.
+        self.data.ctrl[left_motor] = open_angle - (open_angle + close_angle) * closing
+        self.data.ctrl[right_motor] = -open_angle + (open_angle + close_angle) * closing
+
     # ---- sensing -------------------------------------------------------
 
     def render_rgbd(self, camera: str) -> tuple[np.ndarray, np.ndarray]:
@@ -76,23 +90,36 @@ class DigitalTwinSim:
         capture_every: int = 1,
         substeps: int = 1,
         progress=None,
+        gripper_opening: dict[str, list[float]] | None = None,
+        grasped_body: str | None = None,
+        grasp_start_fraction: float = 2.0 / 3.0,
+        grasp_offset=(0.0, 0.0, 0.0),
     ) -> list[Frame]:
-        """Play a scripted trajectory and record synthetic RGB-D + ground truth.
-
-        interactor_trajectory: {interactor_name: [(pos, quat), ...]}, all
-            lists must share the same length T (one waypoint per outer step).
-        Returns one Frame per captured step. If ``progress`` is provided, it
-        is called once after each outer simulation step.
-        """
+        """Play a scripted trajectory and record synthetic RGB-D + ground truth."""
         if capture_every < 1:
             raise ValueError("capture_every must be at least 1")
         if substeps < 1:
             raise ValueError("substeps must be at least 1")
         if not interactor_trajectory:
             raise ValueError("at least one interactor trajectory is required")
+        if not 0.0 <= grasp_start_fraction <= 1.0:
+            raise ValueError("grasp_start_fraction must be between 0 and 1")
+        if grasped_body is not None:
+            joint_id = self.model.body(grasped_body).jntadr[0]
+            if joint_id < 0 or self.model.jnt_type[joint_id] != mujoco.mjtJoint.mjJNT_FREE:
+                raise ValueError(f"grasped body '{grasped_body}' must have a freejoint")
+            qpos_adr = self.model.jnt_qposadr[joint_id]
+            qvel_adr = self.model.jnt_dofadr[joint_id]
+        else:
+            qpos_adr = qvel_adr = None
 
         names = list(interactor_trajectory.keys())
         lengths = {name: len(trajectory) for name, trajectory in interactor_trajectory.items()}
+        if gripper_opening is not None:
+            if set(gripper_opening) != set(names):
+                raise ValueError("gripper_opening must contain one sequence per interactor")
+            if any(len(gripper_opening[name]) != next(iter(lengths.values())) for name in names):
+                raise ValueError("gripper opening sequences must match trajectory length")
         if not lengths or min(lengths.values()) == 0:
             raise ValueError("interactor trajectories cannot be empty")
         if len(set(lengths.values())) != 1:
@@ -104,6 +131,17 @@ class DigitalTwinSim:
             for name in names:
                 pos, quat = interactor_trajectory[name][t]
                 self.set_interactor_pose(name, pos, quat)
+                if gripper_opening is not None:
+                    self.set_gripper_opening(name, gripper_opening[name][t])
+
+            if grasped_body is not None and t >= int((n_waypoints - 1) * grasp_start_fraction):
+                grasp_position = np.mean(
+                    [self.data.mocap_pos[self.model.body(name).mocapid[0]] for name in names],
+                    axis=0,
+                ) + np.asarray(grasp_offset, dtype=float)
+                self.data.qpos[qpos_adr : qpos_adr + 3] = grasp_position
+                self.data.qvel[qvel_adr : qvel_adr + 6] = 0.0
+                mujoco.mj_forward(self.model, self.data)
 
             self.step(substeps)
 

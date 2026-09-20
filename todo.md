@@ -1,4 +1,3 @@
-- visualize runs twice, why dont we just display?? thats kinda dumb in training
 - rigid body not working? arent we supposed to have a dense spring mass system? this should be wayyy better at simulating rigid bodies whats going on??
     - missing bottom fgace since not shape prior
     - need volumetric dense representation somehow
