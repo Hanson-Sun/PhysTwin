@@ -139,44 +139,44 @@ if PROCESS_SHAPE_PRIOR and SHAPE_PRIOR:
     with Timer("Image Upscale"):
         if not os.path.isfile(f"{base_path}/{case_name}/shape/high_resolution.png"):
             run_stage(
-                f"{sys.executable} ./data_process/image_upscale.py --img_path {base_path}/{case_name}/color/0/0.png --mask_path {mask_path} --output_path {base_path}/{case_name}/shape/high_resolution.png --category {category}"
+                f"{shlex.quote(sys.executable)} ./data_process/image_upscale.py --img_path {shlex.quote(f'{base_path}/{case_name}/color/0/0.png')} --mask_path {shlex.quote(mask_path)} --output_path {shlex.quote(f'{base_path}/{case_name}/shape/high_resolution.png')} --category {shlex.quote(category)}"
             )
 
     # Get the masked image of the object
     with Timer("Image Segmentation"):
         run_stage(
-                f"{sys.executable} ./data_process/segment_util_image.py --img_path {base_path}/{case_name}/shape/high_resolution.png --TEXT_PROMPT {category} --output_path {base_path}/{case_name}/shape/masked_image.png"
+                f"{shlex.quote(sys.executable)} ./data_process/segment_util_image.py --img_path {shlex.quote(f'{base_path}/{case_name}/shape/high_resolution.png')} --TEXT_PROMPT {shlex.quote(category)} --output_path {shlex.quote(f'{base_path}/{case_name}/shape/masked_image.png')}"
         )
 
     with Timer("Shape Prior Generation"):
         run_stage(
-                f"{sys.executable} ./data_process/shape_prior.py --img_path {base_path}/{case_name}/shape/masked_image.png --output_dir {base_path}/{case_name}/shape"
+                f"{shlex.quote(sys.executable)} ./data_process/shape_prior.py --img_path {shlex.quote(f'{base_path}/{case_name}/shape/masked_image.png')} --output_dir {shlex.quote(f'{base_path}/{case_name}/shape')}"
         )
 
 if PROCESS_TRACK:
     # Get the dense tracking of the object using Co-tracker
     with Timer("Dense Tracking"):
         run_stage(
-            f"{sys.executable} ./data_process/dense_track.py --base_path {base_path} --case_name {case_name}"
+            f"{shlex.quote(sys.executable)} ./data_process/dense_track.py --base_path {shlex.quote(base_path)} --case_name {shlex.quote(case_name)}"
         )
 
 if PROCESS_3D:
     # Get the pcd in the world coordinate from the raw observations
     with Timer("Lift to 3D"):
         run_stage(
-            f"{sys.executable} ./data_process/data_process_pcd.py --base_path {base_path} --case_name {case_name}"
+            f"{shlex.quote(sys.executable)} ./data_process/data_process_pcd.py --base_path {shlex.quote(base_path)} --case_name {shlex.quote(case_name)}"
         )
 
     # Further process and filter the noise of object and controller masks
     with Timer("Mask Post-Processing"):
         run_stage(
-            f"{sys.executable} ./data_process/data_process_mask.py --base_path {shlex.quote(base_path)} --case_name {shlex.quote(case_name)} --controller_names {shlex.quote(','.join(CONTROLLER_NAMES))}"
+            f"{shlex.quote(sys.executable)} ./data_process/data_process_mask.py --base_path {shlex.quote(base_path)} --case_name {shlex.quote(case_name)} --controller_names {shlex.quote(','.join(CONTROLLER_NAMES))}"
         )
 
     # Process the data tracking
     with Timer("Data Tracking"):
         run_stage(
-            f"{sys.executable} ./data_process/data_process_track.py --base_path {base_path} --case_name {case_name}"
+            f"{shlex.quote(sys.executable)} ./data_process/data_process_track.py --base_path {shlex.quote(base_path)} --case_name {shlex.quote(case_name)}"
             + ("" if args.visualize else " --no_visualize")
         )
 
@@ -184,7 +184,7 @@ if PROCESS_ALIGN and SHAPE_PRIOR:
     # Align the shape prior with partial observation
     with Timer("Alignment"):
         run_stage(
-            f"{sys.executable} ./data_process/align.py --base_path {shlex.quote(base_path)} --case_name {shlex.quote(case_name)} --controller_names {shlex.quote(','.join(sorted(CONTROLLER_NAMES)))}"
+            f"{shlex.quote(sys.executable)} ./data_process/align.py --base_path {shlex.quote(base_path)} --case_name {shlex.quote(case_name)} --controller_names {shlex.quote(','.join(sorted(CONTROLLER_NAMES)))}"
         )
 
 if PROCESS_FINAL:
@@ -192,12 +192,12 @@ if PROCESS_FINAL:
     with Timer("Final Data Generation"):
         if SHAPE_PRIOR:
             run_stage(
-                f"{sys.executable} ./data_process/data_process_sample.py --base_path {base_path} --case_name {case_name} --shape_prior"
+                f"{shlex.quote(sys.executable)} ./data_process/data_process_sample.py --base_path {shlex.quote(base_path)} --case_name {shlex.quote(case_name)} --shape_prior"
                 + ("" if args.visualize else " --no_visualize")
             )
         else:
             run_stage(
-                f"{sys.executable} ./data_process/data_process_sample.py --base_path {base_path} --case_name {case_name}"
+                f"{shlex.quote(sys.executable)} ./data_process/data_process_sample.py --base_path {shlex.quote(base_path)} --case_name {shlex.quote(case_name)}"
                 + ("" if args.visualize else " --no_visualize")
             )
 

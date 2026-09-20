@@ -17,7 +17,7 @@ class Config:
         self.vis_interval = 20
         self.init_spring_Y = 3e3
         self.collide_elas = 0.5
-        self.collide_fric = 0.3
+        self.collide_fric = 0.5
         self.collide_object_elas = 0.7
         self.collide_object_fric = 0.3
 

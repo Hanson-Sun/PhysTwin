@@ -1,5 +1,7 @@
 import os
 import csv
+import shlex
+import subprocess
 
 base_path = "./data/different_types"
 
@@ -16,10 +18,16 @@ with open("data_config.csv", newline="", encoding="utf-8") as csvfile:
             continue
 
         if shape_prior.lower() == "true":
-            os.system(
-                f"python process_data.py --base_path {base_path} --case_name {case_name} --category {category} --shape_prior"
+            subprocess.run(
+                shlex.split(
+                    f"python process_data.py --base_path {shlex.quote(base_path)} --case_name {shlex.quote(case_name)} --category {shlex.quote(category)} --shape_prior"
+                ),
+                check=True,
             )
         else:
-            os.system(
-                f"python process_data.py --base_path {base_path} --case_name {case_name} --category {category}"
+            subprocess.run(
+                shlex.split(
+                    f"python process_data.py --base_path {shlex.quote(base_path)} --case_name {shlex.quote(case_name)} --category {shlex.quote(category)}"
+                ),
+                check=True,
             )

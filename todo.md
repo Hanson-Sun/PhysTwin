@@ -1,3 +1,7 @@
+- ok only thing missing now is the floor and object friction, is this learned anywhere?? maybe in the cma stage?
+
+
+
 - rigid body not working? arent we supposed to have a dense spring mass system? this should be wayyy better at simulating rigid bodies whats going on??
     - missing bottom fgace since not shape prior
     - need volumetric dense representation somehow

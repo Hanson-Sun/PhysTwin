@@ -14,6 +14,7 @@ import os
 
 class OptimizerCMA:
     INVALID_OBJECTIVE = 1.0e6
+    GROUND_FRICTION_MIN = 0.1
 
     def __init__(
         self,
@@ -207,6 +208,12 @@ class OptimizerCMA:
         assert min < max, "The minimum value should be less than the maximum value"
         return value * (max - min) + min
 
+    def normalize_ground_friction(self, value):
+        return self.normalize(value, self.GROUND_FRICTION_MIN, 2.0)
+
+    def denormalize_ground_friction(self, value):
+        return self.denormalize(value, self.GROUND_FRICTION_MIN, 2.0)
+
     def optimize(self, max_iter=100):
         # Initialize the parameters
         init_global_spring_Y = self.normalize(
@@ -219,7 +226,7 @@ class OptimizerCMA:
         fixed_controller_radius = cfg.controller_radius
         fixed_controller_max_neighbours = cfg.controller_max_neighbours
         init_collide_elas = cfg.collide_elas
-        init_collide_fric = self.normalize(cfg.collide_fric, 0, 2)
+        init_collide_fric = self.normalize_ground_friction(cfg.collide_fric)
         init_collide_object_elas = cfg.collide_object_elas
         init_collide_object_fric = self.normalize(cfg.collide_object_fric, 0, 2)
         init_collision_dist = self.normalize(cfg.collision_dist, 0.01, 0.05)
@@ -259,7 +266,7 @@ class OptimizerCMA:
         final_controller_radius = fixed_controller_radius
         final_controller_max_neighbours = fixed_controller_max_neighbours
         final_collide_elas = optimal_x[3]
-        final_collide_fric = self.denormalize(optimal_x[4], 0, 2)
+        final_collide_fric = self.denormalize_ground_friction(optimal_x[4])
         final_collide_object_elas = optimal_x[5]
         final_collide_object_fric = self.denormalize(optimal_x[6], 0, 2)
         final_collision_dist = self.denormalize(optimal_x[7], 0.01, 0.05)
@@ -311,7 +318,7 @@ class OptimizerCMA:
         controller_radius = cfg.controller_radius
         controller_max_neighbours = cfg.controller_max_neighbours
         collide_elas = parameters[3]
-        collide_fric = self.denormalize(parameters[4], 0, 2)
+        collide_fric = self.denormalize_ground_friction(parameters[4])
         collide_object_elas = parameters[5]
         collide_object_fric = self.denormalize(parameters[6], 0, 2)
         collision_dist = self.denormalize(parameters[7], 0.01, 0.05)
