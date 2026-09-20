@@ -248,8 +248,6 @@ def filter_motion(track_data, neighbor_dist=0.01, visualize=True):
         # modified_num = len(modified_points)
         # print(f"Object Frame {i}: {modified_num} points are modified")
 
-    if vis is not None:
-        vis.destroy_window()
     track_data["object_motions_valid"] = object_motions_valid
 
     controller_points = track_data["controller_points"]
@@ -270,11 +268,6 @@ def filter_motion(track_data, neighbor_dist=0.01, visualize=True):
     )
     y_normalized = (controller_points[0, :, 1] - y_min) / (y_max - y_min)
     rainbow_colors = plt.cm.rainbow(y_normalized)[:, :3]
-
-    vis = None
-    if visualize:
-        vis = o3d.visualization.Visualizer()
-        vis.create_window()
 
     for i in tqdm(range(num_frames - 1)):
         # Convert the points of the current frame to an Open3D point cloud
@@ -330,6 +323,8 @@ def filter_motion(track_data, neighbor_dist=0.01, visualize=True):
             vis.poll_events()
             vis.update_renderer()
 
+    if vis is not None:
+        vis.destroy_window()
     track_data["controller_mask"] = mask
     return track_data
 
