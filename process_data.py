@@ -35,10 +35,10 @@ parser.add_argument("--shape_prior", action="store_true", default=False)
 parser.add_argument(
     "--shape_generator",
     type=str,
-    choices=["trellis", "carve"],
+    choices=["trellis", "carve", "poisson"],
     default="trellis",
-    help="Shape-prior backend: TRELLIS image-to-3D (default) or deterministic "
-    "depth-carved space carving (data_process/shape_carve.py).",
+    help="Shape-prior backend: TRELLIS image-to-3D (default), voxel-carved "
+    "space carving, or Poisson reconstruction (data_process/shape_carve.py).",
 )
 parser.add_argument("--skip_segmentation", action="store_true")
 parser.add_argument(
@@ -133,12 +133,13 @@ if PROCESS_SEG:
 if PROCESS_SHAPE_PRIOR and SHAPE_PRIOR:
     existDir(f"{base_path}/{case_name}/shape")
 
-    if args.shape_generator == "carve":
-        # Deterministic depth-carved space carving. Needs only the masks, depth
+    if args.shape_generator in {"carve", "poisson"}:
+        # Deterministic depth-based reconstruction. Needs only the masks, depth
         # maps, and camera calibration produced by segmentation.
         with Timer("Shape Carving"):
             run_stage(
                 f"{shlex.quote(sys.executable)} ./data_process/shape_carve.py --base_path {shlex.quote(base_path)} --case_name {shlex.quote(case_name)} --controller_names {shlex.quote(','.join(CONTROLLER_NAMES))}"
+                + (" --method poisson" if args.shape_generator == "poisson" else "")
                 + (" --visualize" if args.visualize else "")
             )
     else:
@@ -198,8 +199,9 @@ if PROCESS_3D:
             + ("" if args.visualize else " --no_visualize")
         )
 
-if PROCESS_ALIGN and SHAPE_PRIOR:
-    # Align the shape prior with partial observation
+if PROCESS_ALIGN and SHAPE_PRIOR and args.shape_generator == "trellis":
+    # TRELLIS shape priors are not in the calibrated world frame, so align them
+    # with the observed point cloud. Depth-carved priors already are.
     with Timer("Alignment"):
         run_stage(
             f"{shlex.quote(sys.executable)} ./data_process/align.py --base_path {shlex.quote(base_path)} --case_name {shlex.quote(case_name)} --controller_names {shlex.quote(','.join(sorted(CONTROLLER_NAMES)))}"
@@ -210,7 +212,7 @@ if PROCESS_FINAL:
     with Timer("Final Data Generation"):
         if SHAPE_PRIOR:
             run_stage(
-                f"{shlex.quote(sys.executable)} ./data_process/data_process_sample.py --base_path {shlex.quote(base_path)} --case_name {shlex.quote(case_name)} --shape_prior"
+                f"{shlex.quote(sys.executable)} ./data_process/data_process_sample.py --base_path {shlex.quote(base_path)} --case_name {shlex.quote(case_name)} --shape_prior --shape_generator {args.shape_generator}"
                 + ("" if args.visualize else " --no_visualize")
             )
         else:

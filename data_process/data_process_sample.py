@@ -17,6 +17,7 @@ parser.add_argument(
 )
 parser.add_argument("--case_name", type=str, required=True)
 parser.add_argument("--shape_prior", action="store_true", default=False)
+parser.add_argument("--shape_generator", choices=["trellis", "carve", "poisson"], default="trellis")
 parser.add_argument("--no_visualize", action="store_true")
 parser.add_argument("--num_surface_points", type=int, default=1024)
 parser.add_argument("--volume_sample_size", type=float, default=0.005)
@@ -56,11 +57,12 @@ def process_unique_points(track_data):
     object_points[object_points[..., 2] > 0, 2] = 0
 
     if SHAPE_PRIOR:
-        from utils.align_util import as_mesh
-
-        shape_mesh_path = f"{base_path}/{case_name}/shape/matching/final_mesh.glb"
+        shape_mesh_path = (
+            f"{base_path}/{case_name}/shape/object.glb"
+            if args.shape_generator in {"carve", "poisson"}
+            else f"{base_path}/{case_name}/shape/matching/final_mesh.glb"
+        )
         trimesh_mesh = trimesh.load(shape_mesh_path, force="mesh")
-        trimesh_mesh = as_mesh(trimesh_mesh)
         # Sample the surface points
         surface_points, _ = trimesh.sample.sample_surface(
             trimesh_mesh, num_surface_points
