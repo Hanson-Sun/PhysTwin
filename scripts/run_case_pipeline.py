@@ -15,14 +15,23 @@ DEFAULT_CONFIG = REPO_ROOT / "data_config.csv"
 DEFAULT_GAUSSIAN_ROOT = REPO_ROOT / "gaussian_output"
 
 
-def case_config(config_path: Path, case_name: str) -> tuple[str | None, bool]:
+def case_config(
+    config_path: Path, case_name: str
+) -> tuple[str | None, bool, str | None]:
+    """Return (category, shape_prior, shape_generator) for a case.
+
+    ``data_config.csv`` rows are ``case_name, category, shape_prior`` plus an
+    optional fourth ``shape_generator`` column (``trellis``/``carve``); a missing
+    or empty column returns ``None`` so the caller can apply its own default.
+    """
     if not config_path.is_file():
-        return None, False
+        return None, False, None
     with config_path.open("r", newline="", encoding="utf-8") as file:
         for row in csv.reader(file):
             if len(row) >= 3 and row[0].strip() == case_name:
-                return row[1].strip(), row[2].strip().lower() == "true"
-    return None, False
+                generator = row[3].strip().lower() if len(row) >= 4 else ""
+                return row[1].strip(), row[2].strip().lower() == "true", generator or None
+    return None, False, None
 
 
 def run(command: list[str], label: str, clean_data_environment: bool = False) -> None:
@@ -62,6 +71,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--shape_prior", action="store_true")
     parser.add_argument("--no_shape_prior", action="store_true")
+    parser.add_argument(
+        "--shape_generator",
+        choices=["trellis", "carve"],
+        default=None,
+        help="Shape-prior backend: TRELLIS image-to-3D or deterministic "
+        "depth-carved space carving. Defaults to the case's data_config.csv "
+        "column, then to trellis.",
+    )
     parser.add_argument("--cma_max_iter", type=int, default=20)
     parser.add_argument("--warp_iterations", type=int)
     parser.add_argument("--gaussian_iterations", type=int, default=10_000)
@@ -97,7 +114,10 @@ def main() -> None:
     case_dir = args.base_path / args.case_name
     require(case_dir, "Case directory")
 
-    configured_category, configured_shape_prior = case_config(args.config, args.case_name)
+    configured_category, configured_shape_prior, configured_generator = case_config(
+        args.config, args.case_name
+    )
+    shape_generator = args.shape_generator or configured_generator or "trellis"
     category = args.category or configured_category
     if category is None and not args.skip_process:
         raise ValueError(
@@ -125,6 +145,7 @@ def main() -> None:
         print(f"Data python: {args.data_python}")
         print(f"Category: {category or '<not needed with --skip_process>'}")
         print(f"Shape prior: {use_shape_prior}")
+        print(f"Shape generator: {shape_generator}")
         print(f"Process data: {not args.skip_process}")
         print(f"Train warp: {not args.skip_warp}")
         print(f"Reconstruct Gaussians: {not args.skip_gaussians}")
@@ -147,6 +168,7 @@ def main() -> None:
         ]
         if use_shape_prior:
             process_command.append("--shape_prior")
+            process_command.extend(["--shape_generator", shape_generator])
         if args.skip_segmentation:
             process_command.append("--skip_segmentation")
         if args.visualize:

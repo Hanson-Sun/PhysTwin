@@ -56,6 +56,58 @@ The command writes
 `final_data.pkl`, `metadata.json`, `calibrate.pkl`, and intermediate data under
 `<output_dir>/my_case/`.
 
+## Shape Prior Backends
+
+Shape-prior generation writes the watertight object mesh that alignment and
+interior-point sampling consume (`shape/object.glb`). The backend is chosen per
+case by the optional fourth column of `data_config.csv`; a missing or empty
+column falls back to `trellis`.
+
+- `trellis` — generative image-to-3D from a single upscaled, segmented RGB crop
+  (`data_process/shape_prior.py`). Fast, but the geometry is hallucinated, so
+  thin or obliquely viewed objects can come out wrong.
+- `carve` — deterministic depth-carved space carving
+  (`data_process/shape_carve.py`). Carves free space from the object masks, depth
+  maps, and camera poses, force-occupies the observed points, and extracts a
+  watertight mesh. It uses only masks, depth, and calibration, so it does not
+  depend on the generative stage. Well-observed faces are accurate, but faces
+  seen at grazing incidence (e.g. a horizontal top from near-horizontal cameras)
+  and hidden sides are only weakly constrained, so they come out slightly domed
+  or approximate rather than perfectly flat.
+
+`data_config.csv` selects `carve` for the heavy-end box:
+
+```csv
+sim_rigid_box_heavy_end, rectangle box, True,carve
+```
+
+Override the configured backend for one run with `--shape_generator`:
+
+```bash
+python scripts/run_case_pipeline.py \
+	--case_name sim_rigid_box_heavy_end \
+	--shape_generator carve
+```
+
+Run the carver on its own to inspect the mesh (it writes `object.glb`,
+`object.ply`, and, with `--visualize`, a turntable video):
+
+```bash
+python data_process/shape_carve.py \
+	--base_path data/different_types \
+	--case_name sim_rigid_box_heavy_end \
+	--output_dir data/different_types/sim_rigid_box_heavy_end/shape
+```
+
+Useful options:
+
+- `--voxel_size` — voxel edge in metres; the detail/resolution trade-off.
+- `--mask_erode` — pixels to erode each object mask before carving; raise it to
+  trim the segmentation fringe and tighten the mesh.
+- `--extract` — `isosurface` (default; marching cubes on the signed distance
+  field, smooth and watertight) or `blocky` (exact but visibly stepped).
+- `--allow_open` — write a non-watertight mesh instead of failing the stage.
+
 ## Train Warp Parameters
 
 ```bash
