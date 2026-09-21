@@ -32,6 +32,14 @@ parser.add_argument(
     help="Comma-separated labels treated as the controller mask.",
 )
 parser.add_argument("--shape_prior", action="store_true", default=False)
+parser.add_argument(
+    "--shape_generator",
+    type=str,
+    choices=["trellis", "carve"],
+    default="trellis",
+    help="Shape-prior backend: TRELLIS image-to-3D (default) or deterministic "
+    "depth-carved space carving (data_process/shape_carve.py).",
+)
 parser.add_argument("--skip_segmentation", action="store_true")
 parser.add_argument(
     "--visualize",
@@ -123,35 +131,45 @@ if PROCESS_SEG:
 
 
 if PROCESS_SHAPE_PRIOR and SHAPE_PRIOR:
-    # Get the mask path for the image
-    with open(f"{base_path}/{case_name}/mask/mask_info_{0}.json", "r") as f:
-        data = json.load(f)
-    obj_idx = None
-    for key, value in data.items():
-        if not is_controller_label(value, CONTROLLER_NAMES):
-            if obj_idx is not None:
-                raise ValueError("More than one object detected.")
-            obj_idx = int(key)
-    mask_path = f"{base_path}/{case_name}/mask/0/{obj_idx}/0.png"
-
     existDir(f"{base_path}/{case_name}/shape")
-    # Get the high-resolution of the image to prepare for the trellis generation
-    with Timer("Image Upscale"):
-        if not os.path.isfile(f"{base_path}/{case_name}/shape/high_resolution.png"):
+
+    if args.shape_generator == "carve":
+        # Deterministic depth-carved space carving. Needs only the masks, depth
+        # maps, and camera calibration produced by segmentation.
+        with Timer("Shape Carving"):
             run_stage(
-                f"{shlex.quote(sys.executable)} ./data_process/image_upscale.py --img_path {shlex.quote(f'{base_path}/{case_name}/color/0/0.png')} --mask_path {shlex.quote(mask_path)} --output_path {shlex.quote(f'{base_path}/{case_name}/shape/high_resolution.png')} --category {shlex.quote(category)}"
+                f"{shlex.quote(sys.executable)} ./data_process/shape_carve.py --base_path {shlex.quote(base_path)} --case_name {shlex.quote(case_name)} --controller_names {shlex.quote(','.join(CONTROLLER_NAMES))}"
+                + (" --visualize" if args.visualize else "")
+            )
+    else:
+        # Get the mask path for the image
+        with open(f"{base_path}/{case_name}/mask/mask_info_{0}.json", "r") as f:
+            data = json.load(f)
+        obj_idx = None
+        for key, value in data.items():
+            if not is_controller_label(value, CONTROLLER_NAMES):
+                if obj_idx is not None:
+                    raise ValueError("More than one object detected.")
+                obj_idx = int(key)
+        mask_path = f"{base_path}/{case_name}/mask/0/{obj_idx}/0.png"
+
+        # Get the high-resolution of the image to prepare for the trellis generation
+        with Timer("Image Upscale"):
+            if not os.path.isfile(f"{base_path}/{case_name}/shape/high_resolution.png"):
+                run_stage(
+                    f"{shlex.quote(sys.executable)} ./data_process/image_upscale.py --img_path {shlex.quote(f'{base_path}/{case_name}/color/0/0.png')} --mask_path {shlex.quote(mask_path)} --output_path {shlex.quote(f'{base_path}/{case_name}/shape/high_resolution.png')} --category {shlex.quote(category)}"
+                )
+
+        # Get the masked image of the object
+        with Timer("Image Segmentation"):
+            run_stage(
+                    f"{shlex.quote(sys.executable)} ./data_process/segment_util_image.py --img_path {shlex.quote(f'{base_path}/{case_name}/shape/high_resolution.png')} --TEXT_PROMPT {shlex.quote(category)} --output_path {shlex.quote(f'{base_path}/{case_name}/shape/masked_image.png')}"
             )
 
-    # Get the masked image of the object
-    with Timer("Image Segmentation"):
-        run_stage(
-                f"{shlex.quote(sys.executable)} ./data_process/segment_util_image.py --img_path {shlex.quote(f'{base_path}/{case_name}/shape/high_resolution.png')} --TEXT_PROMPT {shlex.quote(category)} --output_path {shlex.quote(f'{base_path}/{case_name}/shape/masked_image.png')}"
-        )
-
-    with Timer("Shape Prior Generation"):
-        run_stage(
-                f"{shlex.quote(sys.executable)} ./data_process/shape_prior.py --img_path {shlex.quote(f'{base_path}/{case_name}/shape/masked_image.png')} --output_dir {shlex.quote(f'{base_path}/{case_name}/shape')}"
-        )
+        with Timer("Shape Prior Generation"):
+            run_stage(
+                    f"{shlex.quote(sys.executable)} ./data_process/shape_prior.py --img_path {shlex.quote(f'{base_path}/{case_name}/shape/masked_image.png')} --output_dir {shlex.quote(f'{base_path}/{case_name}/shape')}"
+            )
 
 if PROCESS_TRACK:
     # Get the dense tracking of the object using Co-tracker

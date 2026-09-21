@@ -27,6 +27,7 @@ dependencies:
       - supervision>=0.25,<1
       - tqdm
       - scikit-learn
+      - scikit-image
       - fvcore
       - einops
       - diffusers==0.30.3
