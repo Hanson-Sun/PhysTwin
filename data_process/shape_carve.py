@@ -7,6 +7,8 @@ consumes (``{base_path}/{case_name}/shape/object.glb``):
 
     {output_dir}/object.glb
     {output_dir}/object.ply
+    {output_dir}/observed_points.ply
+    {output_dir}/observed_points_filtered.ply
     {output_dir}/visualization.mp4   (only with --visualize)
 
 Occupancy rule per voxel v:
@@ -60,6 +62,13 @@ def parse_args():
     parser.add_argument("--controller_names", type=str, default=None)
     parser.add_argument("--frame", type=int, default=0)
     parser.add_argument(
+        "--method",
+        choices=["voxel", "poisson"],
+        default="voxel",
+        help="Surface reconstruction backend. Poisson uses the observed 3-D "
+        "points and estimated normals; voxel uses space carving.",
+    )
+    parser.add_argument(
         "--voxel_size",
         type=float,
         default=0.004,
@@ -91,7 +100,7 @@ def parse_args():
     parser.add_argument(
         "--close_iters",
         type=int,
-        default=1,
+        default=0,
         help="26-connected morphological closing passes on the occupancy that "
         "seal voxel-thin tunnels and holes punched by depth noise. 0 disables.",
     )
@@ -110,6 +119,19 @@ def parse_args():
     )
     parser.add_argument("--depth_max", type=float, default=2.0)
     parser.add_argument(
+        "--poisson_depth",
+        type=int,
+        default=9,
+        help="Octree depth for Poisson reconstruction; higher is finer and slower.",
+    )
+    parser.add_argument(
+        "--poisson_density_percentile",
+        type=float,
+        default=0.0,
+        help="Discard Poisson vertices below this density percentile before repair. "
+        "0 preserves the closed Poisson surface (recommended).",
+    )
+    parser.add_argument(
         "--extract",
         choices=["isosurface", "blocky"],
         default="isosurface",
@@ -122,6 +144,25 @@ def parse_args():
         type=int,
         default=10,
         help="Taubin smoothing iterations applied to the blocky surface.",
+    )
+    parser.add_argument(
+        "--ground_z",
+        type=float,
+        default=0.0,
+        help="Ground-plane height used when flattening the support side.",
+    )
+    parser.add_argument(
+        "--flatten_ground",
+        dest="flatten_ground",
+        action="store_true",
+        default=True,
+        help="Flatten generated vertices above ground_z (default).",
+    )
+    parser.add_argument(
+        "--no_flatten_ground",
+        dest="flatten_ground",
+        action="store_false",
+        help="Disable default ground-plane flattening.",
     )
     parser.add_argument(
         "--allow_open",
@@ -350,6 +391,36 @@ def isosurface_mesh(occupied, grid_origin, voxel):
     return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
 
 
+def poisson_mesh(points, voxel_size, depth, density_percentile):
+    """Reconstruct a smooth closed surface from calibrated surface points."""
+    point_cloud = o3d.geometry.PointCloud()
+    point_cloud.points = o3d.utility.Vector3dVector(points)
+    point_cloud = point_cloud.voxel_down_sample(max(voxel_size, 1e-4))
+    if len(point_cloud.points) < 32:
+        raise RuntimeError("Poisson reconstruction needs at least 32 surface points.")
+
+    point_cloud.estimate_normals(
+        search_param=o3d.geometry.KDTreeSearchParamHybrid(
+            radius=max(4.0 * voxel_size, 0.01), max_nn=50
+        )
+    )
+    point_cloud.orient_normals_consistent_tangent_plane(
+        min(100, len(point_cloud.points) - 1)
+    )
+    mesh, densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
+        point_cloud,
+        depth=depth,
+        scale=1.1,
+        linear_fit=True,
+    )
+
+    densities = np.asarray(densities)
+    if densities.size and density_percentile > 0:
+        cutoff = np.percentile(densities, density_percentile)
+        mesh.remove_vertices_by_mask(densities < cutoff)
+    return mesh_to_trimesh(mesh)
+
+
 def mesh_to_trimesh(mesh):
     triangles = np.asarray(mesh.triangles)
     if triangles.size == 0:
@@ -380,14 +451,19 @@ def repair_and_check(mesh, allow_open):
         fix_normals(mesh)
 
     watertight = bool(mesh.is_watertight and mesh.is_winding_consistent)
-    if not watertight and not allow_open:
-        raise RuntimeError(
-            "Reconstructed mesh is not watertight after repair "
-            f"(watertight={mesh.is_watertight}, "
-            f"winding_consistent={mesh.is_winding_consistent}). "
-            "Try a smaller --voxel_size, --extract blocky, or pass --allow_open."
-        )
-    return mesh, watertight
+    closed_volume = bool(
+        mesh.is_volume and np.isfinite(mesh.volume) and abs(float(mesh.volume)) > 0
+    )
+    if not watertight or not closed_volume:
+        if not allow_open:
+            raise RuntimeError(
+                "Reconstructed mesh is not a valid closed volume after repair "
+                f"(watertight={mesh.is_watertight}, "
+                f"winding_consistent={mesh.is_winding_consistent}, "
+                f"is_volume={mesh.is_volume}, volume={mesh.volume}). "
+                "Try different reconstruction settings or pass --allow_open."
+            )
+    return mesh, bool(watertight and closed_volume)
 
 
 def render_turntable(mesh, path):
@@ -462,6 +538,7 @@ def main():
         raise RuntimeError("No observed object points; check masks and depth.")
 
     coarse = args.outlier_voxel or max(4 * args.voxel_size, 0.016)
+    observed_raw = observed
     observed = largest_cluster(observed, coarse)
     print(f"[shape_carve] observed object points after outlier filtering: {observed.shape[0]}")
 
@@ -480,52 +557,71 @@ def main():
             f"--max_voxels={args.max_voxels}"
         )
 
-    grid_origin = low - voxel
-    dims = tuple(int(d) for d in dims)
-    print(f"[shape_carve] grid dims={dims} voxel={voxel:.4f} m")
-
-    occupied = carve_occupancy(
-        dims, grid_origin, voxel, masks, depths, intrinsics, w2cs, args.depth_margin
-    )
-
-    # Force-occupy every voxel containing an observed point so the mesh is
-    # guaranteed to enclose the shell, then keep a one-voxel empty border so the
-    # extracted surface is closed.
-    indices = np.floor((observed - grid_origin) / voxel).astype(int)
-    valid = np.all(indices >= 0, axis=1) & np.all(indices < np.asarray(dims), axis=1)
-    indices = indices[valid]
-    occupied[indices[:, 0], indices[:, 1], indices[:, 2]] = True
-    # Depth noise and mask edges punch voxel-thin tunnels through the solid;
-    # closing with 26-connectivity seals them into a simply connected volume,
-    # and filling then removes any fully enclosed void.
-    if args.close_iters > 0:
-        occupied = ndimage.binary_closing(
-            occupied,
-            structure=ndimage.generate_binary_structure(3, 3),
-            iterations=args.close_iters,
+    if args.method == "poisson":
+        mesh = poisson_mesh(
+            observed,
+            voxel,
+            args.poisson_depth,
+            args.poisson_density_percentile,
         )
-    occupied = ndimage.binary_fill_holes(occupied)
-    occupied = manifoldize(occupied)
-    for axis in range(3):
-        occupied = occupied.swapaxes(0, axis)
-        occupied[0] = False
-        occupied[-1] = False
-        occupied = occupied.swapaxes(0, axis)
-
-    if not occupied.any():
-        raise RuntimeError("Carving produced no occupied voxels.")
-
-    if args.extract == "isosurface":
-        mesh = isosurface_mesh(occupied, grid_origin, voxel)
     else:
-        mesh = mesh_to_trimesh(voxel_surface_mesh(occupied, grid_origin, voxel))
-        if args.smooth_iters > 0:
-            filter_taubin(mesh, iterations=args.smooth_iters)
+        grid_origin = low - voxel
+        dims = tuple(int(d) for d in dims)
+        print(f"[shape_carve] grid dims={dims} voxel={voxel:.4f} m")
+
+        occupied = carve_occupancy(
+            dims, grid_origin, voxel, masks, depths, intrinsics, w2cs, args.depth_margin
+        )
+
+        # Force-occupy every voxel containing an observed point so the mesh is
+        # guaranteed to enclose the shell, then keep a one-voxel empty border.
+        indices = np.floor((observed - grid_origin) / voxel).astype(int)
+        valid = np.all(indices >= 0, axis=1) & np.all(
+            indices < np.asarray(dims), axis=1
+        )
+        indices = indices[valid]
+        occupied[indices[:, 0], indices[:, 1], indices[:, 2]] = True
+        # Depth noise and mask edges punch voxel-thin tunnels through the solid;
+        # closing is opt-in because it changes measured dimensions.
+        if args.close_iters > 0:
+            occupied = ndimage.binary_closing(
+                occupied,
+                structure=ndimage.generate_binary_structure(3, 3),
+                iterations=args.close_iters,
+            )
+        occupied = ndimage.binary_fill_holes(occupied)
+        occupied = manifoldize(occupied)
+        for axis in range(3):
+            occupied = occupied.swapaxes(0, axis)
+            occupied[0] = False
+            occupied[-1] = False
+            occupied = occupied.swapaxes(0, axis)
+
+        if not occupied.any():
+            raise RuntimeError("Carving produced no occupied voxels.")
+
+        if args.extract == "isosurface":
+            mesh = isosurface_mesh(occupied, grid_origin, voxel)
+        else:
+            mesh = mesh_to_trimesh(voxel_surface_mesh(occupied, grid_origin, voxel))
+            if args.smooth_iters > 0:
+                filter_taubin(mesh, iterations=args.smooth_iters)
+
+    if args.flatten_ground:
+        mesh.vertices[:, 2] = np.minimum(mesh.vertices[:, 2], args.ground_z)
 
     mesh, watertight = repair_and_check(mesh, args.allow_open)
 
     mesh.export(f"{output_dir}/object.glb")
     mesh.export(f"{output_dir}/object.ply")
+    observed_pcd = o3d.geometry.PointCloud()
+    observed_pcd.points = o3d.utility.Vector3dVector(observed_raw)
+    o3d.io.write_point_cloud(f"{output_dir}/observed_points.ply", observed_pcd)
+    filtered_pcd = o3d.geometry.PointCloud()
+    filtered_pcd.points = o3d.utility.Vector3dVector(observed)
+    o3d.io.write_point_cloud(
+        f"{output_dir}/observed_points_filtered.ply", filtered_pcd
+    )
     if args.visualize:
         render_turntable(mesh, f"{output_dir}/visualization.mp4")
 

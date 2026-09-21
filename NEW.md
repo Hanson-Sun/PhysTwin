@@ -69,11 +69,16 @@ column falls back to `trellis`.
 - `carve` — deterministic depth-carved space carving
   (`data_process/shape_carve.py`). Carves free space from the object masks, depth
   maps, and camera poses, force-occupies the observed points, and extracts a
-  watertight mesh. It uses only masks, depth, and calibration, so it does not
+  watertight mesh. It also preserves the calibrated observed surface points for
+  inspection and downstream refinement. It uses only masks, depth, and calibration, so it does not
   depend on the generative stage. Well-observed faces are accurate, but faces
   seen at grazing incidence (e.g. a horizontal top from near-horizontal cameras)
   and hidden sides are only weakly constrained, so they come out slightly domed
   or approximate rather than perfectly flat.
+- `poisson` — smooth Poisson reconstruction from the calibrated back-projected
+  surface points. It estimates normals, reconstructs a closed surface, trims
+  low-density extrapolation, and rejects the result unless it is a valid
+  watertight volume. Select it with `--shape_generator poisson`.
 
 `data_config.csv` selects `carve` for the heavy-end box:
 
@@ -90,7 +95,8 @@ python scripts/run_case_pipeline.py \
 ```
 
 Run the carver on its own to inspect the mesh (it writes `object.glb`,
-`object.ply`, and, with `--visualize`, a turntable video):
+`object.ply`, the calibrated observed points in `observed_points.ply` and
+`observed_points_filtered.ply`, and, with `--visualize`, a turntable video):
 
 ```bash
 python data_process/shape_carve.py \
@@ -102,6 +108,8 @@ python data_process/shape_carve.py \
 Useful options:
 
 - `--voxel_size` — voxel edge in metres; the detail/resolution trade-off.
+- Ground flattening is enabled by default at `z=0`; use `--ground_z` to change
+  the support height or `--no_flatten_ground` to disable it.
 - `--mask_erode` — pixels to erode each object mask before carving; raise it to
   trim the segmentation fringe and tighten the mesh.
 - `--extract` — `isosurface` (default; marching cubes on the signed distance
