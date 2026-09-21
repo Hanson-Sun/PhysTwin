@@ -1,3 +1,13 @@
+- genuinely remove texture and try again
+- superglue pmo so much will need a different way to align the objects
+
+
+- floor friction still a little wonky
+- idk the rope thing really isnt learning that well... why? because of the interior points? 
+    - lets clean up the parameters that we are learning...
+
+
+
 - ok only thing missing now is the floor and object friction, is this learned anywhere?? maybe in the cma stage?
 
 

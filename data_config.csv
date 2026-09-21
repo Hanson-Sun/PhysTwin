@@ -22,5 +22,5 @@ single_push_sloth,sloth,True,trellis
 weird_package,package,False,trellis
 sim_rope, twine, True,trellis
 sim_rigid_box, box, True,trellis
-sim_rigid_box_heavy_end, rectangle box, True,carve
+sim_rigid_box_heavy_end, rectangle box, True,trellis
 sim_rigid_box_grip_lift, box, True,trellis
