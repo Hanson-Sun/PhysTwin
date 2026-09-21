@@ -1,9 +1,19 @@
 <mujoco model="sim_object_box_heavy_end">
+
   <!-- Thin rectangular object whose ballast is concentrated near its +X end.
-       The ballast is non-colliding because it is embedded inside the shell. -->
+       Textures and per-face visual shells are commented out in favor of a
+       semi-reflective red shell material. -->
   <asset>
     <material name="heavy_end_ballast" rgba="0.18 0.18 0.22 1"/>
 
+    <texture name="tex_red_grid" type="2d" builtin="checker"
+             rgb1="0.85 0.15 0.15" rgb2="0.60 0.08 0.08"
+             width="256" height="256"/>
+    <material name="red_shiny" texture="tex_red_grid"
+              texrepeat="2 2" texuniform="true"
+              specular="1.0" shininess="0.6"/>
+
+    <!-- Per-face identity textures and materials commented out:
     <texture name="tex_front" type="2d" builtin="checker" rgb1="0.04 0.22 0.60"
              rgb2="0.10 0.48 0.90" width="128" height="128"/>
     <texture name="tex_back" type="2d" builtin="checker" rgb1="0.65 0.04 0.04"
@@ -16,7 +26,6 @@
              rgb2="0.95 0.62 0.03" width="128" height="128"/>
     <texture name="tex_bottom" type="2d" builtin="checker" rgb1="0.10 0.04 0.16"
              rgb2="0.35 0.10 0.48" width="128" height="128"/>
-
     <material name="mat_front" texture="tex_front" texrepeat="6 6" texuniform="true"
               rgba="1 1 1 1" specular="0.3" shininess="0.4"/>
     <material name="mat_back" texture="tex_back" texrepeat="6 6" texuniform="true"
@@ -29,18 +38,21 @@
               rgba="1 1 1 1" specular="0.25" shininess="0.45"/>
     <material name="mat_bottom" texture="tex_bottom" texrepeat="4 4" texuniform="true"
               rgba="1 1 1 1" specular="0.2" shininess="0.35"/>
+    -->
+
   </asset>
+
   <worldbody>
-    <!-- quat rotates the long axis ~70 deg about Z (like object_rope.xml), so
-         the claw pushes across the box at an angle instead of end-on. -->
+
     <body name="object" pos="0 0 0.035" quat="0.819152 0 0 0.573576">
       <freejoint name="object_joint"/>
+
+      <!-- Semi-reflective red shell geom referencing the red_shiny material -->
       <geom name="object_shell" type="box" size="0.18 0.04 0.025"
-            rgba="0.8 0.2 0.2 1" mass="0.2"
+            material="red_shiny" mass="0.2"
             friction="1.0 0.005 0.0001" solref="0.004 1"/>
 
-      <!-- Non-colliding visual shells use the same per-face textures as the
-           standard rigid box while preserving this object's elongated shape. -->
+      <!-- Visual shells with per-face textures commented out:
       <geom name="face_front" type="box" pos="0 0 0.0251"
             size="0.1802 0.0402 0.001" material="mat_front"
             contype="0" conaffinity="0"/>
@@ -48,10 +60,10 @@
             size="0.1802 0.0402 0.001" material="mat_back"
             contype="0" conaffinity="0"/>
       <geom name="face_right" type="box" pos="0.1801 0 0"
-            size="0.001 0.0402 0.0252" material="mat_right"
+            size="0.1801 0.001 0.0252" material="mat_right"
             contype="0" conaffinity="0"/>
       <geom name="face_left" type="box" pos="-0.1801 0 0"
-            size="0.001 0.0402 0.0252" material="mat_left"
+            size="0.1801 0.001 0.0252" material="mat_left"
             contype="0" conaffinity="0"/>
       <geom name="face_top" type="box" pos="0 0.0401 0"
             size="0.1802 0.001 0.0252" material="mat_top"
@@ -59,11 +71,89 @@
       <geom name="face_bottom" type="box" pos="0 -0.0401 0"
             size="0.1802 0.001 0.0252" material="mat_bottom"
             contype="0" conaffinity="0"/>
+      -->
+
+      <!-- Front face feature marks -->
+      <geom name="front_mark_1" type="box"
+            pos="-0.090 -0.0401 0.0125"
+            size="0.022 0.0001 0.004"
+            rgba="0 0 0 1"
+            mass="0"
+            contype="0"
+            conaffinity="0"/>
+
+      <geom name="front_mark_2" type="box"
+            pos="0.065 -0.0401 -0.012"
+            size="0.014 0.0001 0.006"
+            rgba="1 1 1 1"
+            mass="0"
+            contype="0"
+            conaffinity="0"/>
+
+      <geom name="front_mark_3" type="box"
+            pos="0.105 -0.0401 0.0125"
+            size="0.010 0.0001 0.003"
+            rgba="0 0 0 1"
+            mass="0"
+            contype="0"
+            conaffinity="0"/>
+
+      <!-- Right face feature marks -->
+      <geom name="right_mark_1" type="box"
+            pos="0.1801 -0.016 0.0125"
+            size="0.0001 0.012 0.004"
+            rgba="1 1 1 1"
+            mass="0"
+            contype="0"
+            conaffinity="0"/>
+
+      <geom name="right_mark_2" type="box"
+            pos="0.1801 0.014 -0.012"
+            size="0.0001 0.008 0.006"
+            rgba="0 0 0 1"
+            mass="0"
+            contype="0"
+            conaffinity="0"/>
+
+      <geom name="right_mark_3" type="box"
+            pos="0.1801 0.028 0.0125"
+            size="0.0001 0.006 0.003"
+            rgba="1 1 1 1"
+            mass="0"
+            contype="0"
+            conaffinity="0"/>
+
+      <!-- Top face feature marks -->
+      <geom name="top_mark_1" type="box"
+            pos="-0.090 0.015 0.0251"
+            size="0.022 0.008 0.0001"
+            rgba="0 0 0 1"
+            mass="0"
+            contype="0"
+            conaffinity="0"/>
+
+      <geom name="top_mark_2" type="box"
+            pos="0.070 -0.020 0.0251"
+            size="0.025 0.006 0.0001"
+            rgba="1 1 1 1"
+            mass="0"
+            contype="0"
+            conaffinity="0"/>
+
+      <geom name="top_mark_3" type="box"
+            pos="0.115 0.025 0.0251"
+            size="0.010 0.012 0.0001"
+            rgba="0 0 0 1"
+            mass="0"
+            contype="0"
+            conaffinity="0"/>
 
       <!-- Most of the mass is concentrated at the right-hand end. -->
       <geom name="object_ballast" type="box" pos="0.11 0 0"
             size="0.055 0.03 0.018" material="heavy_end_ballast"
             mass="1.8" contype="0" conaffinity="0"/>
+
     </body>
   </worldbody>
+
 </mujoco>
