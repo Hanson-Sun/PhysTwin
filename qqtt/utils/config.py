@@ -18,6 +18,9 @@ class Config:
         self.init_spring_Y = 3e3
         self.collide_elas = 0.5
         self.collide_fric = 0.5
+        # Narrow smoothing only for ground-friction activation/saturation.
+        # Impact and object-collision detection remain hard-thresholded.
+        self.ground_contact_smoothing = 2e-5
         self.collide_object_elas = 0.7
         self.collide_object_fric = 0.3
 
