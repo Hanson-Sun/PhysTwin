@@ -1,9 +1,9 @@
-"""Generate a watertight solid mesh by carving space from the object masks and
-depth maps (depth-carved space carving).
+"""Generate a deterministic shape prior from object masks and depth maps.
 
 This is a deterministic, non-generative alternative to the TRELLIS shape prior
-in ``data_process/shape_prior.py``. It writes the same contract that ``align.py``
-consumes (``{base_path}/{case_name}/shape/object.glb``):
+in ``data_process/shape_prior.py``. The legacy module name and ``carve`` method
+are retained for CLI compatibility. It writes the same contract that
+``align.py`` consumes (``{base_path}/{case_name}/shape/object.glb``):
 
     {output_dir}/object.glb
     {output_dir}/object.ply
@@ -33,7 +33,9 @@ import numpy as np
 import open3d as o3d
 import trimesh
 from scipy import ndimage
+from scipy.spatial import Delaunay
 from skimage import measure
+from trimesh.intersections import slice_faces_plane
 from trimesh.repair import fill_holes, fix_inversion, fix_normals
 from trimesh.smoothing import filter_taubin
 
@@ -167,7 +169,7 @@ def parse_args():
     parser.add_argument(
         "--allow_open",
         action="store_true",
-        help="Write the mesh even if it is not watertight (default: fail).",
+        help="Write the mesh even if it is not a closed volume (default: fail).",
     )
     parser.add_argument(
         "--visualize",
@@ -430,7 +432,61 @@ def mesh_to_trimesh(mesh):
     )
 
 
+def flatten_mesh_to_ground(mesh, ground_z):
+    """Clip above-ground geometry and cap the cut at the support plane.
+
+    Vertex clamping collapses every intersecting triangle onto the plane and can
+    remove its faces during repair, leaving an open mesh. This implementation
+    uses trimesh's dependency-free face clipping and adds a planar cap from the
+    resulting boundary, so the support side remains a closed volume.
+    """
+    plane_normal = np.array([0.0, 0.0, -1.0])
+    vertices, faces, _ = slice_faces_plane(
+        mesh.vertices,
+        mesh.faces,
+        plane_normal=plane_normal,
+        plane_origin=np.array([0.0, 0.0, ground_z]),
+    )
+    if len(faces) == 0:
+        raise RuntimeError("Ground-plane clipping removed the reconstructed mesh.")
+
+    # Clipping can create the same intersection vertex once per incident face;
+    # merge those duplicates before extracting the cap boundary.
+    clipped = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+    clipped.merge_vertices()
+    vertices, faces = clipped.vertices.copy(), clipped.faces.copy()
+
+    # Find the boundary created by the cut. Every cap boundary edge is used by
+    # exactly one retained face and lies on the horizontal support plane.
+    edges = np.vstack(
+        [faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]]
+    )
+    edges.sort(axis=1)
+    unique_edges, counts = np.unique(edges, axis=0, return_counts=True)
+    boundary_edges = unique_edges[counts == 1]
+    on_ground = np.isclose(vertices[:, 2], ground_z, atol=1e-7)
+    boundary_edges = boundary_edges[on_ground[boundary_edges].all(axis=1)]
+    boundary_vertices = np.unique(boundary_edges)
+    if len(boundary_vertices) < 3:
+        raise RuntimeError("Ground-plane clipping produced no valid cap boundary.")
+
+    # Triangulate a conservative support cap. Keeping all boundary vertices
+    # ensures clipped boundary edges are represented in the cap.
+    cap_faces = boundary_vertices[
+        Delaunay(vertices[boundary_vertices, :2]).simplices
+    ]
+    cap_points = vertices[cap_faces]
+    normal_z = np.cross(
+        cap_points[:, 1] - cap_points[:, 0],
+        cap_points[:, 2] - cap_points[:, 0],
+    )[:, 2]
+    cap_faces[normal_z < 0] = cap_faces[normal_z < 0][:, [0, 2, 1]]
+    faces = np.vstack([faces, cap_faces])
+    return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
+
+
 def repair_and_check(mesh, allow_open):
+    """Repair the generated prior and require a usable volume by default."""
     mesh.update_faces(mesh.nondegenerate_faces())
     mesh.update_faces(mesh.unique_faces())
     mesh.remove_unreferenced_vertices()
@@ -441,13 +497,13 @@ def repair_and_check(mesh, allow_open):
         mesh = max(components, key=lambda item: len(item.faces))
 
     mesh.merge_vertices()
-    fill_holes(mesh)
+    # Use fan triangulation so larger support-plane boundaries are closed too.
+    fill_holes(mesh, use_fan=True)
     fix_normals(mesh)
     fix_inversion(mesh)
 
     if not mesh.is_watertight:
-        # A second pass sometimes closes small non-manifold seams in the shell.
-        fill_holes(mesh)
+        fill_holes(mesh, use_fan=True)
         fix_normals(mesh)
 
     watertight = bool(mesh.is_watertight and mesh.is_winding_consistent)
@@ -497,7 +553,7 @@ def render_turntable(mesh, path):
             video.write(frame)
         video.release()
     except Exception as error:  # noqa: BLE001 - visualization is best effort
-        print(f"[shape_carve] Skipping visualization: {error}")
+        print(f"[deterministic_shape_prior] Skipping visualization: {error}")
 
 
 def main():
@@ -540,7 +596,10 @@ def main():
     coarse = args.outlier_voxel or max(4 * args.voxel_size, 0.016)
     observed_raw = observed
     observed = largest_cluster(observed, coarse)
-    print(f"[shape_carve] observed object points after outlier filtering: {observed.shape[0]}")
+    print(
+        "[deterministic_shape_prior] observed object points after outlier "
+        f"filtering: {observed.shape[0]}"
+    )
 
     low = observed.min(axis=0) - args.bbox_pad
     high = observed.max(axis=0) + args.bbox_pad
@@ -553,7 +612,7 @@ def main():
         dims = np.ceil(extent / voxel).astype(int) + 3
     if not np.isclose(voxel, args.voxel_size):
         print(
-            f"[shape_carve] voxel_size grown to {voxel:.4f} m to fit "
+            f"[deterministic_shape_prior] voxel_size grown to {voxel:.4f} m to fit "
             f"--max_voxels={args.max_voxels}"
         )
 
@@ -567,7 +626,9 @@ def main():
     else:
         grid_origin = low - voxel
         dims = tuple(int(d) for d in dims)
-        print(f"[shape_carve] grid dims={dims} voxel={voxel:.4f} m")
+        print(
+            f"[deterministic_shape_prior] grid dims={dims} voxel={voxel:.4f} m"
+        )
 
         occupied = carve_occupancy(
             dims, grid_origin, voxel, masks, depths, intrinsics, w2cs, args.depth_margin
@@ -608,7 +669,9 @@ def main():
                 filter_taubin(mesh, iterations=args.smooth_iters)
 
     if args.flatten_ground:
-        mesh.vertices[:, 2] = np.minimum(mesh.vertices[:, 2], args.ground_z)
+        # Clip and cap instead of clamping vertices, which preserves a closed
+        # volume when the reconstructed surface crosses the support plane.
+        mesh = flatten_mesh_to_ground(mesh, args.ground_z)
 
     mesh, watertight = repair_and_check(mesh, args.allow_open)
 
@@ -627,7 +690,7 @@ def main():
 
     extents = mesh.bounds[1] - mesh.bounds[0]
     print(
-        f"[shape_carve] wrote {output_dir}/object.glb  "
+        f"[deterministic_shape_prior] wrote {output_dir}/object.glb  "
         f"faces={len(mesh.faces)} watertight={watertight} "
         f"euler={mesh.euler_number} volume={abs(float(mesh.volume)):.6f} m^3 "
         f"extents={np.round(extents, 4).tolist()}"
