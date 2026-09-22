@@ -87,6 +87,12 @@ def normalize(model: dict, manifest: Path) -> dict:
         "max_controller_speed": positive_float(
             model, "max_controller_speed", None
         ),
+        "controller_free_speed": positive_float(
+            model, "controller_free_speed", 1.0
+        ),
+        "controller_slowdown_epsilon": positive_float(
+            model, "controller_slowdown_epsilon", 0.05
+        ),
         "width": integer(model, "width", 848),
         "height": integer(model, "height", 480),
         "steps_per_segment": integer(model, "steps_per_segment", 300),
@@ -130,9 +136,13 @@ def generate(model: dict, output_dir: Path, overwrite: bool) -> Path:
         raise ValueError(
             f"unsupported trajectory '{model['trajectory']}' for {model['case_name']}"
         )
+
+    # Build trajectories from the original scene pose; floor placement must not
+    # change any controller waypoint. It only affects the initial object state.
+    sim.place_objects_on_ground()
     trajectory_length = len(next(iter(trajectories.values())))
     with tqdm(
-        total=trajectory_length,
+        total=None if model["max_controller_speed"] is not None else trajectory_length,
         desc=model["case_name"],
         unit="step",
         dynamic_ncols=True,
@@ -147,6 +157,8 @@ def generate(model: dict, output_dir: Path, overwrite: bool) -> Path:
             grasped_body="object" if model["trajectory"] == "grip_lift" else None,
             grasp_offset=(0.0, 0.0, 0.0),
             max_controller_speed=model["max_controller_speed"],
+            controller_free_speed=model["controller_free_speed"],
+            controller_slowdown_epsilon=model["controller_slowdown_epsilon"],
         )
     if len(frames) < 2:
         raise ValueError(

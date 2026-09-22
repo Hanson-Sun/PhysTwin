@@ -33,7 +33,6 @@ import numpy as np
 import open3d as o3d
 import trimesh
 from scipy import ndimage
-from scipy.spatial import Delaunay, QhullError
 from skimage import measure
 from trimesh.intersections import slice_faces_plane
 from trimesh.repair import fill_holes, fix_inversion, fix_normals
@@ -433,6 +432,84 @@ def mesh_to_trimesh(mesh):
     )
 
 
+def _triangulate_boundary_loop(vertices, boundary_edges):
+    """Triangulate one ordered planar boundary without filling its hull."""
+    adjacency = {}
+    for a, b in boundary_edges:
+        adjacency.setdefault(int(a), set()).add(int(b))
+        adjacency.setdefault(int(b), set()).add(int(a))
+    if any(len(neighbours) != 2 for neighbours in adjacency.values()):
+        raise RuntimeError("Ground-plane boundary is not a simple polygon loop.")
+
+    start = next(iter(adjacency))
+    loop = [start]
+    previous = None
+    current = start
+    while True:
+        neighbours = adjacency[current]
+        following = next(
+            (neighbour for neighbour in neighbours if neighbour != previous), None
+        )
+        if following == start:
+            break
+        if following is None or following in loop:
+            raise RuntimeError("Ground-plane boundary could not be ordered.")
+        loop.append(following)
+        previous, current = current, following
+
+    points = vertices[np.asarray(loop), :2]
+    area = 0.5 * np.sum(
+        points[:, 0] * np.roll(points[:, 1], -1)
+        - points[:, 1] * np.roll(points[:, 0], -1)
+    )
+    if area < 0:
+        loop.reverse()
+        points = points[::-1]
+
+    def cross(a, b, c):
+        return np.cross(b - a, c - a)
+
+    def contains_point(point, triangle):
+        signs = [
+            cross(triangle[0], triangle[1], point),
+            cross(triangle[1], triangle[2], point),
+            cross(triangle[2], triangle[0], point),
+        ]
+        return min(signs) >= -1e-12
+
+    remaining = list(range(len(loop)))
+    triangles = []
+    while len(remaining) > 3:
+        ear_found = False
+        for position, current_index in enumerate(remaining):
+            previous_index = remaining[position - 1]
+            next_index = remaining[(position + 1) % len(remaining)]
+            triangle = points[[previous_index, current_index, next_index]]
+            if cross(*triangle) <= 1e-12:
+                continue
+            if any(
+                contains_point(points[index], triangle)
+                for index in remaining
+                if index not in (previous_index, current_index, next_index)
+            ):
+                continue
+            triangles.append(
+                [
+                    loop[previous_index],
+                    loop[current_index],
+                    loop[next_index],
+                ]
+            )
+            remaining.pop(position)
+            ear_found = True
+            break
+        if not ear_found:
+            raise RuntimeError("Ground-plane boundary could not be triangulated.")
+
+    triangles.append([loop[index] for index in remaining])
+    return np.asarray(triangles, dtype=np.int64)
+
+
 def flatten_mesh_to_ground(mesh, ground_z):
     """Clip above-ground geometry and cap the cut at the support plane.
 
@@ -475,10 +552,7 @@ def flatten_mesh_to_ground(mesh, ground_z):
     if len(boundary_vertices) < 3:
         raise RuntimeError("Ground-plane clipping produced no valid cap boundary.")
 
-    # Triangulate a conservative support cap. Keeping all boundary vertices
-    # ensures clipped boundary edges are represented in the cap.
-    # Split the boundary graph into connected contact regions before
-    # triangulating. This prevents one Delaunay hull from spanning the rope.
+    # Triangulate each boundary loop while retaining all of its boundary edges.
     adjacency = {int(index): set() for index in boundary_vertices}
     for a, b in boundary_edges:
         adjacency[int(a)].add(int(b))
@@ -502,10 +576,10 @@ def flatten_mesh_to_ground(mesh, ground_z):
     for component in components:
         if len(component) < 3:
             continue
-        try:
-            cap_faces = component[Delaunay(vertices[component, :2]).simplices]
-        except QhullError:
-            continue
+        component_edges = boundary_edges[
+            np.isin(boundary_edges, component).all(axis=1)
+        ]
+        cap_faces = _triangulate_boundary_loop(vertices, component_edges)
         cap_points = vertices[cap_faces]
         normal_z = np.cross(
             cap_points[:, 1] - cap_points[:, 0],
@@ -521,16 +595,19 @@ def flatten_mesh_to_ground(mesh, ground_z):
 
 def repair_and_check(mesh, allow_open):
     """Repair the generated prior and require a usable volume by default."""
+    if mesh.is_watertight and mesh.is_winding_consistent and mesh.is_volume:
+        return mesh, True
+
     mesh.update_faces(mesh.nondegenerate_faces())
     mesh.update_faces(mesh.unique_faces())
     mesh.remove_unreferenced_vertices()
-    mesh.merge_vertices()
+    mesh.merge_vertices(digits_vertex=8)
 
     components = mesh.split(only_watertight=False)
     if len(components) > 1:
         mesh = max(components, key=lambda item: len(item.faces))
 
-    mesh.merge_vertices()
+    mesh.merge_vertices(digits_vertex=8)
     # Use fan triangulation so larger support-plane boundaries are closed too.
     fill_holes(mesh, use_fan=True)
     fix_normals(mesh)
