@@ -1,3 +1,7 @@
+- a bunch of things to fix i need to check if its clean and consistent
+- the variable speed pathcing is still kind of ass need more robust collision boxes.
+
+
 - target move speed in models.json is not a good idea. We can just limit the controller move speed instead.
 
 - try to look at the surface point and interior volume density
