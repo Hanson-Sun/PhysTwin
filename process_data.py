@@ -38,7 +38,8 @@ parser.add_argument(
     choices=["trellis", "carve", "poisson"],
     default="trellis",
     help="Shape-prior backend: TRELLIS image-to-3D (default), voxel-carved "
-    "space carving, or Poisson reconstruction (data_process/shape_carve.py).",
+    "deterministic depth reconstruction, or Poisson reconstruction "
+    "(data_process/shape_carve.py).",
 )
 parser.add_argument("--skip_segmentation", action="store_true")
 parser.add_argument(
@@ -100,9 +101,14 @@ def existDir(dir_path):
 
 
 def run_stage(command):
-    result = subprocess.run(shlex.split(command), check=False)
+    """Run a processing stage with live child-process output."""
+    args = shlex.split(command)
+    result = subprocess.run(args, check=False)
     if result.returncode != 0:
-        raise RuntimeError(f"Processing stage failed with exit code {result.returncode}: {command}")
+        raise RuntimeError(
+            "Processing stage failed with exit code "
+            f"{result.returncode}: {shlex.join(args)}"
+        )
 
 
 class Timer:
@@ -134,9 +140,9 @@ if PROCESS_SHAPE_PRIOR and SHAPE_PRIOR:
     existDir(f"{base_path}/{case_name}/shape")
 
     if args.shape_generator in {"carve", "poisson"}:
-        # Deterministic depth-based reconstruction. Needs only the masks, depth
-        # maps, and camera calibration produced by segmentation.
-        with Timer("Shape Carving"):
+        # Deterministic shape-prior generation needs only the masks, depth maps,
+        # and camera calibration produced by segmentation.
+        with Timer("Deterministic Shape Prior Generation"):
             run_stage(
                 f"{shlex.quote(sys.executable)} ./data_process/shape_carve.py --base_path {shlex.quote(base_path)} --case_name {shlex.quote(case_name)} --controller_names {shlex.quote(','.join(CONTROLLER_NAMES))}"
                 + (" --method poisson" if args.shape_generator == "poisson" else "")
@@ -201,7 +207,7 @@ if PROCESS_3D:
 
 if PROCESS_ALIGN and SHAPE_PRIOR and args.shape_generator == "trellis":
     # TRELLIS shape priors are not in the calibrated world frame, so align them
-    # with the observed point cloud. Depth-carved priors already are.
+    # with the observed point cloud. Deterministic depth priors already are.
     with Timer("Alignment"):
         run_stage(
             f"{shlex.quote(sys.executable)} ./data_process/align.py --base_path {shlex.quote(base_path)} --case_name {shlex.quote(case_name)} --controller_names {shlex.quote(','.join(sorted(CONTROLLER_NAMES)))}"

@@ -13,6 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BASE_PATH = REPO_ROOT / "data" / "different_types"
 DEFAULT_CONFIG = REPO_ROOT / "data_config.csv"
 DEFAULT_GAUSSIAN_ROOT = REPO_ROOT / "gaussian_output"
+SHAPE_GENERATORS = ("trellis", "carve", "poisson")
 
 
 def case_config(
@@ -21,8 +22,9 @@ def case_config(
     """Return (category, shape_prior, shape_generator) for a case.
 
     ``data_config.csv`` rows are ``case_name, category, shape_prior`` plus an
-    optional fourth ``shape_generator`` column (``trellis``/``carve``); a missing
-    or empty column returns ``None`` so the caller can apply its own default.
+    optional fourth ``shape_generator`` column (``trellis``/``carve``/``poisson``);
+    a missing or empty column returns ``None`` so the caller can apply its own
+    default.
     """
     if not config_path.is_file():
         return None, False, None
@@ -73,11 +75,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no_shape_prior", action="store_true")
     parser.add_argument(
         "--shape_generator",
-        choices=["trellis", "carve"],
+        choices=SHAPE_GENERATORS,
         default=None,
-        help="Shape-prior backend: TRELLIS image-to-3D or deterministic "
-        "depth-carved space carving. Defaults to the case's data_config.csv "
-        "column, then to trellis.",
+        help="Shape-prior backend: TRELLIS image-to-3D, deterministic depth "
+        "reconstruction, or Poisson reconstruction. Defaults to the case's "
+        "data_config.csv column, then to trellis.",
     )
     parser.add_argument("--cma_max_iter", type=int, default=20)
     parser.add_argument("--warp_iterations", type=int)
@@ -118,6 +120,11 @@ def main() -> None:
         args.config, args.case_name
     )
     shape_generator = args.shape_generator or configured_generator or "trellis"
+    if shape_generator not in SHAPE_GENERATORS:
+        raise ValueError(
+            f"Unsupported shape generator {shape_generator!r} for {args.case_name}; "
+            f"expected one of {', '.join(SHAPE_GENERATORS)}"
+        )
     category = args.category or configured_category
     if category is None and not args.skip_process:
         raise ValueError(
