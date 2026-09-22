@@ -11,7 +11,6 @@ if not cfg.use_graph:
 
 
 GROUND_GRAVITY = 9.81
-GROUND_CONTACT_EPSILON = 1e-5
 
 SIM_FORCE_MODE_GATHER = "gather"
 SIM_FORCE_MODE_TEMPLATE_STATE_BATCHED_ATOMIC = "template_state_batched_atomic"
@@ -127,9 +126,10 @@ def batched_controller_contact_force(
                     tangential_velocity = relative_velocity - wp.dot(relative_velocity, normal) * normal
                     tangential_speed = wp.length(tangential_velocity)
                     if tangential_speed > 1e-6:
-                        friction_force = wp.min(
-                            contact_friction * normal_force,
-                            tangential_speed * contact_stiffness,
+                        friction_limit = contact_friction * normal_force
+                        requested_friction = tangential_speed * contact_stiffness
+                        friction_force = friction_limit * wp.tanh(
+                            requested_friction / wp.max(friction_limit, 1e-8)
                         )
                         total_force -= friction_force * tangential_velocity / tangential_speed
                     wp.atomic_add(contact_count, 0, 1)
@@ -441,14 +441,15 @@ def loop(
 
             v_rel_t = relative_v - v_rel_n
             v_rel_t_length = wp.max(wp.length(v_rel_t), 1e-6)
-            a = wp.max(
-                0.0,
-                1.0
-                - clamp_collide_object_fric
+            friction_ratio = (
+                clamp_collide_object_fric
                 * (1.0 + clamp_collide_object_elas)
                 * v_rel_n_length
-                / v_rel_t_length,
+                / v_rel_t_length
             )
+            # Smooth only the Coulomb impulse cap; collision detection and
+            # impact timing remain hard-thresholded below.
+            a = 1.0 - wp.tanh(friction_ratio)
             impulse_t = (a - 1.0) * v_rel_t / (1.0 / m1 + 1.0 / m2)
 
             J = impulse_n + impulse_t
@@ -583,6 +584,7 @@ def ground_friction_force(
     collide_fric: wp.array(dtype=float),
     dt: float,
     reverse_factor: float,
+    contact_smoothing: float,
     forces: wp.array(dtype=wp.vec3),
 ):
     tid = wp.tid()
@@ -590,18 +592,30 @@ def ground_friction_force(
     velocity = v[tid]
     normal = wp.vec3(0.0, 0.0, 1.0) * reverse_factor
     next_signed_z = (position[2] + velocity[2] * dt) * reverse_factor
-    if next_signed_z <= GROUND_CONTACT_EPSILON:
+    # Keep the activation band narrow: points farther than four smoothing
+    # widths from the plane still receive exactly zero ground friction.
+    if next_signed_z <= 4.0 * contact_smoothing:
+        contact_weight = 1.0 / (
+            1.0
+            + wp.exp(
+                (next_signed_z - 4.0 * contact_smoothing) / contact_smoothing
+            )
+        )
         tangent_velocity = velocity - wp.dot(velocity, normal) * normal
         tangent_speed = wp.length(tangent_velocity)
         mass = wp.max(masses[tid], 1e-6)
         penetration = wp.max(-next_signed_z, 0.0)
-        normal_force = mass * (
+        normal_force = contact_weight * mass * (
             GROUND_GRAVITY + penetration / wp.max(dt * dt, 1e-12)
         )
         friction_limit = wp.clamp(collide_fric[0], low=0.0, high=2.0) * normal_force
         requested_friction = mass * tangent_speed / wp.max(dt, 1e-6)
-        friction_force = wp.min(friction_limit, requested_friction)
-        if tangent_speed > 1e-6:
+        # Smoothly saturate at mu*N while preserving the low-speed stopping
+        # force. This replaces the nondifferentiable min(mu*N, m*v/dt).
+        friction_force = friction_limit * wp.tanh(
+            requested_friction / wp.max(friction_limit, 1e-8)
+        )
+        if tangent_speed > 1e-8:
             wp.atomic_sub(
                 forces,
                 tid,
@@ -683,6 +697,9 @@ class SpringMassSystemWarp:
             )
 
         self.sim_force_mode = sim_force_mode
+        self.ground_contact_smoothing = float(
+            getattr(cfg, "ground_contact_smoothing", 2e-5)
+        )
         self.use_gather_solver = (
             number_of_instance > 1 and sim_force_mode == SIM_FORCE_MODE_GATHER
         )
@@ -1077,6 +1094,7 @@ class SpringMassSystemWarp:
                     self.wp_collide_fric,
                     self.dt,
                     self.reverse_factor,
+                    self.ground_contact_smoothing,
                 ],
                 outputs=[self.wp_states[i].wp_vertice_forces],
             )
