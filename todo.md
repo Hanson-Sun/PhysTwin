@@ -1,3 +1,8 @@
+- target move speed in models.json is not a good idea. We can just limit the controller move speed instead.
+
+- try to look at the surface point and interior volume density
+
+
 - genuinely remove texture and try again
 - superglue pmo so much will need a different way to align the objects
 
