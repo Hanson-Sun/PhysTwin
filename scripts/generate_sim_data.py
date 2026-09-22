@@ -38,6 +38,19 @@ def integer(row: dict, name: str, default: int) -> int:
     return value
 
 
+def positive_float(row: dict, name: str, default: float | None) -> float | None:
+    value = row.get(name, default)
+    if value is None:
+        return None
+    try:
+        value = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a number") from exc
+    if value <= 0.0:
+        raise ValueError(f"{name} must be positive")
+    return value
+
+
 
 def load_manifest(path: Path) -> list[dict]:
     if path.suffix.lower() != ".json":
@@ -71,6 +84,9 @@ def normalize(model: dict, manifest: Path) -> dict:
         "object_file": str(object_file),
         "n_interactors": integer(model, "n_interactors", 1),
         "trajectory": str(model.get("trajectory", "push")),
+        "max_controller_speed": positive_float(
+            model, "max_controller_speed", None
+        ),
         "width": integer(model, "width", 848),
         "height": integer(model, "height", 480),
         "steps_per_segment": integer(model, "steps_per_segment", 300),
@@ -130,6 +146,7 @@ def generate(model: dict, output_dir: Path, overwrite: bool) -> Path:
             gripper_opening=gripper_opening,
             grasped_body="object" if model["trajectory"] == "grip_lift" else None,
             grasp_offset=(0.0, 0.0, 0.0),
+            max_controller_speed=model["max_controller_speed"],
         )
     if len(frames) < 2:
         raise ValueError(

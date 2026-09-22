@@ -94,12 +94,21 @@ class DigitalTwinSim:
         grasped_body: str | None = None,
         grasp_start_fraction: float = 2.0 / 3.0,
         grasp_offset=(0.0, 0.0, 0.0),
+        max_controller_speed: float | None = None,
     ) -> list[Frame]:
-        """Play a scripted trajectory and record synthetic RGB-D + ground truth."""
+        """Play a scripted trajectory and record synthetic RGB-D + ground truth.
+
+        ``max_controller_speed`` limits mocap/interactor translation in metres
+        per second. The limit is applied over the full physics interval between
+        trajectory commands (``model.opt.timestep * substeps``), so it limits
+        the controller rather than changing the object's target trajectory.
+        """
         if capture_every < 1:
             raise ValueError("capture_every must be at least 1")
         if substeps < 1:
             raise ValueError("substeps must be at least 1")
+        if max_controller_speed is not None and max_controller_speed <= 0.0:
+            raise ValueError("max_controller_speed must be positive")
         if not interactor_trajectory:
             raise ValueError("at least one interactor trajectory is required")
         if not 0.0 <= grasp_start_fraction <= 1.0:
@@ -129,7 +138,18 @@ class DigitalTwinSim:
 
         for t in range(n_waypoints):
             for name in names:
-                pos, quat = interactor_trajectory[name][t]
+                target_pos, quat = interactor_trajectory[name][t]
+                pos = np.asarray(target_pos, dtype=float)
+                if max_controller_speed is not None:
+                    mocap_id = self.model.body(name).mocapid[0]
+                    if mocap_id < 0:
+                        raise ValueError(f"'{name}' is not a mocap body")
+                    current_pos = self.data.mocap_pos[mocap_id]
+                    max_distance = max_controller_speed * self.model.opt.timestep * substeps
+                    delta = pos - current_pos
+                    distance = np.linalg.norm(delta)
+                    if distance > max_distance:
+                        pos = current_pos + delta * (max_distance / distance)
                 self.set_interactor_pose(name, pos, quat)
                 if gripper_opening is not None:
                     self.set_gripper_opening(name, gripper_opening[name][t])
