@@ -511,16 +511,26 @@ def _triangulate_boundary_loop(vertices, boundary_edges):
 
 
 def flatten_mesh_to_ground(mesh, ground_z):
-    """Clip above-ground geometry and cap the cut at the support plane.
+    """Clip below-ground geometry and cap the cut at the support plane.
 
     Vertex clamping collapses every intersecting triangle onto the plane and can
     remove its faces during repair, leaving an open mesh. This implementation
     uses trimesh's dependency-free face clipping and adds a planar cap from the
     resulting boundary, so the support side remains a closed volume.
     """
+    # Keep the object side below the support plane and remove the opposite
+    # portion introduced by reconstruction.
     plane_normal = np.array([0.0, 0.0, -1.0])
-    mesh_max_z = float(np.max(mesh.vertices[:, 2]))
-    if mesh_max_z <= ground_z + 1e-7:
+    min_z = float(np.min(mesh.vertices[:, 2]))
+    max_z = float(np.max(mesh.vertices[:, 2]))
+    tolerance = 1e-7
+
+    # Clipping is only meaningful when the surface actually crosses the
+    # support plane. In particular, a reconstructed object that is entirely
+    # above the floor must not be clipped: checking only max_z used to send
+    # every lifted object through the cap triangulator and could turn harmless
+    # Poisson seams into a "non-simple polygon loop" failure.
+    if min_z >= ground_z - tolerance or max_z <= ground_z + tolerance:
         return mesh
 
     vertices, faces, _ = slice_faces_plane(
@@ -573,22 +583,33 @@ def flatten_mesh_to_ground(mesh, ground_z):
         components.append(np.asarray(component, dtype=np.int64))
 
     cap_parts = []
-    for component in components:
-        if len(component) < 3:
-            continue
-        component_edges = boundary_edges[
-            np.isin(boundary_edges, component).all(axis=1)
-        ]
-        cap_faces = _triangulate_boundary_loop(vertices, component_edges)
-        cap_points = vertices[cap_faces]
-        normal_z = np.cross(
-            cap_points[:, 1] - cap_points[:, 0],
-            cap_points[:, 2] - cap_points[:, 0],
-        )[:, 2]
-        cap_faces[normal_z < 0] = cap_faces[normal_z < 0][:, [0, 2, 1]]
-        cap_parts.append(cap_faces)
+    try:
+        for component in components:
+            if len(component) < 3:
+                continue
+            component_edges = boundary_edges[
+                np.isin(boundary_edges, component).all(axis=1)
+            ]
+            cap_faces = _triangulate_boundary_loop(vertices, component_edges)
+            cap_points = vertices[cap_faces]
+            normal_z = np.cross(
+                cap_points[:, 1] - cap_points[:, 0],
+                cap_points[:, 2] - cap_points[:, 0],
+            )[:, 2]
+            cap_faces[normal_z < 0] = cap_faces[normal_z < 0][:, [0, 2, 1]]
+            cap_parts.append(cap_faces)
+    except RuntimeError:
+        # Poisson can leave a non-manifold or multiply-connected intersection
+        # graph. It is not safe to force that graph through single-loop ear
+        # clipping; use trimesh's existing fan repair instead and let the
+        # closed-volume check below decide whether the result is usable.
+        fill_holes(clipped, use_fan=True)
+        fix_normals(clipped)
+        return clipped
     if not cap_parts:
-        raise RuntimeError("Ground-plane clipping produced no valid cap triangles.")
+        fill_holes(clipped, use_fan=True)
+        fix_normals(clipped)
+        return clipped
     faces = np.vstack([faces, *cap_parts])
     return trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
 

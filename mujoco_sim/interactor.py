@@ -42,25 +42,93 @@ def multi_poke_trajectory(waypoints: list, steps_per_segment: int = 30, quat=IDE
     return [(p, quat) for p in trajectory]
 
 
-def object_bounds(model, data, body_name: str = "object") -> tuple[np.ndarray, np.ndarray]:
-    """Return initial world-space bounds for an object body and its descendants."""
-    body_id = model.body(body_name).id
-    points = []
+def geom_local_half_extents(model, geom_id: int) -> np.ndarray:
+    """Return the half-extents of one geom's bounding box in its own frame."""
+    size = model.geom_size[geom_id]
+    geom_type = model.geom_type[geom_id]
+    if geom_type == mujoco.mjtGeom.mjGEOM_BOX:
+        return np.asarray(size, dtype=float)
+    if geom_type == mujoco.mjtGeom.mjGEOM_SPHERE:
+        return np.full(3, size[0], dtype=float)
+    if geom_type == mujoco.mjtGeom.mjGEOM_CAPSULE:
+        return np.array([size[0], size[0], size[1] + size[0]], dtype=float)
+    if geom_type == mujoco.mjtGeom.mjGEOM_CYLINDER:
+        return np.array([size[0], size[0], size[1]], dtype=float)
+    if geom_type == mujoco.mjtGeom.mjGEOM_ELLIPSOID:
+        return np.asarray(size, dtype=float)
+    return np.full(3, model.geom_rbound[geom_id], dtype=float)
 
-    if model.nflexvert:
-        points.extend(data.flexvert_xpos)
 
+def geom_world_extents(model, data, geom_id: int) -> np.ndarray:
+    """Return world-axis half-extents of one geom's bounding box.
+
+    Elongated shapes (the claw's capsule fingers, cylinders, ...) must use their
+    own frame's extents so that thin axes are not inflated to the bounding
+    sphere radius. Reusing ``geom_rbound`` on every axis used to widen the claw
+    envelope by several centimetres, which made the proximity slowdown trigger
+    while the claw was still visibly far from the object.
+    """
+    local = geom_local_half_extents(model, geom_id)
+    return np.abs(data.geom_xmat[geom_id].reshape(3, 3)) @ local
+
+
+def object_geom_ids(model) -> list[int]:
+    """Return every non-controller, non-floor geometry in the scene."""
+    geom_ids = []
     for geom_id in range(model.ngeom):
+        if model.geom(geom_id).name == "floor":
+            continue
         ancestor = model.geom_bodyid[geom_id]
-        while ancestor > 0 and ancestor != body_id:
+        while ancestor > 0 and model.body(ancestor).mocapid[0] < 0:
             ancestor = model.body_parentid[ancestor]
-        if ancestor == body_id:
-            radius = model.geom_rbound[geom_id]
-            points.append(data.geom_xpos[geom_id] - radius)
-            points.append(data.geom_xpos[geom_id] + radius)
+        if ancestor > 0:
+            continue
+        geom_ids.append(geom_id)
+    return geom_ids
+
+
+def object_bounds(model, data, body_name: str = "object") -> tuple[np.ndarray, np.ndarray]:
+    """Return initial world-space bounds for the non-controller object geometry."""
+    model.body(body_name)  # Validate the requested object name.
+    points = list(data.flexvert_xpos) if model.nflexvert else []
+
+    # Composite objects such as the rope can compile into top-level bodies.
+    for geom_id in object_geom_ids(model):
+        extents = geom_world_extents(model, data, geom_id)
+        points.extend(
+            [
+                data.geom_xpos[geom_id] - extents,
+                data.geom_xpos[geom_id] + extents,
+            ]
+        )
 
     if not points:
         raise ValueError(f"could not find geometry for body '{body_name}'")
+    points = np.asarray(points, dtype=float)
+    return points.min(axis=0), points.max(axis=0)
+
+
+def controller_local_bounds(
+    model, data, body_name: str = "interactor0"
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return controller geometry bounds relative to its mocap origin."""
+    body = model.body(body_name)
+    mocap_id = body.mocapid[0]
+    if mocap_id < 0:
+        raise ValueError(f"'{body_name}' is not a mocap body")
+    origin = data.mocap_pos[mocap_id]
+    points = []
+    for geom_id in range(model.ngeom):
+        ancestor = model.geom_bodyid[geom_id]
+        while ancestor > 0 and ancestor != body.id:
+            ancestor = model.body_parentid[ancestor]
+        if ancestor != body.id:
+            continue
+        extents = geom_world_extents(model, data, geom_id)
+        relative_center = data.geom_xpos[geom_id] - origin
+        points.extend([relative_center - extents, relative_center + extents])
+    if not points:
+        raise ValueError(f"could not find geometry for controller '{body_name}'")
     points = np.asarray(points, dtype=float)
     return points.min(axis=0), points.max(axis=0)
 
@@ -72,15 +140,23 @@ def object_push_trajectory(
     body_name: str = "object",
     margin: float = 0.06,
     approach_height: float = 0.16,
+    controller_name: str = "interactor0",
 ) -> list:
-    """Approach the object's left side, lower to its center, and push through it."""
+    """Approach, push through, and retract from an object's bounds.
+
+    ``margin`` is the clearance between the controller geometry AABB and the
+    object AABB, rather than the clearance between their reference points.
+    """
     lower, upper = object_bounds(model, data, body_name)
+    controller_lower, controller_upper = controller_local_bounds(
+        model, data, controller_name
+    )
     center = (lower + upper) * 0.5
     # Keep small floor-level objects (for example the rope) at their actual
     # center height instead of lifting the interactor above them.
     contact_z = max(0.012, center[2])
-    side_x = lower[0] - margin
-    exit_x = upper[0] + margin
+    side_x = lower[0] - controller_upper[0] - margin
+    exit_x = upper[0] - controller_lower[0] + margin
     y = center[1]
     points = [
         (side_x, y, contact_z + approach_height),
