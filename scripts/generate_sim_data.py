@@ -51,6 +51,17 @@ def positive_float(row: dict, name: str, default: float | None) -> float | None:
     return value
 
 
+def nonnegative_float(row: dict, name: str, default: float) -> float:
+    value = row.get(name, default)
+    try:
+        value = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a number") from exc
+    if value < 0.0:
+        raise ValueError(f"{name} cannot be negative")
+    return value
+
+
 
 def load_manifest(path: Path) -> list[dict]:
     if path.suffix.lower() != ".json":
@@ -90,8 +101,8 @@ def normalize(model: dict, manifest: Path) -> dict:
         "controller_free_speed": positive_float(
             model, "controller_free_speed", 1.0
         ),
-        "controller_slowdown_epsilon": positive_float(
-            model, "controller_slowdown_epsilon", 0.05
+        "controller_slowdown_epsilon": nonnegative_float(
+            model, "controller_slowdown_epsilon", 0.0
         ),
         "width": integer(model, "width", 848),
         "height": integer(model, "height", 480),
