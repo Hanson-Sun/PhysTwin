@@ -232,6 +232,7 @@ class OptimizerCMA:
         init_collision_dist = self.normalize(cfg.collision_dist, 0.01, 0.05)
         init_drag_damping = self.normalize(cfg.drag_damping, 0, 20)
         init_dashpot_damping = self.normalize(cfg.dashpot_damping, 0, 200)
+        init_global_mass = self.normalize(float(getattr(cfg, "init_mass", 1.0)), float(getattr(cfg, "mass_min", 0.1)), float(getattr(cfg, "mass_max", 10.0)))
 
         x_init = [
             init_global_spring_Y,
@@ -244,6 +245,7 @@ class OptimizerCMA:
             init_collision_dist,
             init_drag_damping,
             init_dashpot_damping,
+            init_global_mass,
         ]
 
         self.objective(x_init)
@@ -272,6 +274,7 @@ class OptimizerCMA:
         final_collision_dist = self.denormalize(optimal_x[7], 0.01, 0.05)
         final_drag_damping = self.denormalize(optimal_x[8], 0, 20)
         final_dashpot_damping = self.denormalize(optimal_x[9], 0, 200)
+        final_global_mass = self.denormalize(optimal_x[10], float(getattr(cfg, "mass_min", 0.1)), float(getattr(cfg, "mass_max", 10.0)))
 
         # Validate the selected parameters over the full sequence before saving them.
         self.error_func(
@@ -293,6 +296,7 @@ class OptimizerCMA:
         optimal_results["collision_dist"] = final_collision_dist
         optimal_results["drag_damping"] = final_drag_damping
         optimal_results["dashpot_damping"] = final_dashpot_damping
+        optimal_results["global_mass"] = final_global_mass
 
         # Save out all the initialized parameters
         with open(f"{cfg.base_dir}/optimal_params.pkl", "wb") as f:
@@ -324,6 +328,12 @@ class OptimizerCMA:
         collision_dist = self.denormalize(parameters[7], 0.01, 0.05)
         drag_damping = self.denormalize(parameters[8], 0, 20)
         dashpot_damping = self.denormalize(parameters[9], 0, 200)
+        _m_min = float(getattr(cfg, "mass_min", 0.1))
+        _m_max = float(getattr(cfg, "mass_max", 10.0))
+        global_mass = self.denormalize(parameters[10] if len(parameters) > 10 else 0.5, _m_min, _m_max)
+        # Back-compat: old 10-D vectors reuse init_mass.
+        if len(parameters) == 10:
+            global_mass = float(getattr(cfg, "init_mass", 1.0))
 
         # Reuse topology tensors for candidates with identical topology
         # parameters. Physical parameters still use a fresh simulator because
@@ -357,48 +367,67 @@ class OptimizerCMA:
             self.num_object_springs,
         ) = cached_topology
 
-        self.simulator = SpringMassSystemWarp(
-            self.init_vertices,
-            self.init_springs,
-            self.init_rest_lengths,
-            self.init_masses,
-            dt=cfg.dt,
-            num_substeps=cfg.num_substeps,
-            spring_Y=global_spring_Y,
-            collide_elas=collide_elas,
-            collide_fric=collide_fric,
-            dashpot_damping=dashpot_damping,
-            drag_damping=drag_damping,
-            collide_object_elas=collide_object_elas,
-            collide_object_fric=collide_object_fric,
-            init_masks=self.init_masks,
-            collision_dist=collision_dist,
-            init_velocities=self.init_velocities,
-            num_object_points=self.num_all_points,
-            num_surface_points=self.num_surface_points,
-            num_original_points=self.num_original_points,
-            controller_points=self.controller_points,
-            # CMA uses the legacy sparse contact proxy; full hollow-dense
-            # contact is reserved for detailed Adam training.
-            controller_contact_points=self.controller_points,
-            # Contact calibration belongs to detailed Adam training; CMA keeps
-            # the configured baseline while estimating global parameters.
-            controller_contact_stiffness=cfg.controller_contact_stiffness,
-            controller_contact_friction=cfg.controller_contact_friction,
-            reverse_z=cfg.reverse_z,
-            spring_Y_min=cfg.spring_Y_min,
-            spring_Y_max=cfg.spring_Y_max,
-            gt_object_points=self.object_points,
-            gt_object_visibilities=self.object_visibilities,
-            gt_object_motions_valid=self.object_motions_valid,
-            self_collision=cfg.self_collision,
-            disable_backward=True,
-        )
+        # Apply global mass scaling: when CMA runs with disable_backward we
+        # keep learn_mass=False and bake the global mass into _masses via
+        # init_mass (reused as global_mass). Temporarily override cfg so the
+        # Warp simulator picks it up without needing an 11-D mass-field tape.
+        _prev_init_mass = float(getattr(cfg, "init_mass", 1.0))
+        _prev_learn_mass = bool(getattr(cfg, "learn_mass", False))
+        cfg.init_mass = float(global_mass)
+        # CMA: global scalar only (per-vertex field is for Adam). Force
+        # uniform-mass mode so graph does not capture a mass-field tape.
+        cfg.learn_mass = False
+        try:
+            self.simulator = SpringMassSystemWarp(
+                self.init_vertices,
+                self.init_springs,
+                self.init_rest_lengths,
+                self.init_masses,
+                dt=cfg.dt,
+                num_substeps=cfg.num_substeps,
+                spring_Y=global_spring_Y,
+                collide_elas=collide_elas,
+                collide_fric=collide_fric,
+                dashpot_damping=dashpot_damping,
+                drag_damping=drag_damping,
+                collide_object_elas=collide_object_elas,
+                collide_object_fric=collide_object_fric,
+                init_masks=self.init_masks,
+                collision_dist=collision_dist,
+                init_velocities=self.init_velocities,
+                num_object_points=self.num_all_points,
+                num_surface_points=self.num_surface_points,
+                num_original_points=self.num_original_points,
+                controller_points=self.controller_points,
+                # CMA uses the legacy sparse contact proxy; full hollow-dense
+                # contact is reserved for detailed Adam training.
+                controller_contact_points=self.controller_points,
+                # Contact calibration belongs to detailed Adam training; CMA keeps
+                # the configured baseline while estimating global parameters.
+                controller_contact_stiffness=cfg.controller_contact_stiffness,
+                controller_contact_friction=cfg.controller_contact_friction,
+                reverse_z=cfg.reverse_z,
+                spring_Y_min=cfg.spring_Y_min,
+                spring_Y_max=cfg.spring_Y_max,
+                gt_object_points=self.object_points,
+                gt_object_visibilities=self.object_visibilities,
+                gt_object_motions_valid=self.object_motions_valid,
+                self_collision=cfg.self_collision,
+                disable_backward=True,
+            )
+        finally:
+            cfg.init_mass = _prev_init_mass
+            cfg.learn_mass = _prev_learn_mass
 
         self.simulator.set_init_state(
             self.simulator.wp_init_vertices, self.simulator.wp_init_velocities
         )
 
+        # Validate global mass (also acts as a smoke check for bounds).
+        _m_min_c = float(getattr(cfg, "mass_min", 0.1))
+        _m_max_c = float(getattr(cfg, "mass_max", 10.0))
+        if not (_m_min_c <= float(global_mass) <= _m_max_c):
+            raise ValueError(f"global_mass out of bounds: {global_mass} not in [{_m_min_c},{_m_max_c}]")
         if visualize == True:
             vertices = [
                 wp.to_torch(self.simulator.wp_states[0].wp_x, requires_grad=False).cpu()

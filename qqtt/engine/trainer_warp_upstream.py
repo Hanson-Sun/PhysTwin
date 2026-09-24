@@ -200,11 +200,25 @@ class InvPhyTrainerWarp:
                         ),
                     ]
                 )
-            self.optimizer = torch.optim.Adam(
-                [parameter for _, parameter in self.trainable_parameters],
-                lr=cfg.base_lr,
-                betas=(0.9, 0.99),
-            )
+            if getattr(self.simulator, "learn_mass", False) and self.simulator.wp_log_mass is not None:
+                # Per-vertex log-mass field. Masses are derived as clamp(exp(log_mass)).
+                self.trainable_parameters.append(
+                    ("log_mass", wp.to_torch(self.simulator.wp_log_mass))
+                )
+            # Optional: lower LR for mass field to avoid instability (keep same
+            # optimizer for conciseness; mass LR scaled via param group).
+            if any(name == "log_mass" for name, _ in self.trainable_parameters):
+                param_groups = []
+                for name, param in self.trainable_parameters:
+                    lr = cfg.base_lr * (0.2 if name == "log_mass" else 1.0)
+                    param_groups.append({"params": param, "lr": lr})
+                self.optimizer = torch.optim.Adam(param_groups, betas=(0.9, 0.99))
+            else:
+                self.optimizer = torch.optim.Adam(
+                    [parameter for _, parameter in self.trainable_parameters],
+                    lr=cfg.base_lr,
+                    betas=(0.9, 0.99),
+                )
 
             if "debug" not in cfg.run_name:
                 wandb.init(
@@ -443,6 +457,60 @@ class InvPhyTrainerWarp:
                         max_object_displacement, float(object_displacement)
                     )
 
+                    # --- mass regularization (small, keeps field from exploding) ---
+                    if getattr(self.simulator, "learn_mass", False) and self.simulator.wp_log_mass is not None:
+                        w_reg = float(getattr(cfg, "mass_reg_weight", 0.0) or 0.0)
+                        w_smooth = float(getattr(cfg, "mass_smooth_weight", 0.0) or 0.0)
+                        if w_reg > 0 or w_smooth > 0:
+                            # Variance-style regularization: penalize spread of log-mass,
+                            # not its mean, so global mass shifts remain free.
+                            log_m = wp.to_torch(self.simulator.wp_log_mass)
+                            if w_reg > 0:
+                                m_var = (log_m - log_m.mean()).pow(2).mean()
+                                reg_loss = w_reg * m_var
+                                # Backprop regularization alongside photometric loss via Warp tape.
+                                # Accumulate into Warp loss buffer if available, else autograd.
+                                # Here we add via torch autograd on log_m (outside graph tape).
+                                reg_loss.backward()
+                            if w_smooth > 0:
+                                is_anchored = bool(getattr(self.simulator, "use_anchor", False))
+                                if is_anchored:
+                                    # Anchored field: smoothness over anchor adjacency.
+                                    # Build kNN graph among anchors (K=128, trivial).
+                                    if not hasattr(self, "_anchor_smooth_edges") or self._anchor_smooth_edges is None:
+                                        anc_idx = getattr(self.simulator, "anchor_indices", None)
+                                        if anc_idx is not None:
+                                            anc_pos = self.init_vertices[anc_idx].detach().cpu().numpy()  # K,3
+                                            K = anc_pos.shape[0]
+                                            # k=6 neighbours per anchor
+                                            k = min(6, K - 1)
+                                            # pairwise dists
+                                            d2 = ((anc_pos[:, None, :] - anc_pos[None, :, :]) ** 2).sum(-1)
+                                            np.fill_diagonal(d2, np.inf)
+                                            neigh = np.argpartition(d2, kth=k-1, axis=1)[:, :k]
+                                            ii = np.repeat(np.arange(K), k)
+                                            jj = neigh.reshape(-1)
+                                            self._anchor_smooth_edges = (ii, jj)
+                                        else:
+                                            self._anchor_smooth_edges = None
+                                    if getattr(self, "_anchor_smooth_edges", None) is not None:
+                                        ii, jj = self._anchor_smooth_edges
+                                        ii_t = torch.from_numpy(ii).to(log_m.device).long()
+                                        jj_t = torch.from_numpy(jj).to(log_m.device).long()
+                                        diff = log_m[ii_t] - log_m[jj_t]
+                                        smooth_loss = w_smooth * (diff.pow(2).mean())
+                                        smooth_loss.backward()
+                                elif self.simulator.n_springs > 0 and self.num_object_springs > 0:
+                                    # Per-vertex field: Laplacian smoothness on object-object springs.
+                                    springs_cpu = self.init_springs[: self.num_object_springs].detach().cpu().numpy()
+                                    i_idx = torch.from_numpy(springs_cpu[:, 0]).to(log_m.device).long()
+                                    j_idx = torch.from_numpy(springs_cpu[:, 1]).to(log_m.device).long()
+                                    # Filter to object-object springs (both < num_all_points)
+                                    valid = (i_idx < self.num_all_points) & (j_idx < self.num_all_points)
+                                    if valid.any():
+                                        diff = log_m[i_idx[valid]] - log_m[j_idx[valid]]
+                                        smooth_loss = w_smooth * (diff.pow(2).mean())
+                                        smooth_loss.backward()
                     self.optimizer.step()
 
                     if cfg.data_type == "real":
@@ -483,6 +551,16 @@ class InvPhyTrainerWarp:
             if cfg.data_type == "real":
                 total_chamfer_loss /= cfg.train_frame - 1
                 total_track_loss /= cfg.train_frame - 1
+            _mass_log = {}
+            if getattr(self.simulator, "learn_mass", False) and self.simulator.wp_log_mass is not None:
+                masses = self.simulator.get_mass()
+                _mass_log = {
+                    "mass_mean": float(masses.mean().item()),
+                    "mass_std": float(masses.std().item()),
+                    "mass_min": float(masses.min().item()),
+                    "mass_max": float(masses.max().item()),
+                    "mass_total": float(masses.sum().item()),
+                }
             wandb.log(
                 {
                     "loss": total_loss,
@@ -524,6 +602,7 @@ class InvPhyTrainerWarp:
                     "controller_active_contact_count": total_active_controller_contacts,
                     "max_object_displacement": max_object_displacement,
                     "spring_gradient_norm": max_spring_grad_norm,
+                    **_mass_log,
                     **{
                         f"max_gradient_norm/{name}": value
                         for name, value in max_gradient_norms.items()
@@ -595,6 +674,40 @@ class InvPhyTrainerWarp:
                     ),
                     "optimizer_state_dict": self.optimizer.state_dict(),
             }
+            if getattr(self.simulator, "learn_mass", False) and self.simulator.wp_log_mass is not None:
+                masses = self.simulator.get_mass().cpu()
+                log_mass = self.simulator.get_log_mass().cpu()
+                cur_model["masses"] = masses  # per-vertex effective masses (N,) for visualization
+                cur_model["log_mass"] = log_mass  # anchor (K,) or per-vertex (N,) depending on mode
+                cur_model["mass_stats"] = {
+                    "mean": float(masses.mean().item()),
+                    "std": float(masses.std().item()),
+                    "min": float(masses.min().item()),
+                    "max": float(masses.max().item()),
+                    "total": float(masses.sum().item()),
+                }
+                # Persist anchor mapping so anchored checkpoints can be reloaded
+                # even when cfg / geometry changes slightly. Backwards compatible:
+                # older checkpoints without these keys fall back to deterministic FPS.
+                if getattr(self.simulator, "use_anchor", False):
+                    cur_model["mass_use_anchor"] = True
+                    cur_model["mass_num_anchors"] = int(getattr(self.simulator, "num_anchors", log_mass.numel()))
+                    cur_model["mass_anchor_indices"] = torch.from_numpy(
+                        np.asarray(getattr(self.simulator, "anchor_indices", np.array([], dtype=np.int32)))
+                    ).clone()
+                    # Save anchor positions as float32 so reload does not need init_vertices
+                    try:
+                        anc_pos = self.init_vertices[getattr(self.simulator, "anchor_indices")].detach().cpu()
+                        cur_model["mass_anchor_points"] = anc_pos.clone()
+                    except Exception:
+                        pass
+                else:
+                    cur_model["mass_use_anchor"] = False
+                cur_model["mass_anchor_knn"] = int(getattr(self.simulator, "anchor_knn", int(getattr(cfg, "mass_anchor_knn", 4))))
+                cur_model["mass_anchor_method"] = str(getattr(cfg, "mass_anchor_method", "fps"))
+                cur_model["mass_anchor_seed"] = int(getattr(cfg, "mass_anchor_seed", 42))
+                # Also expose total/mass stats to wandb via dict below
+
             if best_loss is None or total_loss < best_loss:
                     # Remove old best model file if it exists
                     if best_loss is not None:
@@ -665,6 +778,11 @@ class InvPhyTrainerWarp:
                     checkpoint["controller_contact_stiffness"].detach().clone(),
                     checkpoint["controller_contact_friction"].detach().clone(),
                 )
+            if getattr(self.simulator, "learn_mass", False) and self.simulator.wp_log_mass is not None:
+                if "log_mass" in checkpoint:
+                    self.simulator.set_log_mass(checkpoint["log_mass"])
+                elif "masses" in checkpoint:
+                    self.simulator.set_mass(checkpoint["masses"])
 
         # Render the initial visualization
         video_path = f"{cfg.base_dir}/inference.mp4"

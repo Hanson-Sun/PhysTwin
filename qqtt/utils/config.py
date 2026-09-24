@@ -38,6 +38,27 @@ class Config:
         self.spring_Y_min = 0
         self.spring_Y_max = 1e5
 
+        # Learnable per-vertex mass field (spatially-varying). When enabled,
+        # per-vertex log-mass `mass_i = exp(log_mass[i])` is optimized with
+        # an optional variance regularizer. Uniform scaling emerges as the
+        # mean of the field; keep `mass_reg_weight` small to allow global
+        # CoM/total-mass shifts for heavy-end objects.
+        self.learn_mass = False
+        self.init_mass = 1.0
+        self.mass_min = 0.1
+        self.mass_max = 10.0
+        self.mass_reg_weight = 1e-4
+        self.mass_smooth_weight = 0.0
+        # Anchored mass field: K=128 anchors sampled via FPS (even coverage)
+        # then kNN inverse-distance interpolation to all N points.
+        # Sparser/smoother than per-vertex N-field (N~700). If K<=0 or K>=N,
+        # falls back to per-vertex. Random (uniform with fixed seed) kept as
+        # alternative.
+        self.mass_num_anchors = 128
+        self.mass_anchor_knn = 4
+        self.mass_anchor_seed = 42
+        self.mass_anchor_method = "fps"  # "fps" (default) or "random"
+
         self.reverse_z = True
         self.vp_front = [1, 0, -2]
         self.vp_up = [0, 0, -1]
@@ -71,7 +92,13 @@ class Config:
         for key, value in config_dict.items():
             if hasattr(self, key):
                 current_value = getattr(self, key)
-                if isinstance(current_value, int):
+                if isinstance(current_value, bool):
+                    # bool is subclass of int — check first
+                    if isinstance(value, str):
+                        value = value.lower() in ("1", "true", "yes", "on")
+                    else:
+                        value = bool(value)
+                elif isinstance(current_value, int):
                     value = int(value)
                 elif isinstance(current_value, float):
                     value = float(value)
@@ -85,7 +112,10 @@ class Config:
     def set_optimal_params(self, optimal_params):
         optimal_params = dict(optimal_params)
         optimal_params.pop("controller_contact_friction", None)
-        optimal_params["init_spring_Y"] = optimal_params.pop("global_spring_Y")
+        if "global_spring_Y" in optimal_params:
+            optimal_params["init_spring_Y"] = optimal_params.pop("global_spring_Y")
+        if "global_mass" in optimal_params:
+            optimal_params["init_mass"] = optimal_params.pop("global_mass")
         self.update_from_dict(optimal_params)
 
 
