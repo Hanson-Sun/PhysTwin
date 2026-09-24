@@ -79,8 +79,17 @@ def export_case(
 
     writers = []
     for idx in range(len(cams)):
-        (case_dir / "color" / str(idx)).mkdir(parents=True, exist_ok=True)
-        (case_dir / "depth" / str(idx)).mkdir(parents=True, exist_ok=True)
+        color_dir = case_dir / "color" / str(idx)
+        depth_dir = case_dir / "depth" / str(idx)
+        color_dir.mkdir(parents=True, exist_ok=True)
+        depth_dir.mkdir(parents=True, exist_ok=True)
+        # A regeneration into an existing case directory is often shorter than
+        # the capture it replaces, and stale high-numbered frames would survive
+        # to be counted as frames of this capture by the downstream stages.
+        for stale in color_dir.glob("*.png"):
+            stale.unlink()
+        for stale in depth_dir.glob("*.npy"):
+            stale.unlink()
         writer = cv2.VideoWriter(
             str(case_dir / "color" / f"{idx}.mp4"),
             cv2.VideoWriter_fourcc(*"mp4v"),

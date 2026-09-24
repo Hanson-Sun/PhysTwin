@@ -3,7 +3,6 @@ from argparse import ArgumentParser
 import time
 import logging
 import json
-import glob
 import sys
 import shlex
 import subprocess
@@ -227,8 +226,11 @@ if PROCESS_FINAL:
                 + ("" if args.visualize else " --no_visualize")
             )
 
-    # Save the train test split
-    frame_len = len(glob.glob(f"{base_path}/{case_name}/pcd/*.npz"))
+    # Save the train test split. The capture length comes from the exported
+    # metadata: counting files in pcd would also count frames left behind by a
+    # longer previous capture of the same case.
+    with open(f"{base_path}/{case_name}/metadata.json", "r") as f:
+        frame_len = json.load(f)["frame_num"]
     split = {}
     split["frame_len"] = frame_len
     split["train"] = [0, int(frame_len * 0.7)]

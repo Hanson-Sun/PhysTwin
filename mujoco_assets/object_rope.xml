@@ -21,10 +21,10 @@
     <composite prefix="rope" type="cable" curve="s" count="23 1 1"
                size="0.48" offset="-0.082 -0.226 0.01"
                quat="0.819152 0 0 0.573576" initial="none">
-      <joint kind="main" damping="0.5" armature="0.001"/>
+      <joint kind="main" damping="0.30" armature="0.002"/>
       <geom type="capsule" size="0.01" mass="0.015" material="rope"
-            friction="0.8 0.02 0.01" solref="0.02 1"
-            solimp="0.8 0.95 0.01" condim="3"/>
+            friction="0.25 0.005 0.0005" solref="0.008 1"
+            solimp="0.90 0.95 0.002" condim="3"/>
     </composite>
   </worldbody>
 </mujoco>
