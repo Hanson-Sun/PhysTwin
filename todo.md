@@ -1,3 +1,5 @@
+- need to figure out how to handle damping?? where is it and how does warp handle it
+
 - a bunch of things to fix i need to check if its clean and consistent
 - the variable speed pathcing is still kind of ass need more robust collision boxes.
         - still some small issues, much better tho, ill just leave it for now until im back

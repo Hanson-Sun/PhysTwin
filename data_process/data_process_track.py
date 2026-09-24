@@ -6,6 +6,7 @@ import open3d as o3d
 from tqdm import tqdm
 import os
 import glob
+import json
 import pickle
 import matplotlib.pyplot as plt
 from argparse import ArgumentParser
@@ -59,7 +60,12 @@ def filter_track(track_path, pcd_path, mask_path, frame_num, num_cam):
         tracks = current_track_data["tracks"]
         tracks = np.round(tracks).astype(int)
         visibility = current_track_data["visibility"]
-        assert tracks.shape[0] == frame_num
+        if tracks.shape[0] != frame_num:
+            raise ValueError(
+                f"camera {i} was tracked over {tracks.shape[0]} frames but the "
+                f"capture has {frame_num}; re-run the tracking stages for this "
+                "case so the tracked video matches the current frames"
+            )
         num_points = np.shape(tracks)[1]
 
         # Locate the track points in the object mask of the first frame
@@ -464,7 +470,11 @@ if __name__ == "__main__":
     track_path = f"{base_path}/{case_name}/cotracker"
 
     num_cam = len(glob.glob(f"{mask_path}/mask_info_*.json"))
-    frame_num = len(glob.glob(f"{pcd_path}/*.npz"))
+    # Take the capture length from the exported metadata instead of counting the
+    # files in pcd: a shorter regeneration leaves stale frames behind, and
+    # counting them would silently mix two captures into one case.
+    with open(f"{base_path}/{case_name}/metadata.json", "r") as f:
+        frame_num = json.load(f)["frame_num"]
 
     # Filter the track data using the semantic mask of object and controller
     track_data = filter_track(track_path, pcd_path, mask_path, frame_num, num_cam)

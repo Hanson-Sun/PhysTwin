@@ -165,7 +165,11 @@ if __name__ == "__main__":
     mask_path = f"{base_path}/{case_name}/mask"
 
     num_cam = len(glob.glob(f"{mask_path}/mask_info_*.json"))
-    frame_num = len(glob.glob(f"{pcd_path}/*.npz"))
+    # Take the capture length from the exported metadata instead of counting the
+    # files in pcd: a shorter regeneration leaves stale frames behind, and
+    # counting them would silently mix two captures into one case.
+    with open(f"{base_path}/{case_name}/metadata.json", "r") as f:
+        frame_num = json.load(f)["frame_num"]
     # Load the mask metadata
     mask_info = {}
     for i in range(num_cam):

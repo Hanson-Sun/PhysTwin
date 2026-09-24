@@ -10,24 +10,24 @@
                range="-0.8 0.8" damping="0.2"/>
         <geom name="__NAME___finger_l_geom" type="capsule"
               fromto="0 0 0 0.052 0 -0.13" size="0.009"
-              material="claw_metal" solref="0.01 1" contype="1" conaffinity="1"/>
+              material="claw_metal" friction="1.5 0.005 0.0001" solref="0.01 1" contype="1" conaffinity="1"/>
         <geom name="__NAME___tip_l" type="capsule"
               fromto="0 0 0 0.013 0 0.03" size="0.010"
-              material="claw_metal" solref="0.01 1" contype="1" conaffinity="1"/>
+              material="claw_metal" friction="1.5 0.005 0.0001" solref="0.01 1" contype="1" conaffinity="1"/>
         <geom name="__NAME___pad_l" type="sphere" pos="0.052 0 -0.13" size="0.012"
-              material="claw_pad" solref="0.01 1" contype="1" conaffinity="1"/>
+              material="claw_pad" friction="1.5 0.005 0.0001" solref="0.01 1" contype="1" conaffinity="1"/>
       </body>
       <body name="__NAME___finger_r" pos="0.068 0 0.13">
         <joint name="__NAME___finger_r_hinge" type="hinge" axis="0 1 0"
                range="-0.8 0.8" damping="0.2"/>
         <geom name="__NAME___finger_r_geom" type="capsule"
               fromto="0 0 0 -0.052 0 -0.13" size="0.009"
-              material="claw_metal" solref="0.01 1" contype="1" conaffinity="1"/>
+              material="claw_metal" friction="1.5 0.005 0.0001" solref="0.01 1" contype="1" conaffinity="1"/>
         <geom name="__NAME___tip_r" type="capsule"
               fromto="0 0 0 -0.013 0 0.03" size="0.010"
-              material="claw_metal" solref="0.01 1" contype="1" conaffinity="1"/>
+              material="claw_metal" friction="1.5 0.005 0.0001" solref="0.01 1" contype="1" conaffinity="1"/>
         <geom name="__NAME___pad_r" type="sphere" pos="-0.052 0 -0.13" size="0.012"
-              material="claw_pad" solref="0.01 1" contype="1" conaffinity="1"/>
+              material="claw_pad" friction="1.5 0.005 0.0001" solref="0.01 1" contype="1" conaffinity="1"/>
       </body>
 
       <!-- Palm and housing half-widths widened to enclose the new hinge positions -->
