@@ -13,6 +13,45 @@ if not cfg.use_graph:
 GROUND_GRAVITY = 9.81
 
 
+def _fps_indices(points_np, K, seed=42):
+    """Farthest-point sampling: returns K indices even over N points."""
+    import numpy as np
+
+    N = points_np.shape[0]
+    if K <= 0 or K >= N:
+        return np.arange(N, dtype=np.int32)
+    rng = np.random.default_rng(int(seed))
+    selected = np.empty(K, dtype=np.int32)
+    first = int(rng.integers(0, N))
+    selected[0] = first
+    # min distance to selected set
+    dist = np.linalg.norm(points_np - points_np[first], axis=1)
+    for i in range(1, K):
+        idx = int(np.argmax(dist))
+        selected[i] = idx
+        new_d = np.linalg.norm(points_np - points_np[idx], axis=1)
+        dist = np.minimum(dist, new_d)
+    return selected
+
+
+def _knn_anchor_weights(points_np, anchor_points_np, knn=4):
+    """kNN inverse-distance weights: N points x K anchors -> N*knn indices/weights."""
+    import numpy as np
+    import torch
+
+    N = points_np.shape[0]
+    K = anchor_points_np.shape[0]
+    knn = max(1, min(int(knn), K))
+    pts = torch.from_numpy(points_np.astype(np.float32))
+    anc = torch.from_numpy(anchor_points_np.astype(np.float32))
+    # N=700 K=128 -> 90k dists trivial on CPU
+    dists = torch.cdist(pts, anc)  # N,K
+    vals, idx = torch.topk(dists, k=knn, largest=False, dim=1)
+    w = 1.0 / (vals + 1e-6)
+    w = w / w.sum(dim=1, keepdim=True).clamp(min=1e-9)
+    return idx.numpy().astype(np.int32).reshape(-1), w.numpy().astype(np.float32).reshape(-1)
+
+
 class State:
     def __init__(self, wp_init_vertices, num_control_points, num_contact_points=0):
         self.wp_x = wp.zeros_like(wp_init_vertices, requires_grad=True)
@@ -186,6 +225,7 @@ def controller_contact_force(
     controller_x: wp.array(dtype=wp.vec3),
     controller_x_prev: wp.array(dtype=wp.vec3),
     controller_v: wp.array(dtype=wp.vec3),
+    masses: wp.array(dtype=wp.float32),
     controller_grid: wp.uint64,
     controller_sweep_radius: float,
     contact_radius: float,
@@ -200,11 +240,18 @@ def controller_contact_force(
     normal_force_out: wp.array(dtype=wp.vec3),
     friction_force_out: wp.array(dtype=wp.vec3),
 ):
-    """Apply unilateral normal contact and capped tangential friction."""
+    """Apply unilateral normal contact and capped tangential friction.
+    Contact stiffness is mass-normalized so penetration does not scale with
+    object mass: F = (k_base * m_i) * pen, a = F/m_i = k_base*pen.
+    With m_i=1 the behaviour is identical to the pre-mass-field baseline.
+    """
     object_idx = wp.tid()
     object_position = x[object_idx]
     object_velocity = v[object_idx]
-    stiffness = contact_stiffness
+    # Mass-normalize to keep visual non-penetration independent of (learned) mass.
+    # Base stiffness k_base was tuned for m=1, so effective k = k_base * m_i.
+    mass_i = wp.max(masses[object_idx], 1e-6)
+    stiffness = contact_stiffness * mass_i
     friction = contact_friction
     total_force = wp.vec3(0.0, 0.0, 0.0)
     total_normal_force = wp.vec3(0.0, 0.0, 0.0)
@@ -274,6 +321,7 @@ def controller_contact_force_fixed(
     controller_x: wp.array(dtype=wp.vec3),
     controller_x_prev: wp.array(dtype=wp.vec3),
     controller_v: wp.array(dtype=wp.vec3),
+    masses: wp.array(dtype=wp.float32),
     controller_grid: wp.uint64,
     controller_sweep_radius: float,
     contact_radius: float,
@@ -286,10 +334,18 @@ def controller_contact_force_fixed(
     active_count: wp.array(dtype=wp.int32),
     f: wp.array(dtype=wp.vec3),
 ):
-    """Apply fixed contact for CMA without calibration component buffers."""
+    """Apply fixed contact for CMA without calibration component buffers.
+    Mass-normalized like the learnable variant.
+    """
     object_idx = wp.tid()
     object_position = x[object_idx]
     object_velocity = v[object_idx]
+    # Mass-normalize: effective stiffness scales with per-vertex mass so that
+    # penetration depth `pen = m*a/k_eff` stays independent of global/local mass.
+    _mass_i = wp.max(masses[object_idx], 1e-6)
+    _stiffness_eff = contact_stiffness * _mass_i
+    # Shadow names used below so the remainder of the kernel is unchanged.
+    contact_stiffness = _stiffness_eff
     total_force = wp.vec3(0.0, 0.0, 0.0)
     was_active = contact_active[object_idx] != 0
     has_activation = int(0)
@@ -359,6 +415,40 @@ def apply_controller_contact_calibration(
     correction = (stiffness_scale - 1.0) * normal_force[tid]
     correction += (friction_scale - 1.0) * friction_force[tid]
     wp.atomic_add(f, tid, correction)
+
+
+@wp.kernel
+def compute_masses_from_log(
+    log_mass: wp.array(dtype=wp.float32),
+    mass_min: float,
+    mass_max: float,
+    masses: wp.array(dtype=wp.float32),
+):
+    tid = wp.tid()
+    m = wp.exp(log_mass[tid])
+    masses[tid] = wp.clamp(m, low=mass_min, high=mass_max)
+
+
+@wp.kernel
+def compute_masses_from_anchor_log(
+    anchor_log_mass: wp.array(dtype=wp.float32),
+    anchor_indices: wp.array(dtype=wp.int32),
+    anchor_weights: wp.array(dtype=wp.float32),
+    knn: int,
+    mass_min: float,
+    mass_max: float,
+    masses: wp.array(dtype=wp.float32),
+):
+    tid = wp.tid()
+    log_m = float(0.0)
+    base = tid * knn
+    # Unrolled up to 8 neighbours; knn is typically 4.
+    for k in range(8):
+        if k < knn:
+            idx = anchor_indices[base + k]
+            w = anchor_weights[base + k]
+            log_m += w * anchor_log_mass[idx]
+    masses[tid] = wp.clamp(wp.exp(log_m), low=mass_min, high=mass_max)
 
 
 @wp.kernel
@@ -1019,9 +1109,84 @@ class SpringMassSystemWarp:
         self.wp_rest_lengths = wp.from_torch(
             init_rest_lengths, dtype=wp.float32, requires_grad=False
         )
-        self.wp_masses = wp.from_torch(
-            init_masses[:num_object_points], dtype=wp.float32, requires_grad=False
-        )
+        # --- Learnable mass field (per-vertex or anchored FPS) ---
+        self.learn_mass = bool(getattr(cfg, "learn_mass", False))
+        self.mass_min = float(getattr(cfg, "mass_min", 0.1))
+        self.mass_max = float(getattr(cfg, "mass_max", 10.0))
+        self.init_mass = float(getattr(cfg, "init_mass", 1.0))
+        if self.mass_min <= 0.0 or self.mass_max <= self.mass_min:
+            raise ValueError(f"invalid mass bounds min={self.mass_min} max={self.mass_max}")
+        # Anchored mode: K anchors via FPS/random, kNN interpolation to N points
+        self.use_anchor = False
+        self.num_anchors = 0
+        self.anchor_knn = 0
+        self.anchor_indices = None
+        self.wp_anchor_indices = None
+        self.wp_anchor_weights = None
+        if self.learn_mass:
+            base_masses = init_masses[:num_object_points].to(dtype=torch.float32, device=self.device)
+            K = int(getattr(cfg, "mass_num_anchors", 0) or 0)
+            knn = int(getattr(cfg, "mass_anchor_knn", 4) or 4)
+            method = str(getattr(cfg, "mass_anchor_method", "fps") or "fps").lower()
+            seed = int(getattr(cfg, "mass_anchor_seed", 42) or 42)
+            N = int(num_object_points)
+            use_anchor = 0 < K < N and method in ("fps", "random")
+            if use_anchor:
+                import numpy as np
+                pts_np = init_vertices[:N].detach().cpu().numpy().astype(np.float32)
+                if method == "fps":
+                    anchor_idx = _fps_indices(pts_np, K, seed=seed)
+                else:
+                    rng = np.random.default_rng(int(seed))
+                    anchor_idx = rng.choice(N, size=K, replace=False).astype(np.int32)
+                    anchor_idx.sort()  # deterministic order
+                anchor_pts = pts_np[anchor_idx]
+                knn_clamped = max(1, min(int(knn), K))
+                knn_idx, knn_w = _knn_anchor_weights(pts_np, anchor_pts, knn=knn_clamped)
+                self.use_anchor = True
+                self.num_anchors = int(K)
+                self.anchor_knn = int(knn_clamped)
+                self.anchor_indices = anchor_idx.astype(np.int32)
+                self.wp_anchor_indices = wp.from_torch(
+                    torch.from_numpy(knn_idx.astype(np.int32)).to(self.device),
+                    dtype=wp.int32,
+                    requires_grad=False,
+                )
+                self.wp_anchor_weights = wp.from_torch(
+                    torch.from_numpy(knn_w.astype(np.float32)).to(self.device),
+                    dtype=wp.float32,
+                    requires_grad=False,
+                )
+                anchor_base = base_masses[self.anchor_indices].to(dtype=torch.float32, device=self.device)
+                scaled = (anchor_base * self.init_mass).clamp(min=self.mass_min, max=self.mass_max).clamp(min=1e-6)
+                init_log_mass = torch.log(scaled)
+                self.wp_log_mass = wp.from_torch(init_log_mass, dtype=wp.float32, requires_grad=not disable_backward)
+                self.wp_masses = wp.zeros(self.num_object_points, dtype=wp.float32, requires_grad=not disable_backward)
+                wp.launch(
+                    kernel=compute_masses_from_anchor_log,
+                    dim=self.num_object_points,
+                    inputs=[self.wp_log_mass, self.wp_anchor_indices, self.wp_anchor_weights, self.anchor_knn, self.mass_min, self.mass_max],
+                    outputs=[self.wp_masses],
+                )
+                logger.info(f"[SIMULATION]: Anchored mass field K={K} knn={knn_clamped} method={method} seed={seed}")
+            else:
+                # Fallback: per-vertex field (N params)
+                scaled = (base_masses * self.init_mass).clamp(min=self.mass_min, max=self.mass_max).clamp(min=1e-6)
+                init_log_mass = torch.log(scaled)
+                self.wp_log_mass = wp.from_torch(init_log_mass, dtype=wp.float32, requires_grad=not disable_backward)
+                self.wp_masses = wp.zeros(self.num_object_points, dtype=wp.float32, requires_grad=not disable_backward)
+                wp.launch(
+                    kernel=compute_masses_from_log,
+                    dim=self.num_object_points,
+                    inputs=[self.wp_log_mass, self.mass_min, self.mass_max],
+                    outputs=[self.wp_masses],
+                )
+        else:
+            self.wp_log_mass = None
+            base_masses = init_masses[:num_object_points].to(dtype=torch.float32, device=self.device)
+            scaled = (base_masses * self.init_mass).clamp(min=1e-6)
+            self.wp_masses = wp.from_torch(scaled.contiguous(), dtype=wp.float32, requires_grad=False)
+
         if cfg.data_type == "real":
             self.prev_acc = wp.zeros_like(self.wp_init_vertices, requires_grad=False)
             self.acc_count = wp.zeros(1, dtype=wp.int32, requires_grad=False)
@@ -1301,7 +1466,39 @@ class SpringMassSystemWarp:
             outputs=[self.wp_collision_indices, self.wp_collision_number],
         )
 
+    def _refresh_masses(self):
+        if self.learn_mass and self.wp_log_mass is not None:
+            if getattr(self, "use_anchor", False):
+                wp.launch(
+                    kernel=compute_masses_from_anchor_log,
+                    dim=self.num_object_points,
+                    inputs=[self.wp_log_mass, self.wp_anchor_indices, self.wp_anchor_weights, self.anchor_knn, self.mass_min, self.mass_max],
+                    outputs=[self.wp_masses],
+                )
+            else:
+                wp.launch(
+                    kernel=compute_masses_from_log,
+                    dim=self.num_object_points,
+                    inputs=[self.wp_log_mass, self.mass_min, self.mass_max],
+                    outputs=[self.wp_masses],
+                )
+
     def step(self):
+        if self.learn_mass and self.wp_log_mass is not None:
+            if getattr(self, "use_anchor", False):
+                wp.launch(
+                    kernel=compute_masses_from_anchor_log,
+                    dim=self.num_object_points,
+                    inputs=[self.wp_log_mass, self.wp_anchor_indices, self.wp_anchor_weights, self.anchor_knn, self.mass_min, self.mass_max],
+                    outputs=[self.wp_masses],
+                )
+            else:
+                wp.launch(
+                    kernel=compute_masses_from_log,
+                    dim=self.num_object_points,
+                    inputs=[self.wp_log_mass, self.mass_min, self.mass_max],
+                    outputs=[self.wp_masses],
+                )
         for i in range(self.num_substeps):
             self.wp_states[i].clear_forces()
             if not self.controller_points is None:
@@ -1377,6 +1574,7 @@ class SpringMassSystemWarp:
                     self.wp_states[i].wp_contact_x,
                     self.wp_states[i].wp_contact_x_prev,
                     self.wp_states[i].wp_contact_v,
+                    self.wp_masses,
                     self.controller_contact_grid.id,
                     self.controller_contact_sweep_radius,
                     self.controller_contact_radius,
@@ -1603,6 +1801,49 @@ class SpringMassSystemWarp:
             outputs=[self.wp_controller_contact_friction],
         )
 
+    def get_mass(self):
+        """Return current per-vertex masses as a detached torch tensor (num_object_points, on cfg.device)."""
+        if self.learn_mass and self.wp_log_mass is not None:
+            # Ensure wp_masses is up to date on device before reading (eager, outside tape).
+            self._refresh_masses()
+        t = wp.to_torch(self.wp_masses, requires_grad=False).detach()
+        # Return on original device (cuda) for training code that expects cuda tensors
+        return t.clone()
+
+    def get_mass_cpu(self):
+        return self.get_mass().cpu()
+
+    def get_log_mass(self):
+        if self.wp_log_mass is None:
+            return None
+        return wp.to_torch(self.wp_log_mass, requires_grad=False).detach().clone()
+
+    def get_anchor_indices(self):
+        return None if not getattr(self, "use_anchor", False) else getattr(self, "anchor_indices", None)
+
+    def set_log_mass(self, log_mass):
+        assert self.wp_log_mass is not None, "learn_mass is disabled"
+        log_t = log_mass.to(self.device, dtype=torch.float32).contiguous()
+        if getattr(self, "use_anchor", False):
+            assert log_t.numel() == int(self.num_anchors), f"expected {self.num_anchors} anchors, got {log_t.numel()}"
+            wp_log = wp.from_torch(log_t, dtype=wp.float32, requires_grad=False)
+            wp.launch(copy_float, dim=self.num_anchors, inputs=[wp_log], outputs=[self.wp_log_mass])
+        else:
+            assert log_t.numel() == self.num_object_points
+            wp_log = wp.from_torch(log_t, dtype=wp.float32, requires_grad=False)
+            wp.launch(copy_float, dim=self.num_object_points, inputs=[wp_log], outputs=[self.wp_log_mass])
+        self._refresh_masses()
+
+    def set_mass(self, masses):
+        """Set masses via clamped log.
+        In anchored mode `masses` is per-anchor (K,). Otherwise per-vertex (N,).
+        """
+        assert self.wp_log_mass is not None
+        if getattr(self, "use_anchor", False):
+            assert masses.numel() == int(self.num_anchors)
+        m = masses.to(self.device, dtype=torch.float32).clamp(min=self.mass_min, max=self.mass_max).clamp(min=1e-6)
+        self.set_log_mass(torch.log(m))
+
     # Functions used to load the parmeters
     def set_spring_Y(self, spring_Y):
         # assert spring_Y.shape[0] == self.n_springs
@@ -1640,3 +1881,12 @@ class SpringMassSystemWarp:
             inputs=[collide_object_fric],
             outputs=[self.wp_collide_object_fric],
         )
+
+    def set_init_mass_scale(self, scale: float):
+        """Rescale all masses by `scale` (used by CMA global-mass search when learn_mass is False)."""
+        if self.learn_mass:
+            raise RuntimeError("set_init_mass_scale is for non-learnable mass mode; use set_log_mass instead")
+        cur = wp.to_torch(self.wp_masses, requires_grad=False).detach()
+        new = (cur * float(scale)).clamp(min=1e-6)
+        wp_new = wp.from_torch(new.contiguous(), dtype=wp.float32, requires_grad=False)
+        wp.launch(copy_float, dim=self.num_object_points, inputs=[wp_new], outputs=[self.wp_masses])

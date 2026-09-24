@@ -134,6 +134,33 @@ the initialization stage only when
 `experiments_optimization/my_case/optimal_params.pkl` already exists. For a
 small headless end-to-end test, use `--iterations 1 --cma_max_iter 1 --no_visualize`.
 
+### Learnable anchored mass field (heavy-end / CoM shift)
+
+Disabled by default; no config change required. Enable with one flag:
+
+```yaml
+# configs/real.yaml (or per-case override)
+learn_mass: true          # default false — off = uniform mass, fully backward compatible
+init_mass: 1.0            # uniform scale baked into all masses at t=0
+mass_min: 0.1             # clamp per-vertex mass after exp()
+ mass_max: 10.0
+mass_reg_weight: 1.0e-4   # variance penalty on log-mass (mean is free)
+ mass_smooth_weight: 0.0   # Laplacian on anchor graph (0 = off)
+# Anchored (default K=128 FPS, K<=0 or K>=N falls back to per-vertex N):
+mass_num_anchors: 128
+mass_anchor_knn: 4         # inverse-distance kNN to N points
+ mass_anchor_seed: 42
+mass_anchor_method: fps    # fps (default) or random
+```
+
+YAML keys are optional — unset keys keep the defaults above. Set via YAML or
+`cfg.update_from_dict({"learn_mass": True})`. CMA now optimizes an 11th
+dimension `global_mass` (normalized in `[mass_min, mass_max]`) automatically and
+maps `global_mass → init_mass`; no user action needed. Checkpoints with
+`learn_mass: true` save `log_mass` (K=128) + `masses` (N) + `mass_anchor_*`
+metadata and reload strictly (no resampling) — from this point forward all
+checkpoints are assumed `fps`-anchored.
+
 ## Reconstruct Gaussians
 
 Run this once after RGB-D processing and before RL:
