@@ -56,7 +56,11 @@ The command writes
 `final_data.pkl`, `metadata.json`, `calibrate.pkl`, and intermediate data under
 `<output_dir>/my_case/`.
 
-## Shape Prior Backends
+## Shape Prior Backends (new: `carve` / `poisson` alongside `trellis`)
+
+**What changed:** in addition to `trellis` (generative image-to-3D), two deterministic backends were added. All write the same watertight `shape/object.glb` consumed by alignment / interior sampling.
+
+**User action:** none required — defaults to `trellis`. Opt in per-case via the 4th column of `data_config.csv` or `--shape_generator {carve|poisson|trellis}`.
 
 Shape-prior generation writes the watertight object mesh that alignment and
 interior-point sampling consume (`shape/object.glb`). The backend is chosen per
@@ -134,6 +138,26 @@ the initialization stage only when
 `experiments_optimization/my_case/optimal_params.pkl` already exists. For a
 small headless end-to-end test, use `--iterations 1 --cma_max_iter 1 --no_visualize`.
 
+### Dense controller contact (new, automatic)
+
+**What changed:** training now uses the hollow dense gripper shell (`controller_points_dense`, voxel `0.003`m) as a unilateral collider instead of sparse spring tethers. Contact is a swept-segment penalty `F=k*pen` with Coulomb friction (`μ*F_n` capped via `tanh`), hysteresis (`activation 0.014 / release 0.0175`m), and mass-normalized stiffness (`k_eff=k_base*m_i` so penetration `a=k_base*pen` is `m`-independent). Prevents tunneling at `capture_every=8` and wires into the Boba batched runtime.
+
+**User action:** none. Dense tracks are preserved automatically (`qqtt/data/real_data.py`, `qqtt/utils/controller_collider.py`). CMA reuses the same fixed topology (`controller_radius`/`max_neighbours` not re-optimized). Visualize coverage with `scripts/visualize_controller_points.py --dense --hollow`.
+
+### Differentiable ground & friction (new, automatic)
+
+**What changed:** hard ground impact / `min(μN, m·v/dt)` is replaced by a smooth sigmoid ground activation (`ground_contact_smoothing=2e-5`) and `tanh` Coulomb saturation (`tanh(v·k / μN)`). Object-object collisions keep hard impact timing but smooth the friction cap. Improves gradient flow for `collide_fric` without changing the visual result.
+
+**User action:** none. Enabled in both `spring_mass_warp*.py`. No config required; CMA/Adam learn the same `collide_*` scalars more stably.
+
+### Training visualization & controller overlay (new)
+
+Warp training now saves an MP4 every `vis_interval` (default 20) under `experiments/<case>/train/` via a separate forward graph, and the standalone `visualize_controller_points.py` renders any `inference.pkl`/`final_data.pkl` trajectory as multi-camera Open3D panels with an optional hollow dense gripper inset.
+
+```bash
+python scripts/visualize_controller_points.py data/different_types/sim_rope/final_data.pkl data/different_types/sim_rope/vis.mp4 --dense --hollow
+```
+
 ### Learnable anchored mass field (heavy-end / CoM shift)
 
 Disabled by default; no config change required. Enable with one flag:
@@ -160,6 +184,19 @@ maps `global_mass → init_mass`; no user action needed. Checkpoints with
 `learn_mass: true` save `log_mass` (K=128) + `masses` (N) + `mass_anchor_*`
 metadata and reload strictly (no resampling) — from this point forward all
 checkpoints are assumed `fps`-anchored.
+
+### Learnable global damping (rope springiness fix) — optional
+
+Disabled by default; enable to let Adam fine-tune the two globals already tuned by CMA:
+
+```yaml
+# configs/real.yaml
+learn_damping: true       # default false — off = frozen (CMA warm-start only)
+dashpot_damping: 100      # initial per-spring Kelvin-Voigt [0,200]
+drag_damping: 3           # initial global velocity decay [0,20]
+```
+
+Single flag `learn_damping: true` makes both `dashpot` + `drag` trainable in Adam (2 scalars, `clamp[0,200]`/`[0,20]`, `0.2×lr`, graph-baked). No other change; with `false` behavior is identical to before. Useful for `sim_rope` where `chamfer+track+acc(0.01)` position loss under-constrains velocity — check `wandb` `dashpot_damping`/`drag_damping`. Checkpoints always save/restore both values. No anchored/per-spring field — global only (minimal change).
 
 ## Reconstruct Gaussians
 
@@ -211,9 +248,11 @@ filesystem glob order.
 RGB-D processing automatically runs in the `phystwin-data` environment (see
 [Environments](#environments)).
 
-## MuJoCo Synthetic RGB-D Export
+## MuJoCo Synthetic RGB-D Export (new)
 
-The MuJoCo exporter writes a PhysTwin-compatible case directory, including:
+**What changed:** adds a full MuJoCo → PhysTwin data path (`mujoco_sim/{simulation,scene,interactor,phystwin_export}` + `mujoco_assets/{world,claw,object_box/rope/heavy_end}.xml` + `models.json`/`scripts/generate_sim_data.py`). Useful for controlled ablations (uniform vs heavy-end) without real capture.
+
+**User action:** optional. Normal pipeline unchanged. To generate synthetic data, use either single-case API or manifest. The exporter writes a PhysTwin-compatible case directory, including:
 
 - `color/<camera>/<frame>.png` RGB frames
 - `color/<camera>.mp4` videos for dense tracking
@@ -222,10 +261,7 @@ The MuJoCo exporter writes a PhysTwin-compatible case directory, including:
 - `metadata.json` with intrinsics, image size, FPS, and frame count
 - `split.json` with the standard 70/30 train/test frame ranges
 
-The default MuJoCo example now loads the validated rigid
-`mujoco_assets/object_box.xml`. Proper soft-body assets will be added after
-surface repair and tetrahedral volume generation. The active representative
-assets are:
+Default example loads the validated rigid `mujoco_assets/object_box.xml` (soft bodies pending tetrahedralization). Active assets:
 
 - `object_rope.xml` — simple flexible rope/twine scaffold
 - `object_box.xml` — validated rigid baseline box
@@ -239,10 +275,7 @@ volume meshes. The real PhysTwin sloth/zebra `shape/object.glb` files are also
 non-watertight, disconnected surface reconstructions and must be repaired and
 tetrahedralized before they can be used as MuJoCo `dim=3` flex objects.
 
-Select an active asset with the JSON generator's `object_file` field or with
-`load_model(object_file=...)`.
-The current PhysTwin preprocessing scripts require three cameras, matching the
-three cameras in `mujoco_assets/world.xml`:
+Select an active asset via JSON `object_file` or `load_model(object_file=...)`. Preprocessing requires 3 cameras (as in `mujoco_assets/world.xml`):
 
 ```python
 from mujoco_sim.phystwin_export import export_case
@@ -305,24 +338,9 @@ point depth files as metres by default. Use `--unit meters` or
 
 ## Controller Point Visualization
 
-Use `scripts/visualize_controller_points.py` to create an MP4 from the
-simulated vertex trajectory. It renders one calibrated headless Open3D panel per
-camera and appends the panels horizontally, preserving each panel's native
-resolution. The script prefers `inference.pkl` next to `final_data.pkl`; if it
-is missing, it falls back to the object trajectory in `final_data.pkl`.
+`scripts/visualize_controller_points.py` renders any `inference.pkl` (or `final_data.pkl`) trajectory as one calibrated Open3D panel per camera plus an optional hollow dense gripper overlay. Videos are stitched horizontally at native resolution.
 
 ```bash
-python scripts/visualize_controller_points.py \
-  data/different_types/sim_rope/final_data.pkl \
-  data/different_types/sim_rope/inference_with_controller_points.mp4 \
-  --dense --hollow
+python scripts/visualize_controller_points.py data/different_types/sim_rope/final_data.pkl data/different_types/sim_rope/vis.mp4 --dense --hollow
+# opts: --trajectory PATH --trail-length N --inset-scale 0.34 --voxel-size 0.003
 ```
-
-Options:
-
-- `--trajectory PATH`: use a different simulated vertex trajectory.
-- `--dense`: show `controller_points_dense` instead of sparse points.
-- `--hollow`: remove duplicate/interior dense voxels before visualization.
-- `--inset-scale SIZE`: set the inset size as a fraction of the video; default is `0.34`.
-- `--trail-length N`: show the previous N controller positions in orange.
-- `--voxel-size SIZE`: configure hollow-shell voxel size; default is `0.003` meters.

@@ -40,7 +40,11 @@ if __name__ == "__main__":
     train_frame = args.train_frame
     max_iter = args.max_iter
 
-    if "cloth" in case_name or "package" in case_name:
+    if "rope" in case_name or "twine" in case_name:
+        cfg.load_from_yaml("configs/rope.yaml")
+    elif "rigid" in case_name or "box" in case_name:
+        cfg.load_from_yaml("configs/rigid.yaml")
+    elif "cloth" in case_name or "package" in case_name:
         cfg.load_from_yaml("configs/cloth.yaml")
     else:
         cfg.load_from_yaml("configs/real.yaml")
