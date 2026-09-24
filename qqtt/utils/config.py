@@ -59,6 +59,11 @@ class Config:
         self.mass_anchor_seed = 42
         self.mass_anchor_method = "fps"  # "fps" (default) or "random"
 
+        # Learnable global damping (dashpot per-spring + drag). When enabled,
+        # both are optimized in Adam alongside spring_Y (CMA already tunes them
+        # as globals). Minimal 2-param change for rope/bending damping.
+        self.learn_damping = False
+
         self.reverse_z = True
         self.vp_front = [1, 0, -2]
         self.vp_up = [0, 0, -1]

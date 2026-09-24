@@ -1,3 +1,6 @@
+fix rigid.yaml
+
+
 - need to figure out how to handle damping?? where is it and how does warp handle it
 
 - a bunch of things to fix i need to check if its clean and consistent

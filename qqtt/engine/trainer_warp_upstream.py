@@ -201,16 +201,22 @@ class InvPhyTrainerWarp:
                     ]
                 )
             if getattr(self.simulator, "learn_mass", False) and self.simulator.wp_log_mass is not None:
-                # Per-vertex log-mass field. Masses are derived as clamp(exp(log_mass)).
                 self.trainable_parameters.append(
                     ("log_mass", wp.to_torch(self.simulator.wp_log_mass))
                 )
-            # Optional: lower LR for mass field to avoid instability (keep same
-            # optimizer for conciseness; mass LR scaled via param group).
-            if any(name == "log_mass" for name, _ in self.trainable_parameters):
+            if bool(getattr(cfg, "learn_damping", False)):
+                self.trainable_parameters.append(
+                    ("dashpot_damping", wp.to_torch(self.simulator.wp_dashpot_damping))
+                )
+                self.trainable_parameters.append(
+                    ("drag_damping", wp.to_torch(self.simulator.wp_drag_damping))
+                )
+            # Lower LR for mass/damping (2 global scalars, stable via 0.2x)
+            _special = {"log_mass", "dashpot_damping", "drag_damping"}
+            if any(name in _special for name, _ in self.trainable_parameters):
                 param_groups = []
                 for name, param in self.trainable_parameters:
-                    lr = cfg.base_lr * (0.2 if name == "log_mass" else 1.0)
+                    lr = cfg.base_lr * (0.2 if name in _special else 1.0)
                     param_groups.append({"params": param, "lr": lr})
                 self.optimizer = torch.optim.Adam(param_groups, betas=(0.9, 0.99))
             else:
@@ -598,6 +604,12 @@ class InvPhyTrainerWarp:
                             2.0,
                         ).item()
                     ),
+                    "dashpot_damping": float(
+                        torch.clamp(wp.to_torch(self.simulator.wp_dashpot_damping, requires_grad=False), 0.0, 200.0).item()
+                    ),
+                    "drag_damping": float(
+                        torch.clamp(wp.to_torch(self.simulator.wp_drag_damping, requires_grad=False), 0.0, 20.0).item()
+                    ),
                     "controller_contact_count": total_controller_contacts,
                     "controller_active_contact_count": total_active_controller_contacts,
                     "max_object_displacement": max_object_displacement,
@@ -672,6 +684,8 @@ class InvPhyTrainerWarp:
                         0.0,
                         2.0,
                     ),
+                    "dashpot_damping": wp.to_torch(self.simulator.wp_dashpot_damping, requires_grad=False).clone(),
+                    "drag_damping": wp.to_torch(self.simulator.wp_drag_damping, requires_grad=False).clone(),
                     "optimizer_state_dict": self.optimizer.state_dict(),
             }
             if getattr(self.simulator, "learn_mass", False) and self.simulator.wp_log_mass is not None:
@@ -778,6 +792,8 @@ class InvPhyTrainerWarp:
                     checkpoint["controller_contact_stiffness"].detach().clone(),
                     checkpoint["controller_contact_friction"].detach().clone(),
                 )
+            if "dashpot_damping" in checkpoint and "drag_damping" in checkpoint:
+                self.simulator.set_damping(checkpoint["dashpot_damping"], checkpoint["drag_damping"])
             if getattr(self.simulator, "learn_mass", False) and self.simulator.wp_log_mass is not None:
                 if "log_mass" in checkpoint:
                     self.simulator.set_log_mass(checkpoint["log_mass"])
