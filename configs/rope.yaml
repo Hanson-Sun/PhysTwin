@@ -4,7 +4,7 @@ dt: 5e-5
 num_substeps: 667
 dashpot_damping: 100
 drag_damping: 3
-learn_damping: true
+learn_damping: false # for testing
 base_lr: 1e-3
 iterations: 200
 vis_interval: 20
@@ -33,13 +33,13 @@ track_weight: 1.0
 # Anchored mass field enabled for rope (lets the branch learn CoM even if uniform;
 # harmless for uniform rope, essential for heavy-end variants). K=128 FPS, kNN4,
 # mass-normalized contact keeps penetration m-independent.
-learn_mass: true
+learn_mass: false
 init_mass: 1.0
 mass_min: 0.1
 mass_max: 10.0
 mass_reg_weight: 1.0e-4
 mass_smooth_weight: 0.0
-mass_num_anchors: 128
+mass_num_anchors: 512
 mass_anchor_knn: 4
 mass_anchor_seed: 42
 mass_anchor_method: fps

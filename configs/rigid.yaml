@@ -33,13 +33,13 @@ track_weight: 1.0
 # Anchored mass field enabled for rigid bodies (required for heavy-end/arbitrary
 # CoM). K=128 FPS, kNN4, mass-normalized contact keeps penetration m-independent.
 # learn_damping stays false (rigid doesn't need damping fine-tune; rope does).
-learn_mass: true
+learn_mass: True # for testing
 init_mass: 1.0
 mass_min: 0.1
 mass_max: 10.0
 mass_reg_weight: 1.0e-4
 mass_smooth_weight: 0.0
-mass_num_anchors: 128
+mass_num_anchors: 512
 mass_anchor_knn: 4
 mass_anchor_seed: 42
 mass_anchor_method: fps
