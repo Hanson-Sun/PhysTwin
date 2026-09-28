@@ -77,22 +77,40 @@ def load_manifest(path: Path) -> list[dict]:
     return models
 
 
-def normalize(model: dict, manifest: Path) -> dict:
-    object_file = model.get("object_file", DEFAULT_OBJECT_FILE)
-    object_path = Path(object_file)
-    if not object_path.is_absolute():
-        for candidate in (manifest.parent / object_path, REPO_ROOT / object_path):
+def resolve_asset(value: str, manifest: Path) -> str:
+    """Resolve an asset next to the manifest or the repo root.
+
+    Anything that is not found is left alone, so bare names still resolve
+    against the `mujoco_assets/` directory when the scene is composed.
+    """
+    path = Path(value)
+    if not path.is_absolute():
+        for candidate in (manifest.parent / path, REPO_ROOT / path):
             if candidate.is_file():
-                object_file = str(candidate.resolve())
-                break
+                return str(candidate.resolve())
+    return str(value)
+
+
+def normalize(model: dict, manifest: Path) -> dict:
+    object_file = resolve_asset(model.get("object_file", DEFAULT_OBJECT_FILE), manifest)
+    object_mesh = model.get("object_mesh")
+    if object_mesh is not None:
+        object_mesh = resolve_asset(str(object_mesh), manifest)
+
+    soft = model.get("soft") or {}
+    if not isinstance(soft, dict):
+        raise ValueError("'soft' must be an object of soft_body.soft_object arguments")
 
     case_name = model.get("case_name") or model.get("name")
     if not case_name:
-        case_name = object_path.stem
+        stem = Path(object_mesh) if object_mesh else Path(object_file)
+        case_name = stem.stem
 
     return {
         "case_name": str(case_name),
         "object_file": str(object_file),
+        "object_mesh": object_mesh,
+        "soft": soft,
         "n_interactors": integer(model, "n_interactors", 1),
         "trajectory": str(model.get("trajectory", "push")),
         "max_controller_speed": positive_float(
@@ -119,7 +137,12 @@ def generate(model: dict, output_dir: Path, overwrite: bool) -> Path:
         raise FileExistsError(f"case already exists: {case_dir}; use --overwrite")
 
     sim = DigitalTwinSim(
-        load_model(model["n_interactors"], model["object_file"]),
+        load_model(
+            model["n_interactors"],
+            model["object_file"],
+            model["object_mesh"],
+            model["soft"],
+        ),
         width=model["width"],
         height=model["height"],
     )
@@ -206,8 +229,9 @@ def main() -> None:
         models = [model for model in models if model["case_name"] in args.cases]
     output_dir = args.output_dir.resolve()
     for model in models:
+        asset = model["object_mesh"] or model["object_file"]
         print(
-            f"{model['case_name']}: {model['object_file']} "
+            f"{model['case_name']}: {asset} "
             f"({model['trajectory']}, interactors={model['n_interactors']})"
         )
         if not args.dry_run:

@@ -53,6 +53,35 @@
       "capture_every": 8,
       "substeps": 4,
       "fps": 30
+    },
+    {
+      "case_name": "sim_soft_ball",
+      "object_mesh": "ball.obj",
+      "trajectory": "push",
+      "width": 848,
+      "height": 480,
+      "steps_per_segment": 300,
+      "max_controller_speed": 0.20,
+      "controller_free_speed": 0.7,
+      "controller_slowdown_epsilon": 0.02,
+      "capture_every": 8,
+      "substeps": 4,
+      "fps": 30
+    },
+    {
+      "case_name": "sim_soft_ball_grip_lift",
+      "object_mesh": "ball.obj",
+      "trajectory": "grip_lift",
+      "n_interactors": 1,
+      "width": 848,
+      "height": 480,
+      "steps_per_segment": 300,
+      "max_controller_speed": 0.25,
+      "controller_free_speed": 0.25,
+      "controller_slowdown_epsilon": 0.02,
+      "capture_every": 8,
+      "substeps": 4,
+      "fps": 30
     }
   ]
 }

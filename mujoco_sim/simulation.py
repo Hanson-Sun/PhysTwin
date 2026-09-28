@@ -105,6 +105,44 @@ class DigitalTwinSim:
         qpos_adr = self.model.jnt_qposadr[adr]
         return self.data.qpos[qpos_adr : qpos_adr + 7].copy()
 
+    def translate_flex(self, flex_id: int, delta) -> None:
+        """Translate a whole flex by `delta`, in world coordinates.
+
+        A flexcomp's bodies all descend from the body it was declared in, so
+        shifting that body moves the deformable mesh rigidly. This replaces the
+        freejoint write used to move a rigid object.
+        """
+        # A full-dof flex owns a body per vertex, a reduced-dof flex one per
+        # interpolation node; both sets descend from the flexcomp's own body.
+        start, count = self.model.flex_vertadr[flex_id], self.model.flex_vertnum[flex_id]
+        node, node_count = self.model.flex_nodeadr[flex_id], self.model.flex_nodenum[flex_id]
+        bodies = np.concatenate(
+            (
+                self.model.flex_vertbodyid[start : start + count],
+                self.model.flex_nodebodyid[node : node + node_count],
+            )
+        )
+        owners = bodies[bodies >= 0]
+        if not len(owners):
+            raise ValueError("flex has no bodies to translate")
+        parent = int(self.model.body_parentid[owners[0]])
+        self.model.body_pos[parent] += np.asarray(delta, dtype=float)
+
+    def get_object_state(self, body_name: str) -> np.ndarray:
+        """7-vec [pos(3), quat(4)] ground truth for a rigid or soft object.
+
+        A soft object has no freejoint - its flex vertices carry the motion - so
+        it is reported as the deformable mesh's centre of mass with an identity
+        orientation. Rigid objects keep their free body pose.
+        """
+        flex_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_FLEX, body_name)
+        if flex_id < 0:
+            return self.get_free_body_state(body_name)
+        start = self.model.flex_vertadr[flex_id]
+        count = self.model.flex_vertnum[flex_id]
+        vertices = np.asarray(self.data.flexvert_xpos)[start : start + count]
+        return np.concatenate([vertices.mean(axis=0), (1.0, 0.0, 0.0, 0.0)])
+
     # ---- data generation ------------------------------------------------
 
     def _body_geom_ids(self, body_name: str) -> list[int]:
@@ -295,7 +333,12 @@ class DigitalTwinSim:
         return entry, exit
 
     def place_objects_on_ground(self, ground_z: float = 0.0) -> None:
-        """Place every non-controller object root on the ground before frame 0."""
+        """Place every non-controller object root on the ground before frame 0.
+
+        Soft objects are unaffected: a flex carries neither geometry nor a
+        freejoint, and `soft_body.soft_object` already grounds the mesh it
+        tetrahedralizes.
+        """
         root_geoms = {}
         for geom_id in range(self.model.ngeom):
             body_id = self.model.geom_bodyid[geom_id]
@@ -424,14 +467,23 @@ class DigitalTwinSim:
             raise ValueError("at least one interactor trajectory is required")
         if not 0.0 <= grasp_start_fraction <= 1.0:
             raise ValueError("grasp_start_fraction must be between 0 and 1")
+        flex_id = None
+        qpos_adr = qvel_adr = None
         if grasped_body is not None:
-            joint_id = self.model.body(grasped_body).jntadr[0]
-            if joint_id < 0 or self.model.jnt_type[joint_id] != mujoco.mjtJoint.mjJNT_FREE:
-                raise ValueError(f"grasped body '{grasped_body}' must have a freejoint")
-            qpos_adr = self.model.jnt_qposadr[joint_id]
-            qvel_adr = self.model.jnt_dofadr[joint_id]
-        else:
-            qpos_adr = qvel_adr = None
+            flex_id = mujoco.mj_name2id(
+                self.model, mujoco.mjtObj.mjOBJ_FLEX, grasped_body
+            )
+            if flex_id < 0:
+                joint_id = self.model.body(grasped_body).jntadr[0]
+                if (
+                    joint_id < 0
+                    or self.model.jnt_type[joint_id] != mujoco.mjtJoint.mjJNT_FREE
+                ):
+                    raise ValueError(
+                        f"grasped body '{grasped_body}' must have a freejoint or be a flex"
+                    )
+                qpos_adr = self.model.jnt_qposadr[joint_id]
+                qvel_adr = self.model.jnt_dofadr[joint_id]
 
         names = list(interactor_trajectory.keys())
         lengths = {name: len(trajectory) for name, trajectory in interactor_trajectory.items()}
@@ -576,8 +628,13 @@ class DigitalTwinSim:
                     ],
                     axis=0,
                 ) + np.asarray(grasp_offset, dtype=float)
-                self.data.qpos[qpos_adr : qpos_adr + 3] = grasp_position
-                self.data.qvel[qvel_adr : qvel_adr + 6] = 0.0
+                if flex_id is not None:
+                    self.translate_flex(
+                        flex_id, grasp_position - self.get_object_state(grasped_body)[:3]
+                    )
+                else:
+                    self.data.qpos[qpos_adr : qpos_adr + 3] = grasp_position
+                    self.data.qvel[qvel_adr : qvel_adr + 6] = 0.0
                 mujoco.mj_forward(self.model, self.data)
 
             self.step(substeps)
@@ -591,7 +648,7 @@ class DigitalTwinSim:
                         time=self.data.time,
                         rgbd=self.render_all_cameras(),
                         object_qpos={
-                            b: self.get_free_body_state(b) for b in object_bodies
+                            b: self.get_object_state(b) for b in object_bodies
                         },
                     )
                 )

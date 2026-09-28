@@ -175,7 +175,7 @@ def object_grip_lift_trajectory(
     approach_height: float = 0.14,
     lift_height: float = 0.16,
 ) -> tuple[list, list[float]]:
-    """Open one claw, approach the box, close its fingers, and lift."""
+    """Open one claw, approach the object, close its fingers, and lift."""
     body_id = model.body(body_name).id
     box_bounds = []
     for geom_id in range(model.ngeom):
@@ -189,10 +189,13 @@ def object_grip_lift_trajectory(
         center = data.geom_xpos[geom_id]
         box_bounds.append((center - world_extents, center + world_extents))
 
-    if not box_bounds:
-        raise ValueError(f"grip_lift requires a box geometry on body '{body_name}'")
-    lower = np.min([bounds[0] for bounds in box_bounds], axis=0)
-    upper = np.max([bounds[1] for bounds in box_bounds], axis=0)
+    if box_bounds:
+        lower = np.min([bounds[0] for bounds in box_bounds], axis=0)
+        upper = np.max([bounds[1] for bounds in box_bounds], axis=0)
+    else:
+        # Soft and composite objects have no box geometry to grip; fall back to
+        # the bounds of their flex vertices and remaining scene geometry.
+        lower, upper = object_bounds(model, data, body_name)
     center = (lower + upper) * 0.5
     contact_z = max(0.012, center[2])
     y = center[1]

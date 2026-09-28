@@ -24,3 +24,5 @@ sim_rope, twine, True, carve
 sim_rigid_box, box, True, poisson
 sim_rigid_box_heavy_end, rectangle box, True, poisson
 sim_rigid_box_grip_lift, box, True, poisson
+sim_soft_ball, blue ball, True, poisson
+sim_soft_ball_grip_lift, blue ball, True, poisson
