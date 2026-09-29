@@ -136,10 +136,12 @@ def load_case_config(args, cfg, logger):
     case_name = args.case_name
     base_path = args.base_path
 
-    if "rope" in case_name or "twine" in case_name:
-        cfg.load_from_yaml("configs/rope.yaml")
-    elif "rigid" in case_name or "box" in case_name:
+    if "rigid" in case_name:
         cfg.load_from_yaml("configs/rigid.yaml")
+    elif "soft" in case_name:
+        cfg.load_from_yaml("configs/soft.yaml")
+    elif "rope" in case_name or "twine" in case_name:
+        cfg.load_from_yaml("configs/rope.yaml")
     elif "cloth" in case_name or "package" in case_name:
         cfg.load_from_yaml("configs/cloth.yaml")
     else:

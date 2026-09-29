@@ -64,6 +64,15 @@ class Config:
         # as globals). Minimal 2-param change for rope/bending damping.
         self.learn_damping = False
 
+        # Early stopping (patience 0 disables): stop training once the loss
+        # has not improved by at least `early_stop_min_delta` (relative) for
+        # `early_stop_patience` epochs. Guards against post-convergence Adam
+        # drift: the optimizer keeps stepping at ~base_lr on noise-level
+        # gradients, and the accumulated parameter drift can eventually make
+        # gradients non-finite even while the forward simulation stays stable.
+        self.early_stop_min_delta = 1e-2 # 1%
+        self.early_stop_patience = 15 
+
         self.reverse_z = True
         self.vp_front = [1, 0, -2]
         self.vp_up = [0, 0, -1]

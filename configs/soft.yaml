@@ -1,4 +1,4 @@
-data_type: "real"
+data_type: "soft"
 FPS: 30
 dt: 5e-5
 num_substeps: 667
