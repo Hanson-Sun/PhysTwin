@@ -375,6 +375,13 @@ class InvPhyTrainerWarp:
 
         best_loss = None
         best_epoch = None
+        # Early stopping state: `plateau_best` only counts improvements of at
+        # least `early_stop_min_delta` (relative), so repeated sub-0.1% noise
+        # dips do not keep resetting the patience counter.
+        early_stop_patience = int(getattr(cfg, "early_stop_patience", 0) or 0)
+        early_stop_min_delta = float(getattr(cfg, "early_stop_min_delta", 0.0) or 0.0)
+        plateau_best = None
+        plateau_epoch = None
         # Train the model with the physical simulator
         for i in range(start_epoch + 1, cfg.iterations):
             total_loss = 0.0
@@ -744,6 +751,25 @@ class InvPhyTrainerWarp:
 
             torch.save(cur_model, f"{cfg.base_dir}/train/iter_{i}.pth")
             logger.info(f"[Train]: Saved checkpoint for iteration {i}")
+
+            if early_stop_patience > 0:
+                if (
+                    plateau_best is None
+                    or total_loss < plateau_best * (1.0 - early_stop_min_delta)
+                ):
+                    plateau_best = (
+                        total_loss
+                        if plateau_best is None
+                        else min(plateau_best, total_loss)
+                    )
+                    plateau_epoch = i
+                elif i - plateau_epoch >= early_stop_patience:
+                    logger.info(
+                        f"[Train]: Early stopping at iteration {i}: no improvement >= "
+                        f"{early_stop_min_delta:.1%} over best loss "
+                        f"{plateau_best:.6g} since iteration {plateau_epoch}"
+                    )
+                    break
 
         wandb.finish()
 

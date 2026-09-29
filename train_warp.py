@@ -49,10 +49,12 @@ if __name__ == "__main__":
     case_name = args.case_name
     train_frame = args.train_frame
 
-    if "rope" in case_name or "twine" in case_name:
-        cfg.load_from_yaml("configs/rope.yaml")
-    elif "rigid" in case_name or "box" in case_name:
+    if "rigid" in case_name:
         cfg.load_from_yaml("configs/rigid.yaml")
+    elif "soft" in case_name:
+        cfg.load_from_yaml("configs/soft.yaml")
+    elif "rope" in case_name or "twine" in case_name:
+        cfg.load_from_yaml("configs/rope.yaml")
     elif "cloth" in case_name or "package" in case_name:
         cfg.load_from_yaml("configs/cloth.yaml")
     else:
