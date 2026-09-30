@@ -261,19 +261,35 @@ RGB-D processing automatically runs in the `phystwin-data` environment (see
 - `metadata.json` with intrinsics, image size, FPS, and frame count
 - `split.json` with the standard 70/30 train/test frame ranges
 
-Default example loads the validated rigid `mujoco_assets/object_box.xml` (soft bodies pending tetrahedralization). Active assets:
+Default example loads the validated rigid `mujoco_assets/object_box.xml`.
+Soft meshes are tetrahedralized into MuJoCo flexes on the fly at load time.
+Active assets:
 
 - `object_rope.xml` — simple flexible rope/twine scaffold
 - `object_box.xml` — validated rigid baseline box
   so alignment and reconstruction have non-trivial visual features
 - `sim_rigid_box_grip_lift` — single-claw open/close grip-and-lift case using
   the textured rigid box
+- `object_sloth.stl` — watertight sloth flex mesh lying on its back with the
+  head toward camera 0, prepared from the repaired shape prior by
+  `mujoco_sim/prepare_mesh.py` and shipped with `object_sloth.png` +
+  `object_sloth.uvsrc.npz` appearance sidecars
+- `sim_soft_sloth_grip_lift` — single-claw grip-and-lift of the textured soft
+  sloth (see [Soft sloth case](#soft-sloth-case-new-sim_soft_sloth_grip_lift))
+- `object_octopus.stl` / `object_seal.stl` / `object_teddy_bear.stl` — toy GLBs
+  scaled with `--target-height 0.225 --max-dim 0.30` after a y-up → z-up roll, each
+  with texture sidecars; the octopus additionally yawed 180° so a tentacle
+  lands inside the claw's grip span (its head sits at the model centre, so the
+  head always lies between the pads)
+- `sim_soft_octopus_grip_lift` / `sim_soft_seal_grip_lift` /
+  `sim_soft_teddy_bear_grip_lift` — grip-and-lift cases for those three toys
 
 The previous procedural cloth, doll, sloth, zebra, package, and compound-plush
 stand-ins are not active in `models.json` because they are not proper connected
-volume meshes. The real PhysTwin sloth/zebra `shape/object.glb` files are also
-non-watertight, disconnected surface reconstructions and must be repaired and
-tetrahedralized before they can be used as MuJoCo `dim=3` flex objects.
+volume meshes. The real PhysTwin `shape/object.glb` files are non-watertight,
+disconnected surface reconstructions; `mujoco_sim/prepare_mesh.py` repairs the
+sloth into the watertight `object_sloth.stl` flex asset (the zebra is still
+pending).
 
 Select an active asset via JSON `object_file` or `load_model(object_file=...)`. Preprocessing requires 3 cameras (as in `mujoco_assets/world.xml`):
 
@@ -318,6 +334,112 @@ python scripts/generate_sim_data.py models.json --output_dir data/different_type
 Use `--dry_run` to validate and list every manifest entry without rendering.
 The `phystwin-cu132` environment includes the MuJoCo package's bundled
 elasticity plugin libraries, and the scene loader loads them automatically.
+
+### New stuffed animal from a GLB (new)
+
+Everything needed to turn an arbitrary toy `.glb` into a PhysTwin-format sim
+case. None of the PhysTwin capture stages (segmentation, tracking, shape
+prior, calibration) are involved: the three cameras, claw, and floor come
+from `mujoco_assets/world.xml`.
+
+**What you provide — one `.glb`:**
+
+- **Real-world scale in metres**, roughly 0.05–0.5 m. `prepare_mesh` prints
+  the extents; if they look like millimetres, scale the file first — or scale
+  at prepare time with `--target-height 0.225 --max-dim 0.30` (height target
+  bounded by the longest extent; applied before the voxel fill, and keep the
+  grip-station cross-section under the claw's 0.20 m open gap).- Open or fragmented meshes are fine — `prepare_mesh` voxel-fills them watertight. Already-watertight inputs skip the repair entirely (pass `--remesh` to force it, e.g. to decimate a dense mesh). The fill rounds off features below ~2 voxels, so the default `--pitch` is 0.003 m (features below ~6 mm still smooth out); pass e.g. `--pitch 0.0015` for an even finer repair at higher mesh/sim cost.
+- A UV-unwrapped base-colour texture is optional: present → ported as
+  `<stem>.png` + `<stem>.uvsrc.npz` sidecars; absent → flat colour from
+  `soft.rgba` in the manifest.
+- The pose only has to rest stably on the floor; orient it with
+  `--rotate-x-deg/--rotate-y-deg/--rotate-z-deg` (extrinsic, applied x → y → z).
+
+**1. Build the asset** (writes the STL plus appearance sidecars):
+
+```bash
+python -m mujoco_sim.prepare_mesh path/to/toy.glb mujoco_assets/object_toy.stl
+```
+
+**2. Add a manifest entry** to `models.json`:
+
+```json
+{
+  "case_name": "sim_soft_toy_grip_lift",
+  "object_mesh": "object_toy.stl",
+  "trajectory": "grip_lift",
+  "n_interactors": 1,
+  "soft": {
+    "rgba": "0.47 0.42 0.37 1",
+    "young": 350,
+    "cellcount": "4 6 1"
+  },
+  "width": 848,
+  "height": 480,
+  "steps_per_segment": 300,
+  "capture_every": 8,
+  "substeps": 4,
+  "fps": 30
+}
+```
+
+`soft` is passed straight to `soft_body.soft_object` (see the sloth section
+for why `cellcount` and `young` matter). `rgba` only applies when there is no
+texture sidecar — when the texture exists the flex is forced white so the
+material does not tint it. The soft asset is re-centred on the origin at load
+time, and the grip contact height is the object's vertical centre (with a
+palm-clearance rule for objects taller than the claw's reach).
+
+**3. Generate and check:**
+
+```bash
+python scripts/generate_sim_data.py models.json --dry_run   # validate only
+python scripts/generate_sim_data.py models.json \
+    --case sim_soft_toy_grip_lift --overwrite
+python -m unittest tests.test_soft_body tests.test_soft_sloth
+```
+
+Output lands in `data/different_types/<case_name>/` in the standard PhysTwin
+layout listed above.
+
+**Grip constraint** (`grip_lift` only): the claw closes along world x with a
+0.20 m open gap, so the toy's cross-section at the grip station (the middle
+of the body) must be narrower than that — otherwise use `"trajectory":
+"push"`, which has no such limit.
+
+### Soft sloth case (new): `sim_soft_sloth_grip_lift`
+
+The real PhysTwin sloth runs as a textured soft flex. Regenerate the asset
+(and its appearance sidecars) from the repaired shape prior, then the case:
+
+```bash
+python -m mujoco_sim.prepare_mesh \
+    data/different_types/double_lift_sloth/shape/matching/final_mesh.glb \
+    mujoco_assets/object_sloth.stl \
+    --rotate-x-deg 180 --rotate-z-deg 90
+
+python scripts/generate_sim_data.py models.json \
+    --case sim_soft_sloth_grip_lift --overwrite
+```
+
+- **Texture**: `prepare_mesh` writes `<stem>.png` + `<stem>.uvsrc.npz` beside
+  the mesh. `soft_body.soft_object` detects them, emits the texture/material
+  block, and passes the flex texcoords through the asset dict — MJCF cannot
+  store texcoords on a `flexcomp`, so `scene.compile_scene` attaches them via
+  `MjSpec` and forces the flex rgba white (rgba would tint the texture).
+  Texcoords come from a nearest-triangle projection of the source UV atlas
+  (best of 24 candidate triangles per node by projection distance), so texture
+  only mislands where the voxel fill fused separate layers.
+- **Pose**: the asset lies on its back (belly up) with the head pointing at
+  camera 0 (`cam_front`, -y); the claw grips the torso, whose mid-body section
+  (0.156 m) fits the pads' 0.20 m open gap. Rotations are extrinsic and apply
+  in x, then y, then z order.
+- **Material** (`models.json` → `soft`): `cellcount "4 6 1"` splits the flex
+  into a real grid — MuJoCo's default single 8-node cell can only warp the
+  whole body as one affine blob (limbs cannot articulate and the body bulges
+  at rest). `young: 350` (vs the `1e4` default) lets the limbs sag under
+  gravity: rest z-span 0.096 m grows to ~0.30 m while suspended, for a +0.15 m
+  lift.
 
 To inspect one of the exported depth maps:
 

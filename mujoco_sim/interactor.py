@@ -198,8 +198,23 @@ def object_grip_lift_trajectory(
         lower, upper = object_bounds(model, data, body_name)
     center = (lower + upper) * 0.5
     contact_z = max(0.012, center[2])
+    # The claw's palm sits 0.148 m above its reference point (claw.xml): on an
+    # object taller than the palm's reach, descending to the centre would drive
+    # the palm into the object instead of the fingers closing around it, so
+    # grip as low as the palm still clears the top. Shorter objects - every
+    # existing case - keep their centre height.
+    contact_z = max(contact_z, upper[2] - 0.148)
     y = center[1]
     approach_x = center[0]
+    if not box_bounds and model.nflexvert:
+        # Grip the middle of the body's cross-section rather than of its
+        # bounding box: an asymmetric soft object (the sloth's waist sits well
+        # off its own bounds centre) must be straddled exactly, otherwise the
+        # open pads descend through one side of it.
+        band = np.abs(data.flexvert_xpos[:, 1] - y) <= 0.02
+        if band.sum() > 1:
+            xs = data.flexvert_xpos[band, 0]
+            approach_x = float((xs.min() + xs.max()) * 0.5)
 
     waypoints = [
         (approach_x, y, contact_z + approach_height),

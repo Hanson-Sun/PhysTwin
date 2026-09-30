@@ -4,7 +4,11 @@ import mujoco
 import numpy as np
 
 from mujoco_sim import soft_body
-from mujoco_sim.interactor import object_grip_lift_trajectory, object_push_trajectory
+from mujoco_sim.interactor import (
+    object_bounds,
+    object_grip_lift_trajectory,
+    object_push_trajectory,
+)
 from mujoco_sim.scene import ASSETS_DIR, load_model
 from mujoco_sim.simulation import DigitalTwinSim
 
@@ -58,6 +62,16 @@ class TetrahedralizeTests(unittest.TestCase):
         self.assertEqual(text.count("$Nodes"), 1)
         self.assertIn(f"1 {len(nodes)} 1 {len(nodes)}", text)
 
+    def test_closed_surface_that_gmsh_cannot_reparametrise_still_fills(self):
+        # A voxel-repaired surface (what prepare_mesh.watertight writes) is
+        # already manifold and has no seam for gmsh's geometry repair to snap,
+        # so tetrahedralize has to fall back to using its facets directly.
+        nodes, tets = soft_body.tetrahedralize(ASSETS_DIR / "object_sloth.stl", 0.05)
+
+        self.assertGreater(len(tets), 0)
+        self.assertGreaterEqual(int(tets.min()), 0)
+        self.assertLess(int(tets.max()), len(nodes))
+
 
 class SoftModelTests(unittest.TestCase):
     def test_soft_object_is_a_named_flex_on_the_discrete_integrator(self):
@@ -90,8 +104,11 @@ class SoftModelTests(unittest.TestCase):
 
         z = flex_vertices(sim, start, count)[:, 2]
         # A flex has no freejoint, so place_objects_on_ground cannot move it;
-        # the asset itself has to bake the ground placement in.
-        self.assertAlmostEqual(float(z.min()), 0.0, places=6)
+        # the asset itself bakes the ground placement in. Vertices collide as
+        # spheres of `radius`, so the rest pose sits that far above the floor:
+        # grounding the vertices would embed them in the floor and make the
+        # solver push the body upward on the first steps.
+        self.assertAlmostEqual(float(z.min()), soft_body.DEFAULT_RADIUS, places=6)
 
     def test_get_object_state_reports_the_flex_centroid(self):
         sim, model = soft_sim()
@@ -129,6 +146,19 @@ class SoftModelTests(unittest.TestCase):
 
 class SoftTrajectoryTests(unittest.TestCase):
     """End-to-end smoke tests: the claw has to really touch the flex."""
+
+    def test_grip_contact_height_is_the_centre_for_short_objects(self):
+        sim, model = soft_sim()
+        lower, upper = object_bounds(model, sim.data, "object")
+        trajectory, _ = object_grip_lift_trajectory(
+            model, sim.data, steps_per_segment=10
+        )
+
+        # The palm-clearance rule only applies to objects taller than the
+        # palm's reach, so a ball keeps being gripped at its centre.
+        self.assertAlmostEqual(
+            trajectory[10][0][2], float((lower[2] + upper[2]) * 0.5), places=6
+        )
 
     def test_push_translates_and_deforms_the_soft_ball(self):
         sim, model = soft_sim()

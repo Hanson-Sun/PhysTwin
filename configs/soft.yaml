@@ -1,4 +1,4 @@
-data_type: "soft"
+data_type: "real"
 FPS: 30
 dt: 5e-5
 num_substeps: 667
@@ -29,6 +29,5 @@ collision_dist: 0.02
 collision_learn: true
 chamfer_weight: 1.0
 track_weight: 1.0
-# yeah probably need this
 early_stop_min_delta: 0.01
 early_stop_patience: 15
