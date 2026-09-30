@@ -4,6 +4,15 @@ import mujoco
 import numpy as np
 
 IDENTITY_QUAT = (1.0, 0.0, 0.0, 0.0)
+END_PAUSE_SECONDS = 0.7
+DEFAULT_STEP_DT = 0.002  # fallback when no model is available; match your sim step
+
+
+def pause_steps(seconds: float, dt: float) -> int:
+    """Number of trajectory waypoints needed to hold for ``seconds``."""
+    if seconds < 0:
+        raise ValueError("pause duration cannot be negative")
+    return int(round(seconds / dt))
 
 
 def _lerp_segment(p0, p1, steps):
@@ -22,23 +31,33 @@ def poke_trajectory(
     hold_steps: int = 20,
     retract_steps: int = 30,
     quat=IDENTITY_QUAT,
+    end_pause_seconds: float = END_PAUSE_SECONDS,
+    dt: float = DEFAULT_STEP_DT,
 ) -> list:
-    """Waypoints for a single poke: approach -> hold at target -> retract."""
+    """Waypoints for a single poke: approach -> hold at target -> retract -> pause."""
     if hold_steps < 0:
         raise ValueError("hold_steps cannot be negative")
     approach = _lerp_segment(start, target, approach_steps)
     hold = [tuple(np.asarray(target, dtype=float))] * hold_steps
     retract = _lerp_segment(target, start, retract_steps)
-    return [(p, quat) for p in approach + hold + retract]
+    trajectory = approach + hold + retract
+    trajectory += [trajectory[-1]] * pause_steps(end_pause_seconds, dt)
+    return [(p, quat) for p in trajectory]
 
 
-def multi_poke_trajectory(waypoints: list, steps_per_segment: int = 30, quat=IDENTITY_QUAT) -> list:
+def multi_poke_trajectory(
+    waypoints: list,
+    steps_per_segment: int = 30,
+    quat=IDENTITY_QUAT,
+    end_pause_steps: int = 0,
+) -> list:
     """Interpolate a sequence of positions into scripted interactor poses."""
     if len(waypoints) < 2:
         raise ValueError("at least two waypoints are required")
     trajectory = []
     for p0, p1 in zip(waypoints[:-1], waypoints[1:]):
         trajectory += _lerp_segment(p0, p1, steps_per_segment)
+    trajectory += [trajectory[-1]] * end_pause_steps
     return [(p, quat) for p in trajectory]
 
 
@@ -164,7 +183,11 @@ def object_push_trajectory(
         (exit_x, y, contact_z),
         (exit_x, y, contact_z + approach_height),
     ]
-    return multi_poke_trajectory(points, steps_per_segment)
+    return multi_poke_trajectory(
+        points,
+        steps_per_segment,
+        end_pause_steps=pause_steps(END_PAUSE_SECONDS, model.opt.timestep),
+    )
 
 
 def object_grip_lift_trajectory(
@@ -222,10 +245,14 @@ def object_grip_lift_trajectory(
         (approach_x, y, contact_z),
         (approach_x, y, contact_z + lift_height),
     ]
-    trajectory = multi_poke_trajectory(waypoints, steps_per_segment)
+    end_pause = pause_steps(END_PAUSE_SECONDS, model.opt.timestep)
+    trajectory = multi_poke_trajectory(
+        waypoints, steps_per_segment, end_pause_steps=end_pause
+    )
     closing = (
         [0.0] * steps_per_segment
         + list(np.linspace(0.0, 1.0, steps_per_segment))
         + [1.0] * steps_per_segment
+        + [1.0] * end_pause  # keep the claw closed during the final pause
     )
     return trajectory, closing
