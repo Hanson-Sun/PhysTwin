@@ -8,7 +8,7 @@
 
 set -euo pipefail
 
-CASES=(sim_soft_sloth_grip_lift)
+CASES=(sim_soft_sloth_grip_lift sim_soft_seal_grip_lift sim_soft_octopus_grip_lift sim_soft_teddy_bear_grip_lift)
 
 for case_name in "${CASES[@]}"; do
     echo ">>> Running case: $case_name"

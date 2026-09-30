@@ -1,3 +1,6 @@
+fix grip for rigid boxes!!
+
+
 make lift trajectory hold on the top for a second before ending.
 move front camera up a little more and point it down a little more.
 investigate the grip strength, i see some strange teleportation effects. 
