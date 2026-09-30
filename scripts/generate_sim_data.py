@@ -113,6 +113,7 @@ def normalize(model: dict, manifest: Path) -> dict:
         "soft": soft,
         "n_interactors": integer(model, "n_interactors", 1),
         "trajectory": str(model.get("trajectory", "push")),
+        "gripper_open_angle": positive_float(model, "gripper_open_angle", 0.70),
         "max_controller_speed": positive_float(
             model, "max_controller_speed", None
         ),
@@ -145,6 +146,7 @@ def generate(model: dict, output_dir: Path, overwrite: bool) -> Path:
         ),
         width=model["width"],
         height=model["height"],
+        gripper_open_angle=model["gripper_open_angle"],
     )
     gripper_opening = None
     if model["trajectory"] == "grip_lift":

@@ -37,6 +37,10 @@ class DigitalTwinSim:
     model: mujoco.MjModel
     width: int = 128
     height: int = 128
+    # Hinge angle the fingers hold while open. 0.70 leaves a 0.20 m gap
+    # between the pads; a wider object needs a wider stance to be approached
+    # without the pads grazing it on the way down.
+    gripper_open_angle: float = 0.70
 
     def __post_init__(self):
         self.data = mujoco.MjData(self.model)
@@ -69,11 +73,12 @@ class DigitalTwinSim:
         sits 0.052 m inboard of its hinge, so a hinge at 0.34 rad already puts
         both pads on a 0.10 m object's faces: a more closed target drives the
         pads through the object instead of around it, which squeezes the object
-        out of the grip.
+        out of the grip. The open stance defaults to 0.70 rad (0.20 m between
+        the pads) and is set by ``gripper_open_angle``.
         """
         if not 0.0 <= closing <= 1.0:
             raise ValueError("gripper closing must be between 0 and 1")
-        open_angle = 0.70
+        open_angle = self.gripper_open_angle
         closed_angle = 0.34
         left_motor = self.model.actuator(f"{name}_finger_l_motor").id
         right_motor = self.model.actuator(f"{name}_finger_r_motor").id

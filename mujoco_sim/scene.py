@@ -8,7 +8,11 @@ mechanism and compiles the result; it does not build XML by hand.
 
 from pathlib import Path
 
+import io
+import tempfile
+
 import mujoco
+import numpy as np
 
 try:
     from . import soft_body
@@ -112,6 +116,55 @@ def load_model(
     object_mesh: str | None = None,
     soft: dict | None = None,
 ) -> mujoco.MjModel:
-    """Convenience: compose and compile in one call."""
+    """Compose and compile in one call."""
     xml, assets = build_scene(n_interactors, object_file, object_mesh, soft)
-    return mujoco.MjModel.from_xml_string(xml, assets)
+    return compile_scene(xml, assets)
+
+
+def compile_scene(xml: str, assets: dict[str, bytes]) -> mujoco.MjModel:
+    """Compile ``(xml, assets)``, wiring flex texcoords when the dict carries any.
+
+    MJCF cannot express texture coordinates on a ``flexcomp``, so
+    ``soft_body.soft_object`` passes them in the asset dict (see
+    ``soft_body.TEXCOORDS_ASSET``) and they are attached here through MjSpec,
+    the only API that can edit a compiled-away flex. The material itself is
+    already referenced by the object's MJCF; the patch also clears the flex's
+    rgba so the texture is not tinted by the otherwise-standalone colour.
+    """
+    assets = dict(assets)
+    texcoords = assets.pop(soft_body.TEXCOORDS_ASSET, None)
+    if texcoords is None:
+        return mujoco.MjModel.from_xml_string(xml, assets)
+
+    with tempfile.TemporaryDirectory() as mesh_dir:
+        # MuJoCo reads <include> and <asset> files (textures) from the spec's
+        # own dicts, but flexcomp's gmsh file through the separate VFS/disk
+        # layer -- and MjSpec refuses both at once. So the generated mesh goes
+        # to a real file for the duration of the compile, and the object's MJCF
+        # is pointed at it. It only has to live until spec.compile() returns:
+        # mjModel keeps a copy.
+        files = dict(assets)
+        for key, blob in assets.items():
+            if key.endswith(".msh"):
+                target = Path(mesh_dir) / key
+                target.write_bytes(blob)
+                for name, text in files.items():
+                    if name.endswith(".xml"):
+                        files[name] = text.replace(
+                            f'file="{key}"'.encode(), f'file="{target}"'.encode()
+                        )
+        spec = mujoco.MjSpec.from_string(
+            xml,
+            include={k: v for k, v in files.items() if k.endswith(".xml")},
+            assets={k: v for k, v in files.items() if not k.endswith(".xml")},
+        )
+        uv = np.load(io.BytesIO(texcoords))["uv"]
+        flex = next((f for f in spec.flexes if f.name == "object"), None)
+        if flex is None:
+            raise ValueError(
+                f"texcoords supplied but no 'object' flex in {list(f.name for f in spec.flexes)}"
+            )
+        flex.texcoord = uv.ravel().tolist()
+        flex.elemtexcoord = np.asarray(flex.elem, dtype=int).ravel().tolist()
+        flex.rgba = [1.0, 1.0, 1.0, 1.0]  # texture carries the colour now
+        return spec.compile()

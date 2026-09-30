@@ -1,4 +1,10 @@
-fix rigid.yaml
+make lift trajectory hold on the top for a second before ending.
+move front camera up a little more and point it down a little more.
+investigate the grip strength, i see some strange teleportation effects. 
+FIX TRELLIS SUPER GLUE MATCHING FOR SLOTH
+
+WE NEED TO FIX THE GLB to SOFT BODY SIMULATION PIPELINE
+TRAJECTORY IS STILL KIND OF WEIRD
 
 
 - need to figure out how to handle damping?? where is it and how does warp handle it
