@@ -27,3 +27,6 @@ sim_rigid_box_grip_lift, box, True, poisson
 sim_soft_ball, blue ball, True, poisson
 sim_soft_ball_grip_lift, blue ball, True, poisson
 sim_soft_sloth_grip_lift, sloth stuffed animal, True, trellis
+sim_soft_seal_grip_lift, seal stuffed animal, True, trellis
+sim_soft_octopus_grip_lift, octopus stuffed animal, True, trellis
+sim_soft_teddy_bear_grip_lift, teddy bear stuffed animal, True, trellis
