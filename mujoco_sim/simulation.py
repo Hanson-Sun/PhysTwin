@@ -457,6 +457,12 @@ class DigitalTwinSim:
         after every physics step, so object motion affects later commands, and
         ``controller_free_speed`` is the speed used while the controller is
         clear of the object.
+
+        ``grasped_body`` kinematically attaches that body from
+        ``grasp_start_fraction`` onwards so the lift never depends on grip
+        friction. The attach is anchored at the pose the body has when the
+        grip closes (captured once as a claw-relative offset), so attaching
+        never teleports the object; ``grasp_offset`` then shifts that target.
         """
         if capture_every < 1:
             raise ValueError("capture_every must be at least 1")
@@ -505,6 +511,9 @@ class DigitalTwinSim:
         frames = []
 
         command_index = 0
+        # Pose delta captured the first time the grasp attaches: the body keeps
+        # the pose it had when the grip closed and follows the claw from there.
+        attach_offset = None
         current_opening = (
             {
                 name: float(gripper_opening[name][0])
@@ -626,19 +635,37 @@ class DigitalTwinSim:
             if grasped_body is not None and command_waypoint >= int(
                 (n_waypoints - 1) * grasp_start_fraction
             ):
-                grasp_position = np.mean(
+                claw_position = np.mean(
                     [
                         self.data.mocap_pos[self.model.body(name).mocapid[0]]
                         for name in names
                     ],
                     axis=0,
-                ) + np.asarray(grasp_offset, dtype=float)
+                )
+                if attach_offset is None:
+                    # Anchor the attach where the body already is. Snapping it
+                    # to the claw's reference point instead teleported the
+                    # object by the whole grip-time mismatch: the trajectory
+                    # aims at the bounds/band centre while a soft body reports
+                    # its vertex mean, and a squishy body sags on the floor and
+                    # gets nudged by the closing pads before the grip closes.
+                    # The offset is captured once, so the first attach command
+                    # moves nothing and every later command only follows the
+                    # claw (plus the residual physics drift).
+                    attach_offset = (
+                        self.get_object_state(grasped_body)[:3] - claw_position
+                    )
+                target = (
+                    claw_position
+                    + np.asarray(grasp_offset, dtype=float)
+                    + attach_offset
+                )
                 if flex_id is not None:
                     self.translate_flex(
-                        flex_id, grasp_position - self.get_object_state(grasped_body)[:3]
+                        flex_id, target - self.get_object_state(grasped_body)[:3]
                     )
                 else:
-                    self.data.qpos[qpos_adr : qpos_adr + 3] = grasp_position
+                    self.data.qpos[qpos_adr : qpos_adr + 3] = target
                     self.data.qvel[qvel_adr : qvel_adr + 6] = 0.0
                 mujoco.mj_forward(self.model, self.data)
 

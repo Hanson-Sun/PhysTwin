@@ -19,6 +19,7 @@ Two MuJoCo requirements are easy to miss and are handled here:
 from __future__ import annotations
 
 import io
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -105,6 +106,32 @@ def _gmsh_tets(path: Path, element_size: float, repair: bool):
     return raw_tags, coords, elements
 
 
+def _voxel_repaired_tets(path: Path, element_size: float, gmsh_error: Exception):
+    """Tetrahedralize ``path`` after closing it with the voxel round-trip.
+
+    Some surfaces bound no volume gmsh can mesh: a dense GLB/STL export whose
+    shells intersect has no seam for the geometry route to re-parametrise and
+    facets that cross each other ("PLC: a segment and a facet intersect") for
+    the facet route. ``prepare_mesh.watertight`` re-extracts the shell as a
+    clean manifold - the same repair every other asset goes through - which
+    ``_gmsh_tets`` can then mesh directly.
+    """
+    try:
+        from . import prepare_mesh
+    except ImportError:  # Support running this file directly from the mujoco_sim directory.
+        import prepare_mesh
+
+    print(
+        f"{path.name}: gmsh rejected the surface ({gmsh_error}); "
+        "voxel-repairing it and retrying"
+    )
+    closed = prepare_mesh.watertight(prepare_mesh.load_mesh(path), remesh=True)
+    with tempfile.TemporaryDirectory() as directory:
+        repaired = Path(directory) / path.name
+        closed.export(repaired)
+        return _gmsh_tets(repaired, element_size, repair=False)
+
+
 def tetrahedralize(
     mesh_path: str | Path, element_size: float = DEFAULT_ELEMENT_SIZE
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -112,6 +139,8 @@ def tetrahedralize(
 
     ``element_size`` is the target edge length of the tetrahedra. It trades mesh
     quality and simulation cost against how finely the soft body deforms.
+    A surface gmsh refuses outright (e.g. self-intersecting facets) is closed
+    through the voxel round-trip and retried once.
     """
     if element_size <= 0.0:
         raise ValueError("element_size must be positive")
@@ -124,11 +153,17 @@ def tetrahedralize(
         )
 
     try:
-        raw_tags, coords, elements = _gmsh_tets(path, element_size, repair=True)
-    except _SurfaceRepairError:
-        # The closed surface cannot be re-parametrised; its facets already
-        # bound the volume, so mesh them directly.
-        raw_tags, coords, elements = _gmsh_tets(path, element_size, repair=False)
+        try:
+            raw_tags, coords, elements = _gmsh_tets(path, element_size, repair=True)
+        except _SurfaceRepairError:
+            # The closed surface cannot be re-parametrised; its facets already
+            # bound the volume, so mesh them directly.
+            raw_tags, coords, elements = _gmsh_tets(path, element_size, repair=False)
+    except Exception as gmsh_error:
+        # Even the facet route refused the volume - the surface self-intersects
+        # (dense exports slip past prepare_mesh's skip-if-watertight check,
+        # which only pairs edges, not crossings). Repair and retry.
+        raw_tags, coords, elements = _voxel_repaired_tets(path, element_size, gmsh_error)
 
     tags = np.asarray(raw_tags, dtype=int)
     nodes = np.asarray(coords, dtype=float).reshape(-1, 3)
