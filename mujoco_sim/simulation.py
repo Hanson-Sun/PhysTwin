@@ -117,6 +117,8 @@ class DigitalTwinSim:
         shifting that body moves the deformable mesh rigidly. This replaces the
         freejoint write used to move a rigid object.
         """
+        if not 0 <= flex_id < self.model.nflex:
+            raise ValueError(f"invalid flex id {flex_id}")
         # A full-dof flex owns a body per vertex, a reduced-dof flex one per
         # interpolation node; both sets descend from the flexcomp's own body.
         start, count = self.model.flex_vertadr[flex_id], self.model.flex_vertnum[flex_id]
@@ -481,10 +483,15 @@ class DigitalTwinSim:
         flex_id = None
         qpos_adr = qvel_adr = None
         if grasped_body is not None:
-            flex_id = mujoco.mj_name2id(
+            # mj_name2id returns -1 (not None) when the name is not a flex, so a
+            # rigid body must leave flex_id as None or the attach below would
+            # call translate_flex(-1, ...) on a model with no flexes.
+            found_flex = mujoco.mj_name2id(
                 self.model, mujoco.mjtObj.mjOBJ_FLEX, grasped_body
             )
-            if flex_id < 0:
+            if found_flex >= 0:
+                flex_id = found_flex
+            else:
                 joint_id = self.model.body(grasped_body).jntadr[0]
                 if (
                     joint_id < 0

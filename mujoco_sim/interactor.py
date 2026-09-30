@@ -4,7 +4,7 @@ import mujoco
 import numpy as np
 
 IDENTITY_QUAT = (1.0, 0.0, 0.0, 0.0)
-END_PAUSE_SECONDS = 0.7
+END_PAUSE_SECONDS = 0.4
 DEFAULT_STEP_DT = 0.002  # fallback when no model is available; match your sim step
 
 
