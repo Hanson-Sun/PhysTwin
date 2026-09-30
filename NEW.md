@@ -348,7 +348,9 @@ from `mujoco_assets/world.xml`.
   the extents; if they look like millimetres, scale the file first — or scale
   at prepare time with `--target-height 0.225 --max-dim 0.30` (height target
   bounded by the longest extent; applied before the voxel fill, and keep the
-  grip-station cross-section under the claw's 0.20 m open gap).- Open or fragmented meshes are fine — `prepare_mesh` voxel-fills them watertight. Already-watertight inputs skip the repair entirely (pass `--remesh` to force it, e.g. to decimate a dense mesh). The fill rounds off features below ~2 voxels, so the default `--pitch` is 0.003 m (features below ~6 mm still smooth out); pass e.g. `--pitch 0.0015` for an even finer repair at higher mesh/sim cost.
+  grip-station cross-section under the claw's 0.20 m open gap).- Open or fragmented meshes are fine — `prepare_mesh` voxel-fills them watertight. Already-watertight inputs skip the repair entirely — GLB texture-seam
+  vertices are welded by position first, so only genuinely open meshes take
+  the voxel path (pass `--remesh` to force it, e.g. to decimate a dense mesh). The fill rounds off features below ~2 voxels, so the default `--pitch` is 0.003 m (features below ~6 mm still smooth out); pass e.g. `--pitch 0.0015` for an even finer repair at higher mesh/sim cost.
 - A UV-unwrapped base-colour texture is optional: present → ported as
   `<stem>.png` + `<stem>.uvsrc.npz` sidecars; absent → flat colour from
   `soft.rgba` in the manifest.
