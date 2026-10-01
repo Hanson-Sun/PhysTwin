@@ -62,6 +62,40 @@ def nonnegative_float(row: dict, name: str, default: float) -> float:
     return value
 
 
+def grasp_mode(row: dict) -> str:
+    """How a closed grip is carried: a grasp constraint or pad friction alone.
+
+    ``physical`` is the default: the claw is a finite-mass servo-driven body, so
+    pad friction can actually carry the load (see ``interactor_dynamic``), which
+    is the honest behaviour to train on. ``constraint`` stays available
+    explicitly for the weld-based carry.
+    """
+    mode = row.get("grasp_mode", "physical")
+    if mode not in ("constraint", "physical"):
+        raise ValueError("grasp_mode must be 'constraint' or 'physical'")
+    return str(mode)
+
+
+def boolean(row: dict, name: str, default: bool) -> bool:
+    value = row.get(name, default)
+    if not isinstance(value, bool):
+        raise ValueError(f"'{name}' must be true or false")
+    return value
+
+
+def interactor_dynamic(row: dict) -> bool:
+    """Whether the interactor is a servo-driven finite-mass body.
+
+    A mocap claw has infinite mass and an imposed velocity, so contact friction
+    can never hold it: the pads slide up through the object and the grip carries
+    nothing (measured 0% of the pad's motion transferred, vs 99% with a
+    finite-mass claw). Friction is therefore the whole mechanism in
+    ``grasp_mode: "physical"``, so that mode turns this on by default. It can
+    still be set explicitly to study the kinematic claw.
+    """
+    default = grasp_mode(row) == "physical"
+    return boolean(row, "interactor_dynamic", default)
+
 
 def load_manifest(path: Path) -> list[dict]:
     if path.suffix.lower() != ".json":
@@ -114,6 +148,19 @@ def normalize(model: dict, manifest: Path) -> dict:
         "n_interactors": integer(model, "n_interactors", 1),
         "trajectory": str(model.get("trajectory", "push")),
         "gripper_open_angle": positive_float(model, "gripper_open_angle", 0.70),
+        # Hinge target at full close. 0.30 presses slightly into the object;
+        # 0.0 commands the fingers fully together, so the pinch is limited only
+        # by the force clamp (grip_force) and the contact forces.
+        "gripper_closed_angle": nonnegative_float(model, "gripper_closed_angle", 0.30),
+        # 'physical' (default): the lift is carried by pad friction alone, on a
+        # finite-mass servo-driven claw. 'constraint': the object is carried by
+        # a grasp constraint once the grip closes (see mujoco_sim/grasp.py).
+        "grasp_mode": grasp_mode(model),
+        # Finite-mass servo-driven claw. Required for a physical (friction-only)
+        # grip to hold anything; see interactor_dynamic.
+        "interactor_dynamic": interactor_dynamic(model),
+        # Per-finger squeeze limit in hinge torque (N*m).
+        "grip_force": positive_float(model, "grip_force", 2.0),
         "max_controller_speed": positive_float(
             model, "max_controller_speed", None
         ),
@@ -143,11 +190,17 @@ def generate(model: dict, output_dir: Path, overwrite: bool) -> Path:
             model["object_file"],
             model["object_mesh"],
             model["soft"],
+            interactor_dynamic=model["interactor_dynamic"],
         ),
         width=model["width"],
         height=model["height"],
         gripper_open_angle=model["gripper_open_angle"],
+        gripper_closed_angle=model["gripper_closed_angle"],
+        grip_force=model["grip_force"],
+        interactor_dynamic=model["interactor_dynamic"],
     )
+    # Recorded in the exported metadata so a dataset states how it was held.
+    sim.grasp_mode = model["grasp_mode"]
     gripper_opening = None
     if model["trajectory"] == "grip_lift":
         if model["n_interactors"] != 1:
@@ -176,7 +229,14 @@ def generate(model: dict, output_dir: Path, overwrite: bool) -> Path:
     # Build trajectories from the original scene pose; floor placement must not
     # change any controller waypoint. It only affects the initial object state.
     sim.place_objects_on_ground()
-    trajectory_length = len(next(iter(trajectories.values())))
+
+    # The attach engages when the grip closes (see DigitalTwinSim.rollout).
+    grasped_body = (
+        "object"
+        if model["trajectory"] == "grip_lift" and model["grasp_mode"] == "constraint"
+        else None
+    )
+
     with tqdm(
         total=None if model["max_controller_speed"] is not None else trajectory_length,
         desc=model["case_name"],
@@ -190,7 +250,7 @@ def generate(model: dict, output_dir: Path, overwrite: bool) -> Path:
             substeps=model["substeps"],
             progress=progress.update,
             gripper_opening=gripper_opening,
-            grasped_body="object" if model["trajectory"] == "grip_lift" else None,
+            grasped_body=grasped_body,
             grasp_offset=(0.0, 0.0, 0.0),
             max_controller_speed=model["max_controller_speed"],
             controller_free_speed=model["controller_free_speed"],

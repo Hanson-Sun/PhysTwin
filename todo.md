@@ -1,4 +1,4 @@
-fix grip for rigid boxes!!
+fix grip for EVERYTHING!! is there no contact friction?? what is going on
 
 
 make lift trajectory hold on the top for a second before ending.

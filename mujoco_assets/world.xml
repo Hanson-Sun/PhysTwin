@@ -1,5 +1,18 @@
 <mujoco model="world">
-  <option timestep="0.001" integrator="implicitfast" gravity="0 0 -9.81"/>
+  <!-- MJCF defaults this to "degree", which silently turned every angle in
+       the scene into degrees: claw.xml writes range="-0.8 0.8" and
+       ctrlrange="-0.8 0.8" in radians, and they compiled to +-0.8 DEGREES,
+       freezing the finger hinges at +-0.01396 rad. Every angle in the assets
+       is authored in radians, so pin the unit here. This file is included
+       exactly once per scene (see scene.build_scene), so it is the only place
+       a <compiler> element can live. -->
+  <compiler angle="radian"/>
+
+  <!-- cone=elliptic + impratio=10: the default pyramidal cone resolves
+       friction poorly, which shows up as gripper contacts that transmit
+       almost no tangential load (MuJoCo's own guidance for grasping). -->
+  <option timestep="0.001" integrator="implicitfast" gravity="0 0 -9.81"
+          cone="elliptic" impratio="10"/>
 
   <visual>
     <headlight ambient="0.42 0.42 0.42" diffuse="0.45 0.45 0.45" specular="0.12 0.12 0.12"/>
@@ -27,7 +40,10 @@
     <light name="front_fill" pos="0 -0.9 0.7" dir="0 0.4 -1" directional="true"
            diffuse="0.18 0.20 0.22" castshadow="false"/>
 
-    <geom name="floor" type="plane" size="1 1 0.1" friction="0.15 0.005 0.0001" material="grid_mat"/>
+    <!-- solref tightened from the default: a 0.2 kg box used to settle
+         centimetres into the floor at rest. -->
+    <geom name="floor" type="plane" size="1 1 0.1" friction="0.15 0.005 0.0001"
+          solref="0.005 1" material="grid_mat"/>
 
     <!-- three RGB-D views around the origin -->
     <body name="cam_front_target" pos="0.0 0.0 0.14"/>

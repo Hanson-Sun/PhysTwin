@@ -10,24 +10,40 @@
                range="-0.8 0.8" damping="0.2"/>
         <geom name="__NAME___finger_l_geom" type="capsule"
               fromto="0 0 0 0.052 0 -0.13" size="0.009"
-              material="claw_metal" friction="1.5 0.005 0.0001" solref="0.01 1" contype="1" conaffinity="1"/>
+              material="claw_metal" friction="4.0 0.02 0.002" condim="4"
+              solref="0.01 1" contype="1" conaffinity="1"/>
         <geom name="__NAME___tip_l" type="capsule"
               fromto="0 0 0 0.013 0 0.03" size="0.010"
-              material="claw_metal" friction="1.5 0.005 0.0001" solref="0.01 1" contype="1" conaffinity="1"/>
-        <geom name="__NAME___pad_l" type="sphere" pos="0.052 0 -0.13" size="0.012"
-              material="claw_pad" friction="1.5 0.005 0.0001" solref="0.01 1" contype="1" conaffinity="1"/>
+              material="claw_metal" friction="4.0 0.02 0.002" condim="4"
+              solref="0.01 1" contype="1" conaffinity="1"/>
+        <!-- Flat pads: a sphere is a single contact point with no resistance
+             to pivoting (the object spins in the grip) and a poor contact
+             normal once it sinks into a soft mesh. The flat face meets the
+             object across a patch, and solref+margin give the pad a little
+             conformance without modelling it as soft itself. The euler tilt
+             squares the face at the grip angle (the finger hinges swing the
+             pads through an arc), so the pads press flat instead of leading
+             with a corner. -->
+        <geom name="__NAME___pad_l" type="box" pos="0.052 0 -0.13" euler="0 -0.3 0"
+              size="0.011 0.016 0.024"
+              material="claw_pad" friction="6.0 0.04 0.002" condim="4"
+              solref="0.004 1" margin="0.0005" contype="1" conaffinity="1"/>
       </body>
       <body name="__NAME___finger_r" pos="0.068 0 0.13">
         <joint name="__NAME___finger_r_hinge" type="hinge" axis="0 1 0"
                range="-0.8 0.8" damping="0.2"/>
         <geom name="__NAME___finger_r_geom" type="capsule"
               fromto="0 0 0 -0.052 0 -0.13" size="0.009"
-              material="claw_metal" friction="1.5 0.005 0.0001" solref="0.01 1" contype="1" conaffinity="1"/>
+              material="claw_metal" friction="4.0 0.02 0.002" condim="4"
+              solref="0.01 1" contype="1" conaffinity="1"/>
         <geom name="__NAME___tip_r" type="capsule"
               fromto="0 0 0 -0.013 0 0.03" size="0.010"
-              material="claw_metal" friction="1.5 0.005 0.0001" solref="0.01 1" contype="1" conaffinity="1"/>
-        <geom name="__NAME___pad_r" type="sphere" pos="-0.052 0 -0.13" size="0.012"
-              material="claw_pad" friction="1.5 0.005 0.0001" solref="0.01 1" contype="1" conaffinity="1"/>
+              material="claw_metal" friction="4.0 0.02 0.002" condim="4"
+              solref="0.01 1" contype="1" conaffinity="1"/>
+        <geom name="__NAME___pad_r" type="box" pos="-0.052 0 -0.13" euler="0 0.3 0"
+              size="0.011 0.016 0.024"
+              material="claw_pad" friction="6.0 0.04 0.002" condim="4"
+              solref="0.004 1" margin="0.0005" contype="1" conaffinity="1"/>
       </body>
 
       <!-- Palm and housing half-widths widened to enclose the new hinge positions -->
@@ -46,9 +62,13 @@
   </worldbody>
 
   <actuator>
+    <!-- The forcerange is the actuator's authority ceiling; the runtime sets
+         the actual squeeze limit (``DigitalTwinSim.grip_force``) on both
+         motors, so a close target that ends inside the object clamps at the
+         commanded grip force instead of squeezing unbounded. -->
     <position name="__NAME___finger_l_motor" joint="__NAME___finger_l_hinge"
-              kp="100" ctrlrange="-0.8 0.8"/>
+              kp="200" ctrlrange="-0.8 0.8" forcerange="-25 25"/>
     <position name="__NAME___finger_r_motor" joint="__NAME___finger_r_hinge"
-              kp="100" ctrlrange="-0.8 0.8"/>
+              kp="200" ctrlrange="-0.8 0.8" forcerange="-25 25"/>
   </actuator>
 </mujoco>
