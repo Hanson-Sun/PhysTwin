@@ -142,6 +142,17 @@ def export_case(
         "camera_count": len(cams),
         "serial_numbers": [f"sim_cam_{i}" for i in range(len(cams))],
         "depth_unit": "millimeters",
+        # How the object was held, so a dataset records whether its lift came
+        # from a grasp constraint or from pad friction, and whether the claw was
+        # kinematic (mocap) or servo-driven. A mocap claw has infinite mass, so
+        # a friction-only grip cannot hold anything on it -- see
+        # ``scene._make_claw_dynamic``.
+        "sim": {
+            "grasp_mode": getattr(sim, "grasp_mode", None),
+            "interactor_dynamic": bool(getattr(sim, "interactor_dynamic", False)),
+            "grip_force": getattr(sim, "grip_force", None),
+            "gripper_closed_angle": getattr(sim, "gripper_closed_angle", None),
+        },
     }
     with open(case_dir / "metadata.json", "w", encoding="utf-8") as f:
         json.dump(metadata, f, indent=2)

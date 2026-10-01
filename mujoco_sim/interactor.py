@@ -6,6 +6,10 @@ import numpy as np
 IDENTITY_QUAT = (1.0, 0.0, 0.0, 0.0)
 END_PAUSE_SECONDS = 0.4
 DEFAULT_STEP_DT = 0.002  # fallback when no model is available; match your sim step
+# Smallest gap left between the claw's lowest geometry and the floor while
+# pushing. Enough to stop the pads sinking into the ground without lifting the
+# claw off the object it is pushing.
+PUSH_FLOOR_CLEARANCE = 0.002
 
 
 def pause_steps(seconds: float, dt: float) -> int:
@@ -91,16 +95,31 @@ def geom_world_extents(model, data, geom_id: int) -> np.ndarray:
     return np.abs(data.geom_xmat[geom_id].reshape(3, 3)) @ local
 
 
+def is_interactor_geom(model, geom_id: int) -> bool:
+    """Whether ``geom_id`` belongs to a gripper rather than to the object.
+
+    Identified by walking up to an ``interactor*`` body, not by looking for a
+    mocap ancestor: a servo-driven claw (``scene._make_claw_dynamic``) is a
+    plain finite-mass body, so the mocap test would misclassify every claw geom
+    as object geometry.
+    """
+    body_id = model.geom_bodyid[geom_id]
+    while body_id > 0:
+        if (mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, body_id) or "").startswith(
+            "interactor"
+        ):
+            return True
+        body_id = model.body_parentid[body_id]
+    return False
+
+
 def object_geom_ids(model) -> list[int]:
     """Return every non-controller, non-floor geometry in the scene."""
     geom_ids = []
     for geom_id in range(model.ngeom):
         if model.geom(geom_id).name == "floor":
             continue
-        ancestor = model.geom_bodyid[geom_id]
-        while ancestor > 0 and model.body(ancestor).mocapid[0] < 0:
-            ancestor = model.body_parentid[ancestor]
-        if ancestor > 0:
+        if is_interactor_geom(model, geom_id):
             continue
         geom_ids.append(geom_id)
     return geom_ids
@@ -130,12 +149,15 @@ def object_bounds(model, data, body_name: str = "object") -> tuple[np.ndarray, n
 def controller_local_bounds(
     model, data, body_name: str = "interactor0"
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Return controller geometry bounds relative to its mocap origin."""
+    """Return controller geometry bounds relative to its own origin.
+
+    The origin is the controller body's resolved pose rather than its mocap
+    reference, so this works for a servo-driven finite-mass claw as well as a
+    mocap one (for a mocap body the two coincide). Proximity needs the geometry
+    that is actually there, not the geometry that was ordered.
+    """
     body = model.body(body_name)
-    mocap_id = body.mocapid[0]
-    if mocap_id < 0:
-        raise ValueError(f"'{body_name}' is not a mocap body")
-    origin = data.mocap_pos[mocap_id]
+    origin = data.xpos[body.id]
     points = []
     for geom_id in range(model.ngeom):
         ancestor = model.geom_bodyid[geom_id]
@@ -160,6 +182,7 @@ def object_push_trajectory(
     margin: float = 0.06,
     approach_height: float = 0.16,
     controller_name: str = "interactor0",
+    end_pause_seconds: float = END_PAUSE_SECONDS,
 ) -> list:
     """Approach, push through, and retract from an object's bounds.
 
@@ -171,9 +194,15 @@ def object_push_trajectory(
         model, data, controller_name
     )
     center = (lower + upper) * 0.5
-    # Keep small floor-level objects (for example the rope) at their actual
-    # center height instead of lifting the interactor above them.
-    contact_z = max(0.012, center[2])
+    # The waypoint scripts the controller *origin*, but the pads hang below it
+    # (29.3 mm at the open stance, which is where a push runs: the fingers are
+    # never commanded). Scripting the origin at the object's centre therefore
+    # drove the pads through the floor for the low objects - the rope sank
+    # 17 mm and the heavy plank 4 mm - and turning the pad from a sphere into a
+    # longer prism is what deepened it. Lift the origin only as far as it takes
+    # for the lowest claw geometry to clear the ground; an object already
+    # above that (every box) keeps its centre height untouched.
+    contact_z = max(center[2], -controller_lower[2] + PUSH_FLOOR_CLEARANCE)
     side_x = lower[0] - controller_upper[0] - margin
     exit_x = upper[0] - controller_lower[0] + margin
     y = center[1]
@@ -186,7 +215,7 @@ def object_push_trajectory(
     return multi_poke_trajectory(
         points,
         steps_per_segment,
-        end_pause_steps=pause_steps(END_PAUSE_SECONDS, model.opt.timestep),
+        end_pause_steps=pause_steps(end_pause_seconds, model.opt.timestep),
     )
 
 
@@ -197,8 +226,12 @@ def object_grip_lift_trajectory(
     body_name: str = "object",
     approach_height: float = 0.14,
     lift_height: float = 0.16,
+    end_pause_seconds: float = END_PAUSE_SECONDS,
 ) -> tuple[list, list[float]]:
-    """Open one claw, approach the object, close its fingers, and lift."""
+    """Open one claw, approach the object, close its fingers, and lift.
+
+    ``end_pause_seconds`` holds the claw on top after the lift.
+    """
     body_id = model.body(body_name).id
     box_bounds = []
     for geom_id in range(model.ngeom):
@@ -245,7 +278,7 @@ def object_grip_lift_trajectory(
         (approach_x, y, contact_z),
         (approach_x, y, contact_z + lift_height),
     ]
-    end_pause = pause_steps(END_PAUSE_SECONDS, model.opt.timestep)
+    end_pause = pause_steps(end_pause_seconds, model.opt.timestep)
     trajectory = multi_poke_trajectory(
         waypoints, steps_per_segment, end_pause_steps=end_pause
     )

@@ -153,7 +153,9 @@ class ControllerProximityTests(unittest.TestCase):
         )
         joint_id = sim.model.body("object").jntadr[0]
         qpos_adr = sim.model.jnt_qposadr[joint_id]
-        sim.data.qpos[qpos_adr] = -0.4
+        # Onto the claw's left pad: the open fingers straddle the claw's
+        # reference point, so an object centred there has clearance.
+        sim.data.qpos[qpos_adr] = -0.51
         mujoco.mj_forward(sim.model, sim.data)
         after = sim._step_distance(
             current, targets, names, 0.1, 1.0, 1, 0.0, "object"
@@ -167,8 +169,9 @@ class ControllerProximityTests(unittest.TestCase):
 
         # The claw's fingers are ~1.8 cm thick capsules; using the bounding
         # sphere radius per axis used to report 7.9 cm on the thin axes, which
-        # widened the slowdown zone by ~4 cm on every side.
-        self.assertAlmostEqual(float(upper[0]), 0.085, places=3)
+        # widened the slowdown zone by ~4 cm on every side. With the fingers
+        # open (their starting stance) the widest reach is the pads at 0.131 m.
+        self.assertAlmostEqual(float(upper[0]), 0.1315, places=3)
         self.assertAlmostEqual(float(upper[1]), 0.035, places=3)
         self.assertAlmostEqual(float(lower[1]), -0.035, places=3)
 
@@ -272,9 +275,9 @@ class ControllerProximityTests(unittest.TestCase):
         poses = []
         original_step = sim.step
 
-        def step(n=1):
+        def step(n=1, motion=None):
             poses.append(sim.data.mocap_pos[0].copy())
-            original_step(n)
+            original_step(n, motion=motion)
 
         sim.step = step
         return poses
@@ -326,7 +329,8 @@ class ControllerProximityTests(unittest.TestCase):
     def grip_lift_rollout(self, sim, steps_per_segment=60, grasp_only=False):
         """Play a grip_lift grasp and return per-command claw/object state."""
         trajectory, closing = object_grip_lift_trajectory(
-            sim.model, sim.data, steps_per_segment=steps_per_segment
+            sim.model, sim.data,
+            steps_per_segment=steps_per_segment, end_pause_seconds=0.05,
         )
         sim.place_objects_on_ground()
         motors = [
@@ -338,7 +342,7 @@ class ControllerProximityTests(unittest.TestCase):
         state = []
         original_step = sim.step
 
-        def step(n=1):
+        def step(n=1, motion=None):
             state.append(
                 [float(sim.data.ctrl[model_id]) for model_id in motors]
                 + [
@@ -347,7 +351,7 @@ class ControllerProximityTests(unittest.TestCase):
                     float(sim.data.geom_xpos[pads[1]][0]),
                 ]
             )
-            original_step(n)
+            original_step(n, motion=motion)
 
         sim.step = step
         # The grasp is force-attached from the lift onwards, so the grasp-only
@@ -400,12 +404,14 @@ class ControllerProximityTests(unittest.TestCase):
         grip = slice(-steps_per_segment, None)
         object_state = sim.get_free_body_state("object")
 
-        # A target that closes past the pads' contact angle drives the pads
-        # through the object, which squeezes it out of the grip instead of
-        # holding it. On the grip the pads stop on the faces: their centres stay
-        # a full object width apart, so they never cross it or each other.
+        # The grip target sits past the faces, but the clamped squeeze force
+        # stops the pads on them instead of driving through the object (which
+        # squeezes it out of the grip). The pads' centres stay a full object
+        # width apart, with their inner faces landing on the object's sides.
         self.assertGreaterEqual(float(pad_gap[grip].min()), object_width)
-        self.assertLess(float(pad_gap[grip].min()) - 2.0 * pad_radius, object_width)
+        self.assertAlmostEqual(
+            float(pad_gap[grip].min()) - 2.0 * pad_radius, object_width, delta=3e-3
+        )
         self.assertLess(float(pad_l.max()), 0.0)
         self.assertGreater(float(pad_r.min()), 0.0)
         # The fingers never swing past vertical, and the box is held in place
@@ -423,10 +429,10 @@ class ControllerProximityTests(unittest.TestCase):
         )
         sim.place_objects_on_ground()
         contact_z = float(trajectory[2][0][2])
-        origin = np.array([-0.18, 0.0, contact_z])
+        origin = np.array([-0.21, 0.0, contact_z])
 
         # The union of both world-axis-aligned hulls still reports contact here,
-        # even though the closest claw geometry is 9 cm from the plank.
+        # even though the closest claw geometry is well clear of the plank.
         lower, upper = sim._object_bounds("object")
         controller_lower, controller_upper = sim._controller_local_bounds(
             "interactor0"
@@ -462,6 +468,90 @@ class ControllerProximityTests(unittest.TestCase):
             )
         )
         self.assertGreater(true_clearance(sim, "interactor0", "object"), 0.06)
+
+    def test_allowance_never_drops_below_the_slow_speed(self):
+        # Regression: the allowance for an approaching controller is
+        # ``interval[0] * distance`` - the distance to the proximity boundary -
+        # so a controller resting exactly ON that boundary is granted a
+        # microscopic step, never crosses into the region where it would be
+        # allowed to move at the slow speed, and stalls there forever (the rope
+        # push froze for 5000 commands). Sweeping the approach must never yield
+        # less than the slow speed, which is what keeps progress possible.
+        model = load_model(1, "object_rope.xml")
+        sim = DigitalTwinSim(model, width=16, height=16)
+        sim.place_objects_on_ground()
+        mocap_id = model.body("interactor0").mocapid[0]
+
+        max_speed, free_speed, substeps, epsilon = 0.2, 0.7, 4, 0.02
+        slow = max_speed * model.opt.timestep * substeps
+        # The height object_push_trajectory actually commands for this object.
+        contact_z = 0.0313
+
+        worst = np.inf
+        worst_x = None
+        for x in np.arange(-0.30, 0.10, 0.0002):
+            sim.data.mocap_pos[mocap_id] = [x, 0.0, contact_z]
+            mujoco.mj_forward(model, sim.data)
+            allowed = sim._step_distance(
+                {"interactor0": np.array([x, 0.0, contact_z])},
+                {"interactor0": np.array([x + 0.05, 0.0, contact_z])},
+                ["interactor0"],
+                max_speed,
+                free_speed,
+                substeps,
+                epsilon,
+                "object",
+            )
+            if allowed < worst:
+                worst, worst_x = allowed, float(x)
+
+        self.assertGreaterEqual(
+            worst,
+            slow - 1e-12,
+            f"allowance fell to {worst:.3e} m (< slow speed {slow:.3e}) at x={worst_x}",
+        )
+
+    def test_push_rollout_does_not_stall(self):
+        # End-to-end guard on the same deadlock: a push that has to crawl at
+        # the slow speed covers a ~0.6 m sweep, so a healthy rollout is a few
+        # thousand physics steps. The stalled box push took 24132.
+        class Counting(DigitalTwinSim):
+            steps = 0
+
+            def step(self, n, motion=None):
+                Counting.steps += n
+                super().step(n, motion=motion)
+
+        sim = Counting(
+            load_model(1, "object_box.xml", interactor_dynamic=True),
+            interactor_dynamic=True,
+            width=16,
+            height=16,
+        )
+        Counting.steps = 0
+        trajectory = object_push_trajectory(
+            sim.model, sim.data, steps_per_segment=30
+        )
+        sim.place_objects_on_ground()
+        before_x = float(sim.data.geom_xpos[sim.model.geom("object_geom").id][0])
+
+        sim.rollout(
+            {"interactor0": trajectory},
+            object_bodies=["object"],
+            capture_every=10_000,
+            substeps=4,
+            max_controller_speed=0.25,
+            controller_free_speed=0.7,
+            controller_slowdown_epsilon=0.02,
+        )
+
+        after_x = float(sim.data.geom_xpos[sim.model.geom("object_geom").id][0])
+        self.assertLess(
+            Counting.steps,
+            12_000,
+            f"push took {Counting.steps} physics steps: it stalled rather than crawled",
+        )
+        self.assertGreater(after_x - before_x, 0.05, "push did not move the object")
 
 
 if __name__ == "__main__":

@@ -4,7 +4,14 @@ import mujoco
 import numpy as np
 
 from mujoco_sim import prepare_mesh
-from mujoco_sim.interactor import object_bounds, object_grip_lift_trajectory
+from mujoco_sim.interactor import (
+    object_bounds,
+    object_grip_lift_trajectory,
+    pause_steps,
+)
+
+# Short top-hold: the tests verify the grip, not the pause duration.
+END_PAUSE_SECONDS = 0.05
 from mujoco_sim.scene import ASSETS_DIR, load_model
 from mujoco_sim.simulation import DigitalTwinSim
 
@@ -69,7 +76,8 @@ class SlothAssetTests(unittest.TestCase):
         lower, upper = object_bounds(model, sim.data, "object")
         steps = 10
         trajectory, closing = object_grip_lift_trajectory(
-            model, sim.data, steps_per_segment=steps
+            model, sim.data,
+            steps_per_segment=steps, end_pause_seconds=END_PAUSE_SECONDS,
         )
         # Segment 1 is the hold at contact height.
         contact_z = trajectory[steps][0][2]
@@ -77,7 +85,9 @@ class SlothAssetTests(unittest.TestCase):
         self.assertGreaterEqual(contact_z + PALM_HEIGHT, upper[2] - 1e-9)
         self.assertGreater(contact_z, lower[2])
         self.assertLess(contact_z, upper[2])
-        self.assertEqual(len(trajectory), 3 * steps)
+        # Three motion segments, then the pause that holds the claw on top.
+        end_pause = pause_steps(END_PAUSE_SECONDS, model.opt.timestep)
+        self.assertEqual(len(trajectory), 3 * steps + end_pause)
         self.assertEqual(len(closing), len(trajectory))
 
 
@@ -85,7 +95,8 @@ class SlothGripLiftTests(unittest.TestCase):
     def test_grip_lift_raises_the_sloth_off_the_ground(self):
         sim, model = sloth_sim()
         trajectory, closing = object_grip_lift_trajectory(
-            model, sim.data, steps_per_segment=60
+            model, sim.data,
+            steps_per_segment=60, end_pause_seconds=END_PAUSE_SECONDS,
         )
         sim.place_objects_on_ground()
         rest = flex_vertices(sim, model)

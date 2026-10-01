@@ -6,18 +6,22 @@ import mujoco
 import numpy as np
 
 try:
+    from .grasp import GraspAttachment
     from .interactor import (
         controller_local_bounds,
         geom_local_half_extents,
         geom_world_extents,
+        is_interactor_geom,
         object_bounds,
         object_geom_ids,
     )
 except ImportError:  # Support running this file directly from the mujoco_sim directory.
+    from grasp import GraspAttachment
     from interactor import (
         controller_local_bounds,
         geom_local_half_extents,
         geom_world_extents,
+        is_interactor_geom,
         object_bounds,
         object_geom_ids,
     )
@@ -41,6 +45,21 @@ class DigitalTwinSim:
     # between the pads; a wider object needs a wider stance to be approached
     # without the pads grazing it on the way down.
     gripper_open_angle: float = 0.70
+    # Hinge angle the close target reaches. It sits slightly inside the
+    # object, so the squeeze force is the clamped grip_force rather than the
+    # uncontrolled residual of a position servo aimed at the surface.
+    gripper_closed_angle: float = 0.30
+    # Squeeze limit per finger in hinge torque (N*m); ~2 N*m is ~15 N at the
+    # pads. This is the grip force proper -- everything friction can do
+    # scales with it.
+    grip_force: float = 2.0
+    # Whether the interactor is a finite-mass servo-driven body rather than a
+    # mocap body. A mocap claw has infinite mass and an imposed velocity, so
+    # contact friction cannot hold it: the pads slide up through the object and
+    # transfer none of the lift. Set this to match how the model was built (see
+    # ``scene.load_model``); it only changes how ``set_interactor_pose`` issues a
+    # pose command.
+    interactor_dynamic: bool = False
 
     def __post_init__(self):
         self.data = mujoco.MjData(self.model)
@@ -49,43 +68,136 @@ class DigitalTwinSim:
             mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_CAMERA, i)
             for i in range(self.model.ncam)
         ]
+        # The fingers start open. Their hinge state defaults to closed, and
+        # opening on the way down dragged the pads across the object.
+        for joint_id in range(self.model.njnt):
+            joint_name = (
+                mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_JOINT, joint_id)
+                or ""
+            )
+            if joint_name.endswith("_finger_l_hinge"):
+                self.data.qpos[self.model.jnt_qposadr[joint_id]] = self.gripper_open_angle
+            elif joint_name.endswith("_finger_r_hinge"):
+                self.data.qpos[self.model.jnt_qposadr[joint_id]] = -self.gripper_open_angle
         mujoco.mj_forward(self.model, self.data)
+        # The finger servos define the grip squeeze, so clamp those. Any other
+        # actuator (e.g. the whole-claw position servos of a dynamic
+        # interactor) drives the gripper body itself and must keep its own force
+        # range: the claw weighs ~12 N, so clamping those to `grip_force` would
+        # fold it up under its own weight with no error raised.
+        for actuator_id in range(self.model.nu):
+            joint_id = self.model.actuator_trnid[actuator_id, 0]
+            if joint_id < 0:
+                continue
+            joint_name = (
+                mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_JOINT, joint_id)
+                or ""
+            )
+            if "_finger_" not in joint_name:
+                continue
+            self.model.actuator_forcerange[actuator_id] = (
+                -self.grip_force,
+                self.grip_force,
+            )
 
     # ---- control -----------------------------------------------------
+
+    def interactor_pose(self, name: str) -> np.ndarray:
+        """The interactor's current world position.
+
+        Read from the resolved kinematics (``xpos``) rather than ``mocap_pos``
+        so it is correct for both claw kinds: for a mocap body the two are
+        identical, and for a servo-driven finite-mass body only ``xpos`` is the
+        pose actually achieved. This is where the object physically *is*, which
+        is what proximity and grasp capture need.
+        """
+        return self.data.xpos[self.model.body(name).id].copy()
+
+    def commanded_interactor_pose(self, name: str) -> np.ndarray:
+        """Where this interactor was last *told* to be, in world axes.
+
+        The inverse of :meth:`set_interactor_pose`, and deliberately not the
+        same thing as :meth:`interactor_pose`. ``rollout`` plans its commands
+        against this: it is deciding where to send the claw next under a speed
+        limit, which is a question about intent, not about where a lagging servo
+        happens to be. Seeding that loop from the resolved pose instead makes it
+        chase a target it has not reached yet, so it re-issues commands every
+        step and the rollout runs several times longer.
+        """
+        mocap_id = self.model.body(name).mocapid[0]
+        if mocap_id >= 0:
+            return self.data.mocap_pos[mocap_id].copy()
+        base = self.model.body_pos[self.model.body(name).id]
+        offset = np.zeros(3)
+        for index, axis in enumerate("xyz"):
+            actuator_id = self.model.actuator(f"{name}_{axis}_motor").id
+            if actuator_id >= 0:
+                offset[index] = self.data.ctrl[actuator_id]
+        return base + offset
 
     def set_interactor_pose(self, name: str, pos, quat=(1, 0, 0, 0)) -> None:
         """Directly set a mocap-driven interactor's pose (position + wxyz quat)."""
         mocap_id = self.model.body(name).mocapid[0]
-        if mocap_id < 0:
+        if mocap_id >= 0:
+            self.data.mocap_pos[mocap_id] = pos
+            self.data.mocap_quat[mocap_id] = quat
+            return
+        # A dynamic interactor is a finite-mass body: issue the pose as servo
+        # targets instead. The joints are slides along x/y/z from the body's own
+        # reference pose, so the target is the offset from where the claw model
+        # was declared, and the body follows under servo force + damping rather
+        # than being teleported -- which is what lets friction engage.
+        if not self.interactor_dynamic:
             raise ValueError(f"'{name}' is not a mocap body")
-        self.data.mocap_pos[mocap_id] = pos
-        self.data.mocap_quat[mocap_id] = quat
+        base = self.model.body_pos[self.model.body(name).id]
+        target = np.asarray(pos, dtype=float) - base
+        for axis, value in zip("xyz", target):
+            actuator = f"{name}_{axis}_motor"
+            if self.model.actuator(actuator).id >= 0:
+                self.data.ctrl[self.model.actuator(actuator).id] = value
 
-    def step(self, n: int = 1) -> None:
-        for _ in range(n):
+    def step(self, n: int = 1, motion: tuple | None = None) -> None:
+        """Advance ``n`` physics steps.
+
+        ``motion`` is ``(start, end, quat)``: interactor position/rotation
+        dicts to interpolate across the steps. Without it a kinematic (mocap)
+        interactor teleports once per command, which lands as impulse-like
+        impacts on whatever it touches.
+        """
+        for i in range(n):
+            if motion is not None:
+                start, end, quat = motion
+                fraction = (i + 1) / n
+                for name, target in end.items():
+                    self.set_interactor_pose(
+                        name,
+                        start[name] + fraction * (target - start[name]),
+                        quat[name],
+                    )
             mujoco.mj_step(self.model, self.data)
 
     def set_gripper_opening(self, name: str, closing: float) -> None:
         """Set one claw's normalized hinge closing target in [0, 1].
 
-        ``closing`` interpolates the hinge between the angle that holds the
-        fingers open (0) and the angle that grips the object (1). Each claw pad
-        sits 0.052 m inboard of its hinge, so a hinge at 0.34 rad already puts
-        both pads on a 0.10 m object's faces: a more closed target drives the
-        pads through the object instead of around it, which squeezes the object
-        out of the grip. The open stance defaults to 0.70 rad (0.20 m between
-        the pads) and is set by ``gripper_open_angle``.
+        ``closing`` interpolates the hinge between the open stance
+        (``gripper_open_angle``) and the grip target
+        (``gripper_closed_angle``). The grip target sits slightly inside the
+        object, so once the pads touch the servo cannot reach it and the
+        squeeze force clamps at ``grip_force`` instead of growing with the
+        remaining angle error: a position-only close either only grazes the
+        surface (no friction) or drives the pads through the object (which
+        squeezes it out of the grip).
         """
         if not 0.0 <= closing <= 1.0:
             raise ValueError("gripper closing must be between 0 and 1")
-        open_angle = self.gripper_open_angle
-        closed_angle = 0.34
+        target = self.gripper_open_angle + (
+            self.gripper_closed_angle - self.gripper_open_angle
+        ) * closing
         left_motor = self.model.actuator(f"{name}_finger_l_motor").id
         right_motor = self.model.actuator(f"{name}_finger_r_motor").id
         # Both motors drive mirrored hinges, so their targets are opposite.
-        travel = open_angle - closed_angle
-        self.data.ctrl[left_motor] = open_angle - travel * closing
-        self.data.ctrl[right_motor] = -open_angle + travel * closing
+        self.data.ctrl[left_motor] = target
+        self.data.ctrl[right_motor] = -target
 
     # ---- sensing -------------------------------------------------------
 
@@ -211,7 +323,7 @@ class DigitalTwinSim:
     def _controller_local_bounds(
         self, body_name: str
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Return controller bounds relative to its mocap reference point."""
+        """Return controller bounds relative to its own resolved origin."""
         return controller_local_bounds(self.model, self.data, body_name)
 
     def _controller_geom_boxes(
@@ -219,16 +331,13 @@ class DigitalTwinSim:
     ) -> list[tuple[np.ndarray, np.ndarray, np.ndarray]]:
         """Return ``(center, rotation, half extents)`` for each controller geom.
 
-        ``center`` is relative to the controller's mocap reference point, so the
-        boxes translate with the commanded pose. One box per geometry keeps the
+        ``center`` is relative to the controller body's own pose, so the
+        boxes translate with it. One box per geometry keeps the
         envelope tight: the claw's housing and palm sit well above a table-top
         object, and a single box around all of them used to keep the claw slow
         long before any part of it could touch the object.
         """
-        mocap_id = self.model.body(body_name).mocapid[0]
-        if mocap_id < 0:
-            raise ValueError(f"'{body_name}' is not a mocap body")
-        origin = self.data.mocap_pos[mocap_id]
+        origin = self.interactor_pose(body_name)
         boxes = []
         for geom_id in self._body_geom_ids(body_name):
             boxes.append(
@@ -351,14 +460,7 @@ class DigitalTwinSim:
             body_id = self.model.geom_bodyid[geom_id]
             if self.model.geom(geom_id).name == "floor":
                 continue
-            ancestor = body_id
-            is_controller = False
-            while ancestor > 0:
-                if self.model.body(ancestor).mocapid[0] >= 0:
-                    is_controller = True
-                    break
-                ancestor = self.model.body_parentid[ancestor]
-            if is_controller:
+            if is_interactor_geom(self.model, geom_id):
                 continue
 
             root = body_id
@@ -430,8 +532,18 @@ class DigitalTwinSim:
             if interval[0] <= 1e-12:
                 allowed_distance = min(allowed_distance, slow_distance)
             else:
-                # Do not cross into the current proximity box at free speed.
-                allowed_distance = min(allowed_distance, interval[0] * distance)
+                # Do not cross into the current proximity box at free speed, but
+                # never grant less than the slow speed. A claw resting exactly on
+                # the boundary is granted a microscopic step, so it never crosses
+                # into the region where it would be allowed to move at the slow
+                # speed, and deadlocks there: the rope push spent 5000 commands
+                # (20 s of sim time) frozen 144 mm short of its waypoint before
+                # the object happened to shift and release it. Flooring the
+                # allowance keeps the "stop at the boundary" intent while making
+                # forward progress always possible.
+                allowed_distance = min(
+                    allowed_distance, max(interval[0] * distance, slow_distance)
+                )
 
         return max(allowed_distance, 0.0)
 
@@ -444,7 +556,6 @@ class DigitalTwinSim:
         progress=None,
         gripper_opening: dict[str, list[float]] | None = None,
         grasped_body: str | None = None,
-        grasp_start_fraction: float = 2.0 / 3.0,
         grasp_offset=(0.0, 0.0, 0.0),
         max_controller_speed: float | None = None,
         controller_free_speed: float = 1.0,
@@ -460,11 +571,12 @@ class DigitalTwinSim:
         ``controller_free_speed`` is the speed used while the controller is
         clear of the object.
 
-        ``grasped_body`` kinematically attaches that body from
-        ``grasp_start_fraction`` onwards so the lift never depends on grip
-        friction. The attach is anchored at the pose the body has when the
-        grip closes (captured once as a claw-relative offset), so attaching
-        never teleports the object; ``grasp_offset`` then shifts that target.
+        ``grasped_body`` carries that body with the claw once every gripper is
+        fully closed, so the lift never depends on grip friction: a rigid body
+        by a weld equality, a soft body by driving its mesh frame (see
+        ``grasp.py``). The claw-relative pose is captured once, when the grip
+        closes, so engaging the attach never teleports the object;
+        ``grasp_offset`` then shifts the held pose in world axes.
         """
         if capture_every < 1:
             raise ValueError("capture_every must be at least 1")
@@ -478,30 +590,10 @@ class DigitalTwinSim:
             raise ValueError("controller_slowdown_epsilon cannot be negative")
         if not interactor_trajectory:
             raise ValueError("at least one interactor trajectory is required")
-        if not 0.0 <= grasp_start_fraction <= 1.0:
-            raise ValueError("grasp_start_fraction must be between 0 and 1")
-        flex_id = None
-        qpos_adr = qvel_adr = None
-        if grasped_body is not None:
-            # mj_name2id returns -1 (not None) when the name is not a flex, so a
-            # rigid body must leave flex_id as None or the attach below would
-            # call translate_flex(-1, ...) on a model with no flexes.
-            found_flex = mujoco.mj_name2id(
-                self.model, mujoco.mjtObj.mjOBJ_FLEX, grasped_body
+        if grasped_body is not None and gripper_opening is None:
+            raise ValueError(
+                "grasped_body requires gripper_opening to know when the grip closes"
             )
-            if found_flex >= 0:
-                flex_id = found_flex
-            else:
-                joint_id = self.model.body(grasped_body).jntadr[0]
-                if (
-                    joint_id < 0
-                    or self.model.jnt_type[joint_id] != mujoco.mjtJoint.mjJNT_FREE
-                ):
-                    raise ValueError(
-                        f"grasped body '{grasped_body}' must have a freejoint or be a flex"
-                    )
-                qpos_adr = self.model.jnt_qposadr[joint_id]
-                qvel_adr = self.model.jnt_dofadr[joint_id]
 
         names = list(interactor_trajectory.keys())
         lengths = {name: len(trajectory) for name, trajectory in interactor_trajectory.items()}
@@ -518,9 +610,13 @@ class DigitalTwinSim:
         frames = []
 
         command_index = 0
-        # Pose delta captured the first time the grasp attaches: the body keeps
-        # the pose it had when the grip closed and follows the claw from there.
-        attach_offset = None
+        # Created once; engaging it at the grasp captures the claw-relative
+        # pose, so the attach never teleports the object (see grasp.py).
+        grasp = (
+            GraspAttachment(self.model, grasped_body, names[0])
+            if grasped_body is not None
+            else None
+        )
         current_opening = (
             {
                 name: float(gripper_opening[name][0])
@@ -541,10 +637,12 @@ class DigitalTwinSim:
         waypoint = 0
         while waypoint < n_waypoints:
             command_waypoint = waypoint
+            # Command space, not resolved space: see commanded_interactor_pose.
             current = {
-                name: self.data.mocap_pos[self.model.body(name).mocapid[0]].copy()
-                for name in names
+                name: self.commanded_interactor_pose(name) for name in names
             }
+            command_start = dict(current)
+            command_quat = {}
             budget = None
             spent = 0.0
             clamped = False
@@ -622,11 +720,9 @@ class DigitalTwinSim:
                     for name in names
                 }
                 for name in names:
-                    self.set_interactor_pose(
-                        name,
-                        next_positions[name],
-                        interactor_trajectory[name][waypoint][1],
-                    )
+                    quat = interactor_trajectory[name][waypoint][1]
+                    command_quat[name] = quat
+                    self.set_interactor_pose(name, next_positions[name], quat)
                     if current_opening is not None:
                         current_opening[name] += fraction * (
                             gripper_opening[name][waypoint] - current_opening[name]
@@ -639,44 +735,16 @@ class DigitalTwinSim:
                 if budget is None or clamped:
                     break
 
-            if grasped_body is not None and command_waypoint >= int(
-                (n_waypoints - 1) * grasp_start_fraction
-            ):
-                claw_position = np.mean(
-                    [
-                        self.data.mocap_pos[self.model.body(name).mocapid[0]]
-                        for name in names
-                    ],
-                    axis=0,
-                )
-                if attach_offset is None:
-                    # Anchor the attach where the body already is. Snapping it
-                    # to the claw's reference point instead teleported the
-                    # object by the whole grip-time mismatch: the trajectory
-                    # aims at the bounds/band centre while a soft body reports
-                    # its vertex mean, and a squishy body sags on the floor and
-                    # gets nudged by the closing pads before the grip closes.
-                    # The offset is captured once, so the first attach command
-                    # moves nothing and every later command only follows the
-                    # claw (plus the residual physics drift).
-                    attach_offset = (
-                        self.get_object_state(grasped_body)[:3] - claw_position
-                    )
-                target = (
-                    claw_position
-                    + np.asarray(grasp_offset, dtype=float)
-                    + attach_offset
-                )
-                if flex_id is not None:
-                    self.translate_flex(
-                        flex_id, target - self.get_object_state(grasped_body)[:3]
-                    )
-                else:
-                    self.data.qpos[qpos_adr : qpos_adr + 3] = target
-                    self.data.qvel[qvel_adr : qvel_adr + 6] = 0.0
-                mujoco.mj_forward(self.model, self.data)
+            grip_closed = bool(current_opening) and min(
+                current_opening.values()
+            ) >= 1.0 - 1e-6
+            if grasp is not None and grip_closed:
+                if not grasp.active:
+                    grasp.activate(self.model, self.data, grasp_offset)
+                grasp.follow(self.model, self.data)
 
-            self.step(substeps)
+            motion = (command_start, current, command_quat) if command_quat else None
+            self.step(substeps, motion=motion)
 
             if progress is not None:
                 progress(1)

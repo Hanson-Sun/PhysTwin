@@ -132,6 +132,9 @@ def _voxel_repaired_tets(path: Path, element_size: float, gmsh_error: Exception)
         return _gmsh_tets(repaired, element_size, repair=False)
 
 
+_TETRA_CACHE: dict = {}
+
+
 def tetrahedralize(
     mesh_path: str | Path, element_size: float = DEFAULT_ELEMENT_SIZE
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -141,6 +144,10 @@ def tetrahedralize(
     quality and simulation cost against how finely the soft body deforms.
     A surface gmsh refuses outright (e.g. self-intersecting facets) is closed
     through the voxel round-trip and retried once.
+
+    Results are cached per ``(mesh, element_size)`` and returned as copies:
+    tetrahedralization is the most expensive step of building a soft object,
+    and the same meshes are built repeatedly (tests, pipeline re-runs).
     """
     if element_size <= 0.0:
         raise ValueError("element_size must be positive")
@@ -152,34 +159,42 @@ def tetrahedralize(
             f"unsupported mesh format '{path.suffix}'; expected one of {MESH_EXTENSIONS}"
         )
 
-    try:
+    key = (str(path), float(element_size))
+    if key not in _TETRA_CACHE:
         try:
-            raw_tags, coords, elements = _gmsh_tets(path, element_size, repair=True)
-        except _SurfaceRepairError:
-            # The closed surface cannot be re-parametrised; its facets already
-            # bound the volume, so mesh them directly.
-            raw_tags, coords, elements = _gmsh_tets(path, element_size, repair=False)
-    except Exception as gmsh_error:
-        # Even the facet route refused the volume - the surface self-intersects
-        # (dense exports slip past prepare_mesh's skip-if-watertight check,
-        # which only pairs edges, not crossings). Repair and retry.
-        raw_tags, coords, elements = _voxel_repaired_tets(path, element_size, gmsh_error)
+            try:
+                raw_tags, coords, elements = _gmsh_tets(path, element_size, repair=True)
+            except _SurfaceRepairError:
+                # The closed surface cannot be re-parametrised; its facets
+                # already bound the volume, so mesh them directly.
+                raw_tags, coords, elements = _gmsh_tets(path, element_size, repair=False)
+        except Exception as gmsh_error:
+            # Even the facet route refused the volume - the surface
+            # self-intersects (dense exports slip past prepare_mesh's
+            # skip-if-watertight check, which only pairs edges, not crossings).
+            # Repair and retry.
+            raw_tags, coords, elements = _voxel_repaired_tets(
+                path, element_size, gmsh_error
+            )
 
-    tags = np.asarray(raw_tags, dtype=int)
-    nodes = np.asarray(coords, dtype=float).reshape(-1, 3)
-    tets = np.asarray(elements, dtype=int).reshape(-1, 4)
-    if not len(tets):
-        raise ValueError(
-            f"{path} did not tetrahedralize: the mesh is probably not watertight"
-        )
+        tags = np.asarray(raw_tags, dtype=int)
+        nodes = np.asarray(coords, dtype=float).reshape(-1, 3)
+        tets = np.asarray(elements, dtype=int).reshape(-1, 4)
+        if not len(tets):
+            raise ValueError(
+                f"{path} did not tetrahedralize: the mesh is probably not watertight"
+            )
 
-    # MuJoCo needs node tags running 1..n in order, and reads element node ids
-    # as tags, so sort the nodes into tag order and rebase the tetrahedra.
-    order = np.argsort(tags)
-    nodes = nodes[order]
-    if not np.array_equal(tags[order], np.arange(1, len(nodes) + 1)):
-        raise ValueError(f"{path} produced non-sequential node tags")
-    return nodes, tets - 1
+        # MuJoCo needs node tags running 1..n in order, and reads element node
+        # ids as tags, so sort the nodes into tag order and rebase the
+        # tetrahedra.
+        order = np.argsort(tags)
+        nodes = nodes[order]
+        if not np.array_equal(tags[order], np.arange(1, len(nodes) + 1)):
+            raise ValueError(f"{path} produced non-sequential node tags")
+        _TETRA_CACHE[key] = (nodes, tets - 1)
+    nodes, tets = _TETRA_CACHE[key]
+    return nodes.copy(), tets.copy()
 
 
 def gmsh_bytes(nodes: np.ndarray, tets: np.ndarray) -> bytes:
