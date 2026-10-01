@@ -43,3 +43,5 @@ mass_num_anchors: 512
 mass_anchor_knn: 4
 mass_anchor_seed: 42
 mass_anchor_method: fps
+early_stop_min_delta: 0.01
+early_stop_patience: 20

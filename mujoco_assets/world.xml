@@ -50,10 +50,16 @@
     <body name="cam_side_target" pos="0.0 0.0 0.14"/>
     <body name="cam_opposite_target" pos="0.0 0.0 0.14"/>
 
-    <!-- PhysTwin-style horizontal views: straight-on, side-oblique, and the
-         opposite side. There is intentionally no top-down camera. -->
-    <camera name="cam_front" pos="0.0 -1.00 0.26" mode="targetbody" target="cam_front_target"/>
-    <camera name="cam_side" pos="0.95 0.16 0.30" mode="targetbody" target="cam_side_target"/>
-    <camera name="cam_opposite" pos="-0.95 0.16 0.30" mode="targetbody" target="cam_opposite_target"/>
+    <!-- Three raised, downward-looking views around the origin: straight-on,
+         side-oblique, and the opposite side. All three sit at z=0.52 and aim at
+         their *_target body at z=0.14 (the upper body of the object), so each
+         looks ~20 degrees down instead of the ~7-9 degrees of the original
+         level rig. The extra top-surface coverage is what the TRELLIS shape
+         prior wants, and keeping the three heights equal preserves the
+         symmetric triangulation the multi-view merge depends on. There is
+         still no dedicated top-down camera. -->
+    <camera name="cam_front" pos="0.0 -1.00 0.52" mode="targetbody" target="cam_front_target"/>
+    <camera name="cam_side" pos="0.95 0.16 0.52" mode="targetbody" target="cam_side_target"/>
+    <camera name="cam_opposite" pos="-0.95 0.16 0.52" mode="targetbody" target="cam_opposite_target"/>
   </worldbody>
 </mujoco>
