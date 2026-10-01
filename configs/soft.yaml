@@ -30,4 +30,4 @@ collision_learn: true
 chamfer_weight: 1.0
 track_weight: 1.0
 early_stop_min_delta: 0.01
-early_stop_patience: 20
+early_stop_patience: 40
