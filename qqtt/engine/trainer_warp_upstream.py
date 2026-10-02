@@ -398,7 +398,9 @@ class InvPhyTrainerWarp:
                 total_chamfer_loss = 0.0
                 total_track_loss = 0.0
             self.simulator.set_init_state(
-                self.simulator.wp_init_vertices, self.simulator.wp_init_velocities
+                self.simulator.wp_init_vertices,
+                self.simulator.wp_init_velocities,
+                reset_contact_state=True,
             )
             with wp.ScopedTimer("backward"):
                 for j in tqdm(range(1, cfg.train_frame)):
@@ -777,10 +779,10 @@ class InvPhyTrainerWarp:
         """Restore eager-replay state and recapture resources used by training."""
         if self.simulator.controller_contact_enabled:
             self.simulator.controller_contact_grid = wp.HashGrid(128, 128, 128)
-            self.simulator.controller_contact_active.zero_()
         self.simulator.set_init_state(
             self.simulator.wp_init_vertices,
             self.simulator.wp_init_velocities,
+            reset_contact_state=True,
         )
         if cfg.data_type == "real":
             self.simulator.set_controller_target(1)
@@ -814,9 +816,13 @@ class InvPhyTrainerWarp:
                 collide_object_fric.detach().clone(),
             )
             if "controller_contact_stiffness" in checkpoint:
+                contact_friction = checkpoint.get(
+                    "controller_contact_friction",
+                    torch.tensor([cfg.controller_contact_friction], device=cfg.device),
+                )
                 self.simulator.set_controller_contact(
                     checkpoint["controller_contact_stiffness"].detach().clone(),
-                    checkpoint["controller_contact_friction"].detach().clone(),
+                    contact_friction.detach().clone(),
                 )
             if "dashpot_damping" in checkpoint and "drag_damping" in checkpoint:
                 self.simulator.set_damping(checkpoint["dashpot_damping"], checkpoint["drag_damping"])
@@ -848,7 +854,9 @@ class InvPhyTrainerWarp:
             # state; visualization replays eagerly with a fresh grid.
             self.simulator.controller_contact_grid = wp.HashGrid(128, 128, 128)
         self.simulator.set_init_state(
-            self.simulator.wp_init_vertices, self.simulator.wp_init_velocities
+            self.simulator.wp_init_vertices,
+            self.simulator.wp_init_velocities,
+            reset_contact_state=True,
         )
         vertices = [
             wp.to_torch(self.simulator.wp_states[0].wp_x, requires_grad=False).cpu()
@@ -1320,7 +1328,9 @@ class InvPhyTrainerWarp:
 
         logger.info("Party Time Start!!!!")
         self.simulator.set_init_state(
-            self.simulator.wp_init_vertices, self.simulator.wp_init_velocities
+            self.simulator.wp_init_vertices,
+            self.simulator.wp_init_velocities,
+            reset_contact_state=True,
         )
         prev_x = wp.to_torch(
             self.simulator.wp_states[0].wp_x, requires_grad=False
@@ -1889,7 +1899,9 @@ class InvPhyTrainerWarp:
         # Visualize the whole simulation using current set of parameters in the physical simulator
         frame_len = self.dataset.frame_len
         self.simulator.set_init_state(
-            self.simulator.wp_init_vertices, self.simulator.wp_init_velocities
+            self.simulator.wp_init_vertices,
+            self.simulator.wp_init_velocities,
+            reset_contact_state=True,
         )
         prev_x = wp.to_torch(
             self.simulator.wp_states[0].wp_x, requires_grad=False
@@ -2181,7 +2193,9 @@ class InvPhyTrainerWarp:
         # Visualize the whole simulation using current set of parameters in the physical simulator
         frame_len = self.dataset.frame_len
         self.simulator.set_init_state(
-            self.simulator.wp_init_vertices, self.simulator.wp_init_velocities
+            self.simulator.wp_init_vertices,
+            self.simulator.wp_init_velocities,
+            reset_contact_state=True,
         )
         prev_x = wp.to_torch(
             self.simulator.wp_states[0].wp_x, requires_grad=False

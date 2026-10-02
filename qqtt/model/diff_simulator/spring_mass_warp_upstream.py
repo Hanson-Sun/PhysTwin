@@ -1,9 +1,11 @@
 import torch
 from qqtt.utils import logger, cfg
 import warp as wp
+from . import contact as contact_law
 
 wp.init()
 wp.set_device("cuda:0")
+wp.load_module(contact_law, device=wp.get_device("cuda:0"), recursive=True)
 if not cfg.use_graph:
     wp.config.mode = "debug"
     wp.config.verbose = True
@@ -69,6 +71,9 @@ class State:
         )
         self.wp_contact_x_prev = wp.zeros_like(self.wp_contact_x, requires_grad=False)
         self.wp_contact_v = wp.zeros_like(self.wp_contact_x, requires_grad=False)
+        # Elastic tangential displacement is part of the physical state: it is
+        # carried between substeps and remains differentiable through Warp's tape.
+        self.wp_contact_tangent = wp.zeros_like(wp_init_vertices, requires_grad=True)
 
     def clear_forces(self):
         self.wp_vertice_forces.zero_()
@@ -232,31 +237,32 @@ def controller_contact_force(
     contact_radius: float,
     activation_radius: float,
     release_radius: float,
-    contact_stiffness: float,
-    contact_friction: float,
+    contact_stiffness: wp.array(dtype=wp.float32),
+    contact_friction: wp.array(dtype=wp.float32),
+    dt: float,
+    stick_displacement_in: wp.array(dtype=wp.vec3),
     contact_active: wp.array(dtype=wp.int32),
     contact_count: wp.array(dtype=wp.int32),
     active_count: wp.array(dtype=wp.int32),
     f: wp.array(dtype=wp.vec3),
-    normal_force_out: wp.array(dtype=wp.vec3),
-    friction_force_out: wp.array(dtype=wp.vec3),
+    stick_displacement_out: wp.array(dtype=wp.vec3),
 ):
-    """Apply unilateral normal contact and capped tangential friction.
-    Contact stiffness is mass-normalized so penetration does not scale with
-    object mass: F = (k_base * m_i) * pen, a = F/m_i = k_base*pen.
-    With m_i=1 the behaviour is identical to the pre-mass-field baseline.
+    """Apply normal contact plus one-coefficient elastic stick/slip friction.
+
+    Tangential displacement persists through contact, allowing static friction
+    at zero relative velocity; its elastic force is bounded by ``mu*N``.
     """
     object_idx = wp.tid()
     object_position = x[object_idx]
     object_velocity = v[object_idx]
-    # Mass-normalize to keep visual non-penetration independent of (learned) mass.
-    # Base stiffness k_base was tuned for m=1, so effective k = k_base * m_i.
     mass_i = wp.max(masses[object_idx], 1e-6)
-    stiffness = contact_stiffness * mass_i
-    friction = contact_friction
+    stiffness = wp.exp(contact_stiffness[0]) * mass_i
+    friction = wp.clamp(contact_friction[0], low=0.0, high=2.0)
     total_force = wp.vec3(0.0, 0.0, 0.0)
     total_normal_force = wp.vec3(0.0, 0.0, 0.0)
-    total_friction_force = wp.vec3(0.0, 0.0, 0.0)
+    total_normal_load = float(0.0)
+    weighted_tangent_displacement = wp.vec3(0.0, 0.0, 0.0)
+    weighted_tangent_velocity = wp.vec3(0.0, 0.0, 0.0)
     was_active = contact_active[object_idx] != 0
     has_activation = int(0)
     has_release = int(0)
@@ -293,26 +299,32 @@ def controller_contact_force(
             if penetration > 0.0:
                 normal = delta / wp.max(distance, 1e-6)
                 normal_force = stiffness * penetration
-                normal_component = normal_force * normal
-                total_normal_force += normal_component
-                total_force += normal_component
+                total_normal_force += normal_force * normal
+                total_normal_load += normal_force
+                total_force += normal_force * normal
 
                 relative_velocity = object_velocity - controller_v[controller_idx]
-                tangential_velocity = relative_velocity - wp.dot(relative_velocity, normal) * normal
-                tangential_speed = wp.length(tangential_velocity)
-                if tangential_speed > 1e-6:
-                    friction_limit = friction * normal_force
-                    requested_friction = tangential_speed * stiffness
-                    friction_force = friction_limit * wp.tanh(
-                        requested_friction / wp.max(friction_limit, 1e-8)
-                    )
-                    friction_component = -friction_force * tangential_velocity / tangential_speed
-                    total_friction_force += friction_component
-                    total_force += friction_component
+                tangent_velocity = relative_velocity - wp.dot(relative_velocity, normal) * normal
+                prior_displacement = stick_displacement_in[object_idx]
+                tangent_displacement = prior_displacement - wp.dot(prior_displacement, normal) * normal
+                weighted_tangent_displacement += normal_force * tangent_displacement
+                weighted_tangent_velocity += normal_force * tangent_velocity
                 wp.atomic_add(contact_count, 0, 1)
-    normal_force_out[object_idx] = total_normal_force
-    friction_force_out[object_idx] = total_friction_force
-    wp.atomic_add(f, object_idx, total_force)
+
+    total_friction_force = wp.vec3(0.0, 0.0, 0.0)
+    next_stick_displacement = wp.vec3(0.0, 0.0, 0.0)
+    if is_active and total_normal_load > 1e-8:
+        tangent_velocity = weighted_tangent_velocity / total_normal_load
+        prior_displacement = weighted_tangent_displacement / total_normal_load
+        total_friction_force, next_stick_displacement = contact_law.elastic_stick_slip(
+            prior_displacement,
+            tangent_velocity,
+            dt,
+            stiffness,
+            friction * total_normal_load,
+        )
+    stick_displacement_out[object_idx] = next_stick_displacement
+    wp.atomic_add(f, object_idx, total_force + total_friction_force)
 
 
 @wp.kernel
@@ -330,24 +342,23 @@ def controller_contact_force_fixed(
     release_radius: float,
     contact_stiffness: float,
     contact_friction: float,
+    dt: float,
+    stick_displacement_in: wp.array(dtype=wp.vec3),
     contact_active: wp.array(dtype=wp.int32),
     contact_count: wp.array(dtype=wp.int32),
     active_count: wp.array(dtype=wp.int32),
     f: wp.array(dtype=wp.vec3),
+    stick_displacement_out: wp.array(dtype=wp.vec3),
 ):
-    """Apply fixed contact for CMA without calibration component buffers.
-    Mass-normalized like the learnable variant.
-    """
+    """Fixed-parameter stick/slip contact used by CMA and inference."""
     object_idx = wp.tid()
     object_position = x[object_idx]
     object_velocity = v[object_idx]
-    # Mass-normalize: effective stiffness scales with per-vertex mass so that
-    # penetration depth `pen = m*a/k_eff` stays independent of global/local mass.
-    _mass_i = wp.max(masses[object_idx], 1e-6)
-    _stiffness_eff = contact_stiffness * _mass_i
-    # Shadow names used below so the remainder of the kernel is unchanged.
-    contact_stiffness = _stiffness_eff
+    stiffness = contact_stiffness * wp.max(masses[object_idx], 1e-6)
     total_force = wp.vec3(0.0, 0.0, 0.0)
+    total_normal_load = float(0.0)
+    weighted_tangent_displacement = wp.vec3(0.0, 0.0, 0.0)
+    weighted_tangent_velocity = wp.vec3(0.0, 0.0, 0.0)
     was_active = contact_active[object_idx] != 0
     has_activation = int(0)
     has_release = int(0)
@@ -358,8 +369,7 @@ def controller_contact_force_fixed(
         closest = closest_point_on_segment(
             object_position, controller_x_prev[controller_idx], controller_x[controller_idx]
         )
-        delta = object_position - closest
-        distance = wp.length(delta)
+        distance = wp.length(object_position - closest)
         if distance <= activation_radius:
             has_activation = 1
         if distance <= release_radius:
@@ -383,39 +393,32 @@ def controller_contact_force_fixed(
             penetration = contact_radius - distance
             if penetration > 0.0:
                 normal = delta / wp.max(distance, 1e-6)
-                normal_force = contact_stiffness * penetration
+                normal_force = stiffness * penetration
+                total_normal_load += normal_force
                 total_force += normal_force * normal
-
                 relative_velocity = object_velocity - controller_v[controller_idx]
-                tangential_velocity = relative_velocity - wp.dot(relative_velocity, normal) * normal
-                tangential_speed = wp.length(tangential_velocity)
-                if tangential_speed > 1e-6:
-                    friction_limit = contact_friction * normal_force
-                    requested_friction = tangential_speed * contact_stiffness
-                    friction_force = friction_limit * wp.tanh(
-                        requested_friction / wp.max(friction_limit, 1e-8)
-                    )
-                    total_force -= friction_force * tangential_velocity / tangential_speed
+                tangent_velocity = relative_velocity - wp.dot(relative_velocity, normal) * normal
+                prior_displacement = stick_displacement_in[object_idx]
+                tangent_displacement = prior_displacement - wp.dot(prior_displacement, normal) * normal
+                weighted_tangent_displacement += normal_force * tangent_displacement
+                weighted_tangent_velocity += normal_force * tangent_velocity
                 wp.atomic_add(contact_count, 0, 1)
-    wp.atomic_add(f, object_idx, total_force)
 
-
-@wp.kernel
-def apply_controller_contact_calibration(
-    normal_force: wp.array(dtype=wp.vec3),
-    friction_force: wp.array(dtype=wp.vec3),
-    contact_stiffness: wp.array(dtype=wp.float32),
-    contact_friction: wp.array(dtype=wp.float32),
-    base_stiffness: float,
-    base_friction: float,
-    f: wp.array(dtype=wp.vec3),
-):
-    tid = wp.tid()
-    stiffness_scale = wp.exp(contact_stiffness[0]) / base_stiffness
-    friction_scale = wp.clamp(contact_friction[0], low=0.0, high=2.0) / wp.max(base_friction, 1e-6)
-    correction = (stiffness_scale - 1.0) * normal_force[tid]
-    correction += (friction_scale - 1.0) * friction_force[tid]
-    wp.atomic_add(f, tid, correction)
+    friction_force = wp.vec3(0.0, 0.0, 0.0)
+    next_stick_displacement = wp.vec3(0.0, 0.0, 0.0)
+    if is_active and total_normal_load > 1e-8:
+        tangent_velocity = weighted_tangent_velocity / total_normal_load
+        prior_displacement = weighted_tangent_displacement / total_normal_load
+        friction = wp.clamp(contact_friction, 0.0, 2.0)
+        friction_force, next_stick_displacement = contact_law.elastic_stick_slip(
+            prior_displacement,
+            tangent_velocity,
+            dt,
+            stiffness,
+            friction * total_normal_load,
+        )
+    stick_displacement_out[object_idx] = next_stick_displacement
+    wp.atomic_add(f, object_idx, friction_force)
 
 
 @wp.kernel
@@ -1055,16 +1058,6 @@ class SpringMassSystemWarp:
         self.controller_contact_active = wp.zeros(
             self.num_object_points, dtype=wp.int32, requires_grad=False
         )
-        if self.learn_controller_contact:
-            self.controller_contact_normal_force = wp.zeros_like(
-                self.wp_init_vertices, requires_grad=False
-            )
-            self.controller_contact_friction_force = wp.zeros_like(
-                self.wp_init_vertices, requires_grad=False
-            )
-        else:
-            self.controller_contact_normal_force = None
-            self.controller_contact_friction_force = None
         self.controller_contact_grid = (
             wp.HashGrid(128, 128, 128) if self.controller_contact_enabled else None
         )
@@ -1405,7 +1398,9 @@ class SpringMassSystemWarp:
             outputs=[self.wp_target_control_point],
         )
 
-    def set_init_state(self, wp_x, wp_v, pure_inference=False):
+    def set_init_state(
+        self, wp_x, wp_v, pure_inference=False, reset_contact_state=False
+    ):
         # Detach and clone and set requires_grad=True
         assert (
             self.num_object_points == wp_x.shape[0]
@@ -1437,6 +1432,18 @@ class SpringMassSystemWarp:
                 dim=self.num_object_points,
                 inputs=[wp_v],
                 outputs=[self.wp_states[0].wp_v],
+            )
+
+        if reset_contact_state:
+            self.controller_contact_active.zero_()
+            for state in self.wp_states:
+                state.wp_contact_tangent.zero_()
+        else:
+            wp.launch(
+                copy_vec3,
+                dim=self.num_object_points,
+                inputs=[self.wp_states[-1].wp_contact_tangent],
+                outputs=[self.wp_states[0].wp_contact_tangent],
             )
 
     def set_acc_count(self, acc_count):
@@ -1592,8 +1599,18 @@ class SpringMassSystemWarp:
                     self.controller_contact_radius,
                     self.controller_contact_activation_radius,
                     self.controller_contact_release_radius,
-                    self.controller_contact_stiffness,
-                    self.controller_contact_friction,
+                    (
+                        self.wp_controller_contact_stiffness
+                        if self.learn_controller_contact
+                        else self.controller_contact_stiffness
+                    ),
+                    (
+                        self.wp_controller_contact_friction
+                        if self.learn_controller_contact
+                        else self.controller_contact_friction
+                    ),
+                    self.dt,
+                    self.wp_states[i].wp_contact_tangent,
                     self.controller_contact_active,
                     self.controller_contact_count,
                     self.controller_active_contact_count,
@@ -1605,29 +1622,18 @@ class SpringMassSystemWarp:
                         inputs=contact_inputs,
                         outputs=[
                             self.wp_states[i].wp_vertice_forces,
-                            self.controller_contact_normal_force,
-                            self.controller_contact_friction_force,
+                            self.wp_states[i + 1].wp_contact_tangent,
                         ],
-                    )
-                    wp.launch(
-                        apply_controller_contact_calibration,
-                        dim=self.num_object_points,
-                        inputs=[
-                            self.controller_contact_normal_force,
-                            self.controller_contact_friction_force,
-                            self.wp_controller_contact_stiffness,
-                            self.wp_controller_contact_friction,
-                            self.controller_contact_stiffness,
-                            self.controller_contact_friction,
-                        ],
-                        outputs=[self.wp_states[i].wp_vertice_forces],
                     )
                 else:
                     wp.launch(
                         contact_kernel,
                         dim=self.num_object_points,
                         inputs=contact_inputs,
-                        outputs=[self.wp_states[i].wp_vertice_forces],
+                        outputs=[
+                            self.wp_states[i].wp_vertice_forces,
+                            self.wp_states[i + 1].wp_contact_tangent,
+                        ],
                     )
 
             wp.launch(
@@ -1812,6 +1818,9 @@ class SpringMassSystemWarp:
             inputs=[friction],
             outputs=[self.wp_controller_contact_friction],
         )
+        self.controller_contact_stiffness = float(contact_stiffness.reshape(-1)[0].item())
+        self.controller_contact_friction = float(contact_friction.reshape(-1)[0].item())
+
 
     def get_mass(self):
         """Return current per-vertex masses as a detached torch tensor (num_object_points, on cfg.device)."""

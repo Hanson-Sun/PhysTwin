@@ -705,10 +705,18 @@ class InvPhyTrainerWarp:
             controller_massnodes_single=n_vert_single_ctrl,
             controller_rest_location=controller_points[0],
             number_of_instance=1,
+            controller_contact_friction=float(
+                checkpoint.get(
+                    "controller_contact_friction",
+                    torch.tensor(cfg.controller_contact_friction),
+                ).item()
+            ),
         )
 
         self.simulator.set_init_state(
-            self.simulator.wp_init_vertices, self.simulator.wp_init_velocities
+            self.simulator.wp_init_vertices,
+            self.simulator.wp_init_velocities,
+            reset_contact_state=True,
         )
 
         if self.simulator.object_collision_flag:
