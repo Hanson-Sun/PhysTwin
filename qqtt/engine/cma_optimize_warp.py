@@ -252,7 +252,11 @@ class OptimizerCMA:
 
         std = 1 / 6
         es = cma.CMAEvolutionStrategy(x_init, std, {"bounds": [0.0, 1.0], "seed": 42})
-        es.optimize(self.objective, iterations=max_iter)
+
+        # Drive the generations by hand instead of calling es.optimize():
+        # pycma's callback cannot terminate the loop, so per-generation stall
+        # detection is not reachable through the public optimize() path.
+        self._run_generations(es, max_iter)
 
         # Get the results
         res = es.result
@@ -301,6 +305,89 @@ class OptimizerCMA:
         # Save out all the initialized parameters
         with open(f"{cfg.base_dir}/optimal_params.pkl", "wb") as f:
             pickle.dump(optimal_results, f)
+
+    @staticmethod
+    def _es_callbacks(es):
+        """Return the callback list that es.optimize() installs internally.
+
+        Keeps progress logging identical to the optimize() path. Falls back to
+        no callbacks if the private helper is unavailable in some pycma version.
+        """
+        try:
+            return list(es._prepare_callback_list(None))
+        except Exception:
+            return []
+
+    def _run_generations(self, es, max_iter):
+        """Run CMA-ES generations, optionally stopping early on a stall.
+
+        Disabled by default (cma_early_stop_patience == 0). When enabled, the
+        search stops once the best objective has not improved by at least
+        cma_early_stop_min_delta (relative) for cma_early_stop_patience
+        generations, and never before cma_early_stop_min_generations.
+
+        Stopping is lossless: es.result keeps the best candidate ever
+        evaluated, not the last one.
+        """
+        patience = int(getattr(cfg, "cma_early_stop_patience", 0) or 0)
+        min_delta = float(getattr(cfg, "cma_early_stop_min_delta", 0.0) or 0.0)
+        min_generations = int(getattr(cfg, "cma_early_stop_min_generations", 0) or 0)
+        callbacks = self._es_callbacks(es)
+
+        generation = 0
+        num_evaluations = 0
+        best_objective = None
+        stalled_generations = 0
+
+        while generation < max_iter and not es.stop():
+            candidates = es.ask()
+            fit_values = [self.objective(candidate) for candidate in candidates]
+            num_evaluations += len(fit_values)
+            es.tell(candidates, fit_values)
+            generation += 1
+            for callback in callbacks:
+                callback(es)
+
+            # Invalid candidates are counted, not silently averaged in: a run
+            # where most of the population blows up should not look like a
+            # plateau that is worth reporting as convergence.
+            num_invalid = sum(
+                1 for value in fit_values if value >= self.INVALID_OBJECTIVE
+            )
+            current_best = float(es.result[1])
+            improved = best_objective is None or (
+                current_best < best_objective * (1.0 - min_delta)
+            )
+            if improved:
+                best_objective = (
+                    current_best
+                    if best_objective is None
+                    else min(best_objective, current_best)
+                )
+                stalled_generations = 0
+            else:
+                stalled_generations += 1
+
+            logger.info(
+                f"[CMA]: Generation {generation}/{max_iter}, best objective "
+                f"{current_best:.6g}, evals {num_evaluations}, invalid "
+                f"{num_invalid}/{len(fit_values)}, stalled "
+                f"{stalled_generations} generation(s)"
+            )
+
+            if (
+                patience > 0
+                and generation >= min_generations
+                and stalled_generations >= patience
+            ):
+                logger.info(
+                    f"[CMA]: Early stopping at generation {generation}: no "
+                    f"improvement >= {min_delta:.1%} over best objective "
+                    f"{best_objective:.6g} for {stalled_generations} generations "
+                    f"({num_evaluations} evaluations of {max_iter * len(candidates)} "
+                    f"at full budget)"
+                )
+                break
 
     def objective(self, parameters):
         try:
