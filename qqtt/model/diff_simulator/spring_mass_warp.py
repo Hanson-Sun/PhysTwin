@@ -1,9 +1,11 @@
 import torch
 from qqtt.utils import logger, cfg
 import warp as wp
+from . import contact as contact_law
 
 wp.init()
 wp.set_device("cuda:0")
+wp.load_module(contact_law, device=wp.get_device("cuda:0"), recursive=True)
 if not cfg.use_graph:
     wp.config.mode = "debug"
     wp.config.verbose = True
@@ -32,6 +34,7 @@ class State:
             (num_control_points), dtype=wp.vec3, requires_grad=False
         )
         self.wp_control_v = wp.zeros_like(self.wp_control_x, requires_grad=False)
+        self.wp_contact_tangent = wp.zeros_like(wp_init_vertices, requires_grad=True)
     def clear_forces(self):
         self.wp_vertice_forces.zero_()
 
@@ -81,10 +84,13 @@ def batched_controller_contact_force(
     release_radius: float,
     contact_stiffness: float,
     contact_friction: float,
+    dt: float,
+    stick_displacement_in: wp.array(dtype=wp.vec3),
     contact_active: wp.array(dtype=wp.int32),
     contact_count: wp.array(dtype=wp.int32),
     active_count: wp.array(dtype=wp.int32),
     f: wp.array(dtype=wp.vec3),
+    stick_displacement_out: wp.array(dtype=wp.vec3),
 ):
     object_idx = wp.tid()
     instance_idx = object_idx // object_massnode_single
@@ -111,6 +117,9 @@ def batched_controller_contact_force(
         wp.atomic_add(active_count, 0, 1)
 
     total_force = wp.vec3(0.0, 0.0, 0.0)
+    total_normal_load = float(0.0)
+    weighted_normal = wp.vec3(0.0, 0.0, 0.0)
+    weighted_tangent_velocity = wp.vec3(0.0, 0.0, 0.0)
     if is_active:
         neighbors = wp.hash_grid_query(controller_grid, object_position, contact_radius)
         for controller_idx in neighbors:
@@ -122,18 +131,32 @@ def batched_controller_contact_force(
                     normal = delta / wp.max(distance, 1e-6)
                     normal_force = contact_stiffness * penetration
                     total_force += normal_force * normal
+                    total_normal_load += normal_force
+                    weighted_normal += normal_force * normal
                     relative_velocity = object_velocity - controller_v[controller_idx]
                     tangential_velocity = relative_velocity - wp.dot(relative_velocity, normal) * normal
-                    tangential_speed = wp.length(tangential_velocity)
-                    if tangential_speed > 1e-6:
-                        friction_limit = contact_friction * normal_force
-                        requested_friction = tangential_speed * contact_stiffness
-                        friction_force = friction_limit * wp.tanh(
-                            requested_friction / wp.max(friction_limit, 1e-8)
-                        )
-                        total_force -= friction_force * tangential_velocity / tangential_speed
+                    weighted_tangent_velocity += normal_force * tangential_velocity
                     wp.atomic_add(contact_count, 0, 1)
-    wp.atomic_add(f, object_idx, total_force)
+
+    friction_force = wp.vec3(0.0, 0.0, 0.0)
+    next_stick_displacement = wp.vec3(0.0, 0.0, 0.0)
+    if is_active and total_normal_load > 1e-8:
+        average_normal = weighted_normal / total_normal_load
+        average_normal = average_normal / wp.max(wp.length(average_normal), 1e-8)
+        tangent_velocity = weighted_tangent_velocity / total_normal_load
+        tangent_velocity -= wp.dot(tangent_velocity, average_normal) * average_normal
+        prior_displacement = stick_displacement_in[object_idx]
+        prior_displacement -= wp.dot(prior_displacement, average_normal) * average_normal
+        friction = wp.clamp(contact_friction, 0.0, 2.0)
+        friction_force, next_stick_displacement = contact_law.elastic_stick_slip(
+            prior_displacement,
+            tangent_velocity,
+            dt,
+            contact_stiffness,
+            friction * total_normal_load,
+        )
+    stick_displacement_out[object_idx] = next_stick_displacement
+    wp.atomic_add(f, object_idx, total_force + friction_force)
 
 
 @wp.kernel
@@ -686,6 +709,7 @@ class SpringMassSystemWarp:
         controller_massnodes_single, 
         controller_rest_location,
         number_of_instance,
+        controller_contact_friction=None,
         sim_force_mode=SIM_FORCE_MODE_GATHER,
     ):
         logger.info(f"[SIMULATION]: Initialize the Spring-Mass System")
@@ -861,7 +885,11 @@ class SpringMassSystemWarp:
         if self.controller_contact_activation_radius > self.controller_contact_release_radius:
             raise ValueError("controller contact activation radius must not exceed release radius")
         self.controller_contact_stiffness = float(getattr(cfg, "controller_contact_stiffness", 3e4))
-        self.controller_contact_friction = float(getattr(cfg, "controller_contact_friction", 0.3))
+        self.controller_contact_friction = float(
+            getattr(cfg, "controller_contact_friction", 0.3)
+            if controller_contact_friction is None
+            else controller_contact_friction
+        )
         self.controller_contact_grid = wp.HashGrid(128, 128, 128)
         self.controller_contact_active = wp.zeros(
             self.object_massnode_total, dtype=wp.int32, requires_grad=False
@@ -925,7 +953,7 @@ class SpringMassSystemWarp:
             outputs=[self.wp_target_control_point],
         )
 
-    def set_init_state(self, wp_x, wp_v):
+    def set_init_state(self, wp_x, wp_v, reset_contact_state=False):
         assert (
             self.object_massnode_total == wp_x.shape[0]
             and self.object_massnode_total == self.wp_states[0].wp_x.shape[0]
@@ -943,6 +971,17 @@ class SpringMassSystemWarp:
             inputs=[wp_v],
             outputs=[self.wp_states[0].wp_v],
         )
+        if reset_contact_state:
+            self.controller_contact_active.zero_()
+            for state in self.wp_states:
+                state.wp_contact_tangent.zero_()
+        else:
+            wp.launch(
+                copy_vec3,
+                dim=self.object_massnode_total,
+                inputs=[self.wp_states[-1].wp_contact_tangent],
+                outputs=[self.wp_states[0].wp_contact_tangent],
+            )
 
     def update_collision_graph(self):
         #pyh build a big hash grid over all instances are ok as long as the offset is big
@@ -1077,11 +1116,16 @@ class SpringMassSystemWarp:
                     self.controller_contact_release_radius,
                     self.controller_contact_stiffness,
                     self.controller_contact_friction,
+                    self.dt,
+                    self.wp_states[i].wp_contact_tangent,
                     self.controller_contact_active,
                     self.controller_contact_count,
                     self.controller_active_contact_count,
                 ],
-                outputs=[self.wp_states[i].wp_vertice_forces],
+                outputs=[
+                    self.wp_states[i].wp_vertice_forces,
+                    self.wp_states[i + 1].wp_contact_tangent,
+                ],
             )
 
             wp.launch(
