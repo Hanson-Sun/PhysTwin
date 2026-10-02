@@ -988,9 +988,7 @@ class InvPhyTrainerWarp:
         )
 
         self.simulator.set_init_state(
-            self.simulator.wp_init_vertices,
-            self.simulator.wp_init_velocities,
-            reset_contact_state=True,
+            self.simulator.wp_init_vertices, self.simulator.wp_init_velocities
         )
 
         if self.simulator.object_collision_flag:
