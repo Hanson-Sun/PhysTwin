@@ -1,3 +1,6 @@
+we should test fixed clamp on object in warp (fixed to object points within radius, drop if outside radius, gate and release on squeeze) and see if that is good. 
+check interior points? the controller points move right through the object
+
 fix grip for EVERYTHING!! is there no contact friction?? what is going on
 the test suite is kind of long lets fix that too
 

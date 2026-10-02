@@ -27,6 +27,17 @@ class State:
         self.wp_x = wp.zeros_like(wp_init_vertices, requires_grad=True)
         self.wp_v_before_collision = wp.zeros_like(wp_init_vertices, requires_grad=True)
         self.wp_v_before_ground = wp.zeros_like(wp_init_vertices, requires_grad=True)
+        # Friction is a velocity constraint, so each stage needs its own array
+        # rather than writing back into ``wp_v_before_ground``. These MUST be
+        # per-substep: a single shared buffer is written once per substep on the
+        # same tape, which makes the adjoint accumulate 2**num_substeps and
+        # overflow to inf (NaN gradient) within one step().
+        self.wp_v_after_controller_friction = wp.zeros_like(
+            wp_init_vertices, requires_grad=True
+        )
+        self.wp_v_after_ground_friction = wp.zeros_like(
+            wp_init_vertices, requires_grad=True
+        )
         self.wp_v = wp.zeros_like(self.wp_x, requires_grad=True)
         self.wp_vertice_forces = wp.zeros_like(self.wp_x, requires_grad=True)
         # No need to compute the gradient for the control points
@@ -34,7 +45,6 @@ class State:
             (num_control_points), dtype=wp.vec3, requires_grad=False
         )
         self.wp_control_v = wp.zeros_like(self.wp_control_x, requires_grad=False)
-        self.wp_contact_tangent = wp.zeros_like(wp_init_vertices, requires_grad=True)
     def clear_forces(self):
         self.wp_vertice_forces.zero_()
 
@@ -83,21 +93,27 @@ def batched_controller_contact_force(
     activation_radius: float,
     release_radius: float,
     contact_stiffness: float,
-    contact_friction: float,
-    dt: float,
-    stick_displacement_in: wp.array(dtype=wp.vec3),
     contact_active: wp.array(dtype=wp.int32),
     contact_count: wp.array(dtype=wp.int32),
     active_count: wp.array(dtype=wp.int32),
     f: wp.array(dtype=wp.vec3),
-    stick_displacement_out: wp.array(dtype=wp.vec3),
+    contact_normal_out: wp.array(dtype=wp.vec3),
+    contact_load_out: wp.array(dtype=wp.float32),
+    contact_surf_v_out: wp.array(dtype=wp.vec3),
 ):
+    """Accumulate normal contact forces and publish the contact frame.
+
+    Friction is NOT applied here. The load-weighted contact normal, the total
+    normal load and the load-weighted controller velocity are written to
+    ``*_out`` for ``apply_controller_friction`` to consume once the particle
+    velocity exists. Those buffers are written and read inside the same substep,
+    so a single shared buffer per field is enough.
+    """
     object_idx = wp.tid()
     instance_idx = object_idx // object_massnode_single
     first_controller = instance_idx * controller_massnode_single
     last_controller = first_controller + controller_massnode_single
     object_position = x[object_idx]
-    object_velocity = v[object_idx]
     was_active = contact_active[object_idx] != 0
     has_activation = int(0)
     has_release = int(0)
@@ -117,9 +133,9 @@ def batched_controller_contact_force(
         wp.atomic_add(active_count, 0, 1)
 
     total_force = wp.vec3(0.0, 0.0, 0.0)
-    total_normal_load = float(0.0)
     weighted_normal = wp.vec3(0.0, 0.0, 0.0)
-    weighted_tangent_velocity = wp.vec3(0.0, 0.0, 0.0)
+    weighted_surf_v = wp.vec3(0.0, 0.0, 0.0)
+    total_normal_load = float(0.0)
     if is_active:
         neighbors = wp.hash_grid_query(controller_grid, object_position, contact_radius)
         for controller_idx in neighbors:
@@ -133,30 +149,23 @@ def batched_controller_contact_force(
                     total_force += normal_force * normal
                     total_normal_load += normal_force
                     weighted_normal += normal_force * normal
-                    relative_velocity = object_velocity - controller_v[controller_idx]
-                    tangential_velocity = relative_velocity - wp.dot(relative_velocity, normal) * normal
-                    weighted_tangent_velocity += normal_force * tangential_velocity
+                    weighted_surf_v += normal_force * controller_v[controller_idx]
                     wp.atomic_add(contact_count, 0, 1)
+    wp.atomic_add(f, object_idx, total_force)
 
-    friction_force = wp.vec3(0.0, 0.0, 0.0)
-    next_stick_displacement = wp.vec3(0.0, 0.0, 0.0)
-    if is_active and total_normal_load > 1e-8:
-        average_normal = weighted_normal / total_normal_load
-        average_normal = average_normal / wp.max(wp.length(average_normal), 1e-8)
-        tangent_velocity = weighted_tangent_velocity / total_normal_load
-        tangent_velocity -= wp.dot(tangent_velocity, average_normal) * average_normal
-        prior_displacement = stick_displacement_in[object_idx]
-        prior_displacement -= wp.dot(prior_displacement, average_normal) * average_normal
-        friction = wp.clamp(contact_friction, 0.0, 2.0)
-        friction_force, next_stick_displacement = contact_law.elastic_stick_slip(
-            prior_displacement,
-            tangent_velocity,
-            dt,
-            contact_stiffness,
-            friction * total_normal_load,
-        )
-    stick_displacement_out[object_idx] = next_stick_displacement
-    wp.atomic_add(f, object_idx, total_force + friction_force)
+    # Opposed contacts of equal load (a symmetric pinch on one particle) sum to
+    # a zero weighted normal. Normalising that would pick a direction out of
+    # rounding noise and let the tangent projection become a no-op, so friction
+    # would act along the contact normal. Publish nothing in that case: a zero
+    # load makes coulomb_project the identity.
+    if total_normal_load > 1e-8 and wp.length(weighted_normal) > 1e-8 * total_normal_load:
+        contact_normal_out[object_idx] = weighted_normal / wp.length(weighted_normal)
+        contact_load_out[object_idx] = total_normal_load
+        contact_surf_v_out[object_idx] = weighted_surf_v / total_normal_load
+    else:
+        contact_normal_out[object_idx] = wp.vec3(0.0, 0.0, 0.0)
+        contact_load_out[object_idx] = 0.0
+        contact_surf_v_out[object_idx] = wp.vec3(0.0, 0.0, 0.0)
 
 
 @wp.kernel
@@ -600,50 +609,85 @@ def build_resting_collision_pairs(
             resting_collision_pairs[index][i] = wp.bool(1)
 
 @wp.kernel
-def ground_friction_force(
+def apply_controller_friction(
+    v_in: wp.array(dtype=wp.vec3),
+    masses: wp.array(dtype=wp.float32),
+    object_massnode_single: int,
+    contact_normal: wp.array(dtype=wp.vec3),
+    contact_load: wp.array(dtype=wp.float32),
+    contact_surf_v: wp.array(dtype=wp.vec3),
+    contact_friction: float,
+    dt: float,
+    v_out: wp.array(dtype=wp.vec3),
+):
+    """Stick the particle to the controller within the Coulomb cone."""
+    tid = wp.tid()
+    inst = tid // object_massnode_single
+    local_idx = tid - inst * object_massnode_single
+    # The surface moves, so friction acts on the velocity relative to it.
+    v_rel = v_in[tid] - contact_surf_v[tid]
+    v_out[tid] = contact_law.coulomb_project(
+        v_rel,
+        contact_normal[tid],
+        contact_load[tid],
+        masses[local_idx],
+        contact_friction,
+        dt,
+    ) + contact_surf_v[tid]
+
+
+@wp.kernel
+def apply_ground_friction(
+    v_in: wp.array(dtype=wp.vec3),
     x: wp.array(dtype=wp.vec3),
-    v: wp.array(dtype=wp.vec3),
-    masses: wp.array(dtype=float),
+    masses: wp.array(dtype=wp.float32),
+    object_massnode_single: int,
     collide_fric: wp.array(dtype=float),
     dt: float,
     reverse_factor: float,
     contact_smoothing: float,
-    forces: wp.array(dtype=wp.vec3),
+    v_out: wp.array(dtype=wp.vec3),
 ):
+    """Friction against the static ground plane.
+
+    The normal load reuses the sigmoid contact weight and penetration term the
+    previous force-level kernel used, so the grip strength is unchanged; only
+    how it is applied differs. Because the mass cancels between the normal load
+    and the impulse limit, the result is independent of the particle mass:
+
+        limit = mu * contact_weight * (GRAVITY + penetration/dt^2) * dt
+
+    The contact test uses the post-force velocity, so it predicts the position
+    this substep will actually reach rather than the pre-force one.
+    """
     tid = wp.tid()
-    position = x[tid]
-    velocity = v[tid]
+    inst = tid // object_massnode_single
+    local_idx = tid - inst * object_massnode_single
     normal = wp.vec3(0.0, 0.0, 1.0) * reverse_factor
-    next_signed_z = (position[2] + velocity[2] * dt) * reverse_factor
+    next_signed_z = (x[tid][2] + v_in[tid][2] * dt) * reverse_factor
     # Keep the activation band narrow: points farther than four smoothing
     # widths from the plane still receive exactly zero ground friction.
-    if next_signed_z <= 4.0 * contact_smoothing:
-        contact_weight = 1.0 / (
-            1.0
-            + wp.exp(
-                (next_signed_z - 4.0 * contact_smoothing) / contact_smoothing
-            )
+    if next_signed_z > 4.0 * contact_smoothing:
+        v_out[tid] = v_in[tid]
+        return
+    contact_weight = 1.0 / (
+        1.0
+        + wp.exp(
+            (next_signed_z - 4.0 * contact_smoothing) / contact_smoothing
         )
-        tangent_velocity = velocity - wp.dot(velocity, normal) * normal
-        tangent_speed = wp.length(tangent_velocity)
-        mass = wp.max(masses[tid], 1e-6)
-        penetration = wp.max(-next_signed_z, 0.0)
-        normal_force = contact_weight * mass * (
-            GROUND_GRAVITY + penetration / wp.max(dt * dt, 1e-12)
-        )
-        friction_limit = wp.clamp(collide_fric[0], low=0.0, high=2.0) * normal_force
-        requested_friction = mass * tangent_speed / wp.max(dt, 1e-6)
-        # Smoothly saturate at mu*N while preserving the low-speed stopping
-        # force. This replaces the nondifferentiable min(mu*N, m*v/dt).
-        friction_force = friction_limit * wp.tanh(
-            requested_friction / wp.max(friction_limit, 1e-8)
-        )
-        if tangent_speed > 1e-8:
-            wp.atomic_sub(
-                forces,
-                tid,
-                friction_force * tangent_velocity / tangent_speed,
-            )
+    )
+    penetration = wp.max(-next_signed_z, 0.0)
+    normal_load = contact_weight * wp.max(masses[local_idx], 1e-6) * (
+        GROUND_GRAVITY + penetration / wp.max(dt * dt, 1e-12)
+    )
+    v_out[tid] = contact_law.coulomb_project(
+        v_in[tid],
+        normal,
+        normal_load,
+        masses[local_idx],
+        wp.clamp(collide_fric[0], low=0.0, high=2.0),
+        dt,
+    )
 
 
 @wp.kernel
@@ -885,6 +929,8 @@ class SpringMassSystemWarp:
         if self.controller_contact_activation_radius > self.controller_contact_release_radius:
             raise ValueError("controller contact activation radius must not exceed release radius")
         self.controller_contact_stiffness = float(getattr(cfg, "controller_contact_stiffness", 3e4))
+        # ``controller_contact_friction`` overrides the config when supplied, so a
+        # CMA-searched or checkpoint-restored value can be used for one run.
         self.controller_contact_friction = float(
             getattr(cfg, "controller_contact_friction", 0.3)
             if controller_contact_friction is None
@@ -896,6 +942,20 @@ class SpringMassSystemWarp:
         )
         self.controller_contact_count = wp.zeros(1, dtype=wp.int32, requires_grad=False)
         self.controller_active_contact_count = wp.zeros(1, dtype=wp.int32, requires_grad=False)
+
+        # Contact frame published by batched_controller_contact_force and consumed
+        # by apply_controller_friction. Both happen inside the same substep, so a
+        # single buffer per field is enough -- no per-substep history.
+        self.wp_contact_normal = wp.zeros(
+            self.object_massnode_total, dtype=wp.vec3, requires_grad=False
+        )
+        self.wp_contact_load = wp.zeros(
+            self.object_massnode_total, dtype=wp.float32, requires_grad=False
+        )
+        self.wp_contact_surf_v = wp.zeros(
+            self.object_massnode_total, dtype=wp.vec3, requires_grad=False
+        )
+        
   
         # Preallocating the warp parameters
         self.wp_states = []
@@ -953,7 +1013,7 @@ class SpringMassSystemWarp:
             outputs=[self.wp_target_control_point],
         )
 
-    def set_init_state(self, wp_x, wp_v, reset_contact_state=False):
+    def set_init_state(self, wp_x, wp_v):
         assert (
             self.object_massnode_total == wp_x.shape[0]
             and self.object_massnode_total == self.wp_states[0].wp_x.shape[0]
@@ -971,17 +1031,6 @@ class SpringMassSystemWarp:
             inputs=[wp_v],
             outputs=[self.wp_states[0].wp_v],
         )
-        if reset_contact_state:
-            self.controller_contact_active.zero_()
-            for state in self.wp_states:
-                state.wp_contact_tangent.zero_()
-        else:
-            wp.launch(
-                copy_vec3,
-                dim=self.object_massnode_total,
-                inputs=[self.wp_states[-1].wp_contact_tangent],
-                outputs=[self.wp_states[0].wp_contact_tangent],
-            )
 
     def update_collision_graph(self):
         #pyh build a big hash grid over all instances are ok as long as the offset is big
@@ -1115,32 +1164,16 @@ class SpringMassSystemWarp:
                     self.controller_contact_activation_radius,
                     self.controller_contact_release_radius,
                     self.controller_contact_stiffness,
-                    self.controller_contact_friction,
-                    self.dt,
-                    self.wp_states[i].wp_contact_tangent,
                     self.controller_contact_active,
                     self.controller_contact_count,
                     self.controller_active_contact_count,
                 ],
                 outputs=[
                     self.wp_states[i].wp_vertice_forces,
-                    self.wp_states[i + 1].wp_contact_tangent,
+                    self.wp_contact_normal,
+                    self.wp_contact_load,
+                    self.wp_contact_surf_v,
                 ],
-            )
-
-            wp.launch(
-                ground_friction_force,
-                dim=self.object_massnode_total,
-                inputs=[
-                    self.wp_states[i].wp_x,
-                    self.wp_states[i].wp_v,
-                    self.wp_masses,
-                    self.wp_collide_fric,
-                    self.dt,
-                    self.reverse_factor,
-                    self.ground_contact_smoothing,
-                ],
-                outputs=[self.wp_states[i].wp_vertice_forces],
             )
 
             if self.object_collision_flag:
@@ -1188,17 +1221,52 @@ class SpringMassSystemWarp:
                     outputs=[self.wp_states[i].wp_v_before_ground],
                 )
 
+            # Friction is a velocity constraint, so it runs after the velocity
+            # exists. Each kernel reads and writes a different array to keep the
+            # autograd tape free of in-place double writes.
+            wp.launch(
+                kernel=apply_controller_friction,
+                dim=self.object_massnode_total,
+                inputs=[
+                    self.wp_states[i].wp_v_before_ground,
+                    self.wp_masses,
+                    self.object_massnode_single,
+                    self.wp_contact_normal,
+                    self.wp_contact_load,
+                    self.wp_contact_surf_v,
+                    self.controller_contact_friction,
+                    self.dt,
+                ],
+                outputs=[self.wp_states[i].wp_v_after_controller_friction],
+            )
+
+            wp.launch(
+                kernel=apply_ground_friction,
+                dim=self.object_massnode_total,
+                inputs=[
+                    self.wp_states[i].wp_v_after_controller_friction,
+                    self.wp_states[i].wp_x,
+                    self.wp_masses,
+                    self.object_massnode_single,
+                    self.wp_collide_fric,
+                    self.dt,
+                    self.reverse_factor,
+                    self.ground_contact_smoothing,
+                ],
+                outputs=[self.wp_states[i].wp_v_after_ground_friction],
+            )
+
             # Update the x and v
             wp.launch(
                 kernel=integrate_ground_collision,
                 dim=self.object_massnode_total,
                 inputs=[
                     self.wp_states[i].wp_x,
-                    self.wp_states[i].wp_v_before_ground,
+                    self.wp_states[i].wp_v_after_ground_friction,
                     self.wp_collide_elas,
                     self.dt,
                     self.reverse_factor,
                 ],
                 outputs=[self.wp_states[i + 1].wp_x, self.wp_states[i + 1].wp_v],
             )
-        
+
