@@ -56,38 +56,30 @@ The command writes
 `final_data.pkl`, `metadata.json`, `calibrate.pkl`, and intermediate data under
 `<output_dir>/my_case/`.
 
-## Shape Prior Backends (new: `carve` / `poisson` alongside `trellis`)
+## Shape Prior Backends (`trellis` / `interior`)
 
-**What changed:** in addition to `trellis` (generative image-to-3D), two deterministic backends were added. All write the same watertight `shape/object.glb` consumed by alignment / interior sampling.
+**What changed:** the shape-prior stage either generates a mesh (`trellis`, generative image-to-3D) or skips mesh generation entirely and populates interior points directly from masks and depth (`interior`, `data_process/interior_sample.py`). The former `carve`/`poisson` mesh backends were removed — their only volumetric consumer was interior-point sampling, which `interior` now serves without a watertight mesh, a mesh-repair stage, or the alignment stage.
 
-**User action:** none required — defaults to `trellis`. Opt in per-case via the 4th column of `data_config.csv` or `--shape_generator {carve|poisson|trellis}`.
-
-Shape-prior generation writes the watertight object mesh that alignment and
-interior-point sampling consume (`shape/object.glb`). The backend is chosen per
-case by the optional fourth column of `data_config.csv`; a missing or empty
-column falls back to `trellis`.
+**User action:** none required — defaults to `trellis`. Opt in per-case via the 4th column of `data_config.csv` or `--shape_generator {trellis|interior}`.
 
 - `trellis` — generative image-to-3D from a single upscaled, segmented RGB crop
   (`data_process/shape_prior.py`). Fast, but the geometry is hallucinated, so
-  thin or obliquely viewed objects can come out wrong.
-- `carve` — deterministic depth-carved space carving
-  (`data_process/shape_carve.py`). Carves free space from the object masks, depth
-  maps, and camera poses, force-occupies the observed points, and extracts a
-  watertight mesh. It also preserves the calibrated observed surface points for
-  inspection and downstream refinement. It uses only masks, depth, and calibration, so it does not
-  depend on the generative stage. Well-observed faces are accurate, but faces
-  seen at grazing incidence (e.g. a horizontal top from near-horizontal cameras)
-  and hidden sides are only weakly constrained, so they come out slightly domed
-  or approximate rather than perfectly flat.
-- `poisson` — smooth Poisson reconstruction from the calibrated back-projected
-  surface points. It estimates normals, reconstructs a closed surface, trims
-  low-density extrapolation, and rejects the result unless it is a valid
-  watertight volume. Select it with `--shape_generator poisson`.
+  thin or obliquely viewed objects can come out wrong. Produces the aligned
+  `shape/matching/final_mesh.glb` used by interior sampling and the Gaussian
+  stage's `shape_prior.glb`.
+- `interior` — mesh-free interior-point sampling (`data_process/interior_sample.py`).
+  Carves a voxel occupancy grid (inside every object mask AND never in front of
+  the observed depth), erodes one voxel from the free-space boundary, and writes
+  one jittered point per kept voxel to `shape/interior_points.npy` (+ `.ply` for
+  inspection). No mesh, no alignment stage, no watertightness repair; runs in
+  seconds. Thin geometry (cloth, rope) has no interior at voxel resolution and
+  yields zero interior points, which is correct. The Gaussian stage falls back
+  to the observed point cloud (`observation.ply`) since no mesh exists.
 
-`data_config.csv` selects `carve` for the heavy-end box:
+`data_config.csv` selects `interior` for the sim cases:
 
 ```csv
-sim_rigid_box_heavy_end, rectangle box, True,carve
+sim_rigid_box_heavy_end, rectangle box, True,interior
 ```
 
 Override the configured backend for one run with `--shape_generator`:
@@ -95,30 +87,60 @@ Override the configured backend for one run with `--shape_generator`:
 ```bash
 python scripts/run_case_pipeline.py \
 	--case_name sim_rigid_box_heavy_end \
-	--shape_generator carve
+	--shape_generator interior
 ```
 
-Run the carver on its own to inspect the mesh (it writes `object.glb`,
-`object.ply`, the calibrated observed points in `observed_points.ply` and
-`observed_points_filtered.ply`, and, with `--visualize`, a turntable video):
+Run the sampler on its own to inspect the points (it writes
+`interior_points.npy`, `interior_points.ply`, `interior_points.mp4` and
+`interior_stats.json` into `shape/`):
 
 ```bash
-python data_process/shape_carve.py \
+python data_process/interior_sample.py \
 	--base_path data/different_types \
-	--case_name sim_rigid_box_heavy_end \
-	--output_dir data/different_types/sim_rigid_box_heavy_end/shape
+	--case_name sim_rigid_box_heavy_end
 ```
+
+### Interior-fill diagnostics
+
+Every run prints (and stores in `shape/interior_stats.json`) the numbers that
+say whether the fill is good, plus a `interior_points.mp4` turntable of the
+carved hull (gray, lower half cut away) with the interior points (red) inside.
+Pass `--no_visualize` to skip the video.
+
+- `interior_fill_ratio` — interior volume / occupied volume. Near 1 means a
+  solid body; low values mean the object is thin at the current voxel size.
+- `blobs` / `largest_blob_fraction` — number of separate interior regions and
+  the share of the biggest one (1.0 = one solid blob).
+- `mean_observed_distance` — mean distance from an interior point to the nearest
+  observed surface point. Large values mean the interior is mostly volume no
+  camera ever saw (visual-hull bulge).
+- `observed_without_interior` — fraction of observed surface with no interior
+  point within `--support_radius` (10 mm). These are thin parts (fingers, rope,
+  cloth edges) that cannot hold interior samples at the current voxel size.
+- `points_below_floor` — must always be 0; anything else means points are being
+  generated underneath the support surface.
+- `observed_bbox_extent_m` / `interior_bbox_extent_m` — the interior should not
+  bulge past the observation.
+
+### Floor awareness
+
+The support surface is `z = 0` and **`z > 0` is below the floor** in this
+dataset's world frame (the same convention `data_process_sample.py` and
+`align.py` use when they snap `z > 0` points back to `z = 0`). Carving treats
+everything below the floor as free space, and observed points below it are
+dropped as depth noise, so no interior point is ever generated inside the
+table. Use `--floor_z` if the support surface is not at `z = 0`.
 
 Useful options:
 
-- `--voxel_size` — voxel edge in metres; the detail/resolution trade-off.
-- Ground flattening is enabled by default at `z=0`; use `--ground_z` to change
-  the support height or `--no_flatten_ground` to disable it.
+- `--voxel_size` — voxel edge in metres; the detail/resolution trade-off (and
+  the effective minimum feature size that can hold interior points).
+- `--max_points` — cap on the number of interior points written (default 10000,
+  matching the previous `volume_mesh` sampling budget).
 - `--mask_erode` — pixels to erode each object mask before carving; raise it to
-  trim the segmentation fringe and tighten the mesh.
-- `--extract` — `isosurface` (default; marching cubes on the signed distance
-  field, smooth and watertight) or `blocky` (exact but visibly stepped).
-- `--allow_open` — write a non-watertight mesh instead of failing the stage.
+  trim the segmentation fringe.
+- `--depth_margin` — voxels closer than this to the observed surface are not
+  carved (depth-noise tolerance).
 
 ## Train Warp Parameters
 

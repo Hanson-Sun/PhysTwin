@@ -13,7 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BASE_PATH = REPO_ROOT / "data" / "different_types"
 DEFAULT_CONFIG = REPO_ROOT / "data_config.csv"
 DEFAULT_GAUSSIAN_ROOT = REPO_ROOT / "gaussian_output"
-SHAPE_GENERATORS = ("trellis", "carve", "poisson")
+SHAPE_GENERATORS = ("trellis", "interior")
 
 
 def case_config(
@@ -22,7 +22,7 @@ def case_config(
     """Return (category, shape_prior, shape_generator) for a case.
 
     ``data_config.csv`` rows are ``case_name, category, shape_prior`` plus an
-    optional fourth ``shape_generator`` column (``trellis``/``carve``/``poisson``);
+    optional fourth ``shape_generator`` column (``trellis``/``interior``);
     a missing or empty column returns ``None`` so the caller can apply its own
     default.
     """
@@ -77,8 +77,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--shape_generator",
         choices=SHAPE_GENERATORS,
         default=None,
-        help="Shape-prior backend: TRELLIS image-to-3D, deterministic depth "
-        "reconstruction, or Poisson reconstruction. Defaults to the case's "
+        help="Shape-prior backend: TRELLIS image-to-3D or mesh-free "
+        "interior-point sampling from masks and depth. Defaults to the case's "
         "data_config.csv column, then to trellis.",
     )
     parser.add_argument("--cma_max_iter", type=int, default=20)

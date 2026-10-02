@@ -17,7 +17,7 @@ SMOKE_MODULES = (
     "tests.test_controller_proximity",
     "tests.test_soft_body",
     "tests.test_sim_export",
-    "tests.test_shape_carve_ground",
+    "tests.test_interior_sample",
 )
 
 

@@ -15,9 +15,17 @@ LOG_DIR="${LOG_DIR:-logs}"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/run_$(date +%Y%m%d_%H%M%S).log"
 
+# Matches tqdm progress lines (extended regex), any of:
+#   1) the stats suffix: "[00:10<00:12,  4.50it/s" / "[1:02:03, 1.5s/it" / "[00:05, ?it/s"
+#      - elapsed time, optional "<remaining", then a rate of a number or "?",
+#        followed by any unit name in either "<unit>/s" or "s/<unit>" form
+#        (it, step, iter, kit, ...)
+#   2) the bar prefix: " 45%|████   |"
+TQDM_RE='\[[0-9:]+(<[0-9:?]+)?, +(\?|[0-9.]+)[a-zA-Z_]*(/s|s/[a-zA-Z_]+)|[0-9]+%[|]'
+
 # Send everything (stdout + stderr) to the terminal untouched, and to the log
 # file with tqdm's carriage-return progress updates split into lines and dropped.
-exec > >(tee >(tr '\r' '\n' | grep --line-buffered -v 'step/s' >> "$LOG_FILE")) 2>&1
+exec > >(tee >(tr '\r' '\n' | grep --line-buffered -Ev "$TQDM_RE" >> "$LOG_FILE")) 2>&1
 export PYTHONUNBUFFERED=1  # flush prints immediately so the log stays in order
 
 echo "Logging to $LOG_FILE"
