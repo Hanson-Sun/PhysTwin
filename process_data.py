@@ -34,11 +34,11 @@ parser.add_argument("--shape_prior", action="store_true", default=False)
 parser.add_argument(
     "--shape_generator",
     type=str,
-    choices=["trellis", "carve", "poisson"],
+    choices=["trellis", "interior"],
     default="trellis",
-    help="Shape-prior backend: TRELLIS image-to-3D (default), voxel-carved "
-    "deterministic depth reconstruction, or Poisson reconstruction "
-    "(data_process/shape_carve.py).",
+    help="Shape-prior backend: TRELLIS image-to-3D (default) or mesh-free "
+    "interior-point sampling from masks and depth "
+    "(data_process/interior_sample.py; skips mesh generation and alignment).",
 )
 parser.add_argument("--skip_segmentation", action="store_true")
 parser.add_argument(
@@ -138,14 +138,12 @@ if PROCESS_SEG:
 if PROCESS_SHAPE_PRIOR and SHAPE_PRIOR:
     existDir(f"{base_path}/{case_name}/shape")
 
-    if args.shape_generator in {"carve", "poisson"}:
-        # Deterministic shape-prior generation needs only the masks, depth maps,
+    if args.shape_generator == "interior":
+        # Mesh-free interior-point sampling needs only the masks, depth maps,
         # and camera calibration produced by segmentation.
-        with Timer("Deterministic Shape Prior Generation"):
+        with Timer("Interior Point Sampling"):
             run_stage(
-                f"{shlex.quote(sys.executable)} ./data_process/shape_carve.py --base_path {shlex.quote(base_path)} --case_name {shlex.quote(case_name)} --controller_names {shlex.quote(','.join(CONTROLLER_NAMES))}"
-                + (" --method poisson" if args.shape_generator == "poisson" else "")
-                + (" --visualize" if args.visualize else "")
+                f"{shlex.quote(sys.executable)} ./data_process/interior_sample.py --base_path {shlex.quote(base_path)} --case_name {shlex.quote(case_name)} --controller_names {shlex.quote(','.join(CONTROLLER_NAMES))}"
             )
     else:
         # Get the mask path for the image
@@ -206,7 +204,7 @@ if PROCESS_3D:
 
 if PROCESS_ALIGN and SHAPE_PRIOR and args.shape_generator == "trellis":
     # TRELLIS shape priors are not in the calibrated world frame, so align them
-    # with the observed point cloud. Deterministic depth priors already are.
+    # with the observed point cloud. The interior backend needs no mesh at all.
     with Timer("Alignment"):
         run_stage(
             f"{shlex.quote(sys.executable)} ./data_process/align.py --base_path {shlex.quote(base_path)} --case_name {shlex.quote(case_name)} --controller_names {shlex.quote(','.join(sorted(CONTROLLER_NAMES)))}"

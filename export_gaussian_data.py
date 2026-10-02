@@ -85,11 +85,20 @@ with open("data_config.csv", newline="", encoding="utf-8") as csvfile:
             pickle.dump(data, f)
 
         # Prepare the shape initialization data
-        # If with shape prior, then copy the shape prior data
+        # If with shape prior, then copy the shape prior data. The mesh only
+        # exists for TRELLIS cases; the interior backend falls back to the
+        # observed point cloud in the Gaussian stage.
         if shape_prior.lower() == "true":
-            os.system(
-                f"cp {base_path}/{case_name}/shape/matching/final_mesh.glb {output_path}/{case_name}/shape_prior.glb"
-            )
+            final_mesh = f"{base_path}/{case_name}/shape/matching/final_mesh.glb"
+            if os.path.exists(final_mesh):
+                os.system(
+                    f"cp {final_mesh} {output_path}/{case_name}/shape_prior.glb"
+                )
+            else:
+                print(
+                    f"Skipping shape_prior.glb for {case_name}: "
+                    f"{final_mesh} not found (observation.ply fallback applies)"
+                )
         # Save the original pcd data into the world coordinate system
         obs_points = []
         obs_colors = []

@@ -17,7 +17,7 @@ parser.add_argument(
 )
 parser.add_argument("--case_name", type=str, required=True)
 parser.add_argument("--shape_prior", action="store_true", default=False)
-parser.add_argument("--shape_generator", choices=["trellis", "carve", "poisson"], default="trellis")
+parser.add_argument("--shape_generator", choices=["trellis", "interior"], default="trellis")
 parser.add_argument("--no_visualize", action="store_true")
 parser.add_argument("--num_surface_points", type=int, default=1024)
 parser.add_argument("--volume_sample_size", type=float, default=0.005)
@@ -57,20 +57,23 @@ def process_unique_points(track_data):
     object_points[object_points[..., 2] > 0, 2] = 0
 
     if SHAPE_PRIOR:
-        shape_mesh_path = (
-            f"{base_path}/{case_name}/shape/object.glb"
-            if args.shape_generator in {"carve", "poisson"}
-            else f"{base_path}/{case_name}/shape/matching/final_mesh.glb"
-        )
-        trimesh_mesh = trimesh.load(shape_mesh_path, force="mesh")
-        # Sample the surface points
-        surface_points, _ = trimesh.sample.sample_surface(
-            trimesh_mesh, num_surface_points
-        )
-        # Sample the interior points
-        interior_points = trimesh.sample.volume_mesh(trimesh_mesh, 10000)
+        if args.shape_generator == "interior":
+            # Mesh-free backend: interior points were carved from masks+depth by
+            # interior_sample.py; the tracked object points cover the surface.
+            interior_points = np.load(
+                f"{base_path}/{case_name}/shape/interior_points.npy"
+            ).reshape(-1, 3)
+            surface_points = np.zeros((0, 3))
+        else:
+            shape_mesh_path = f"{base_path}/{case_name}/shape/matching/final_mesh.glb"
+            trimesh_mesh = trimesh.load(shape_mesh_path, force="mesh")
+            # Sample the surface points
+            surface_points, _ = trimesh.sample.sample_surface(
+                trimesh_mesh, num_surface_points
+            )
+            # Sample the interior points
+            interior_points = trimesh.sample.volume_mesh(trimesh_mesh, 10000)
 
-    if SHAPE_PRIOR:
         all_points = np.concatenate(
             [surface_points, interior_points, object_points[0]], axis=0
         )
@@ -109,7 +112,11 @@ def process_unique_points(track_data):
                 grid_flag[grid_index] = 1
                 final_interior_points.append(interior_points[i])
         all_points = np.concatenate(
-            [final_surface_points, final_interior_points, object_points[0][index]],
+            [
+                np.array(final_surface_points).reshape(-1, 3),
+                np.array(final_interior_points).reshape(-1, 3),
+                object_points[0][index],
+            ],
             axis=0,
         )
     else:
@@ -150,8 +157,8 @@ def process_unique_points(track_data):
     track_data["object_visibilities"] = object_visibilities[:, index]
     track_data["object_motions_valid"] = object_motions_valid[:, index]
     if SHAPE_PRIOR:
-        track_data["surface_points"] = np.array(final_surface_points)
-        track_data["interior_points"] = np.array(final_interior_points)
+        track_data["surface_points"] = np.array(final_surface_points).reshape(-1, 3)
+        track_data["interior_points"] = np.array(final_interior_points).reshape(-1, 3)
     else:
         track_data["surface_points"] = np.zeros((0, 3))
         track_data["interior_points"] = np.zeros((0, 3))

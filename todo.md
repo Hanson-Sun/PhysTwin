@@ -1,4 +1,5 @@
 fix grip for EVERYTHING!! is there no contact friction?? what is going on
+the test suite is kind of long lets fix that too
 
 
 make lift trajectory hold on the top for a second before ending.

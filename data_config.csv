@@ -20,13 +20,13 @@ single_push_rope_1,twine,True,trellis
 single_push_rope_4,twine,True,trellis
 single_push_sloth,sloth,True,trellis
 weird_package,package,False,trellis
-sim_rope, twine, True, carve
-sim_rigid_box, box, True, poisson
-sim_rigid_box_heavy_end, rectangle box, True, poisson
-sim_rigid_box_grip_lift, box, True, poisson
-sim_soft_ball, blue ball, True, poisson
-sim_soft_ball_grip_lift, blue ball, True, poisson
-sim_soft_sloth_grip_lift, sloth stuffed animal, True, trellis
-sim_soft_seal_grip_lift, seal stuffed animal, True, trellis
-sim_soft_octopus_grip_lift, octopus stuffed animal, True, trellis
-sim_soft_teddy_bear_grip_lift, teddy bear stuffed animal, True, trellis
+sim_rope, twine, True, interior
+sim_rigid_box, box, True, interior
+sim_rigid_box_heavy_end, rectangle box, True, interior
+sim_rigid_box_grip_lift, box, True, interior
+sim_soft_ball, blue ball, True, interior
+sim_soft_ball_grip_lift, blue ball, True, interior
+sim_soft_sloth_grip_lift, sloth stuffed animal, True, interior
+sim_soft_seal_grip_lift, seal stuffed animal, True, interior
+sim_soft_octopus_grip_lift, octopus stuffed animal, True, interior
+sim_soft_teddy_bear_grip_lift, teddy bear stuffed animal, True, interior
