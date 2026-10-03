@@ -45,3 +45,6 @@ mass_anchor_seed: 42
 mass_anchor_method: fps
 early_stop_min_delta: 0.01
 early_stop_patience: 20
+# CMA-ES: stop after 5 generations without a >=1% improvement.
+cma_early_stop_min_delta: 0.01
+cma_early_stop_patience: 5

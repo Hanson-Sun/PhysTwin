@@ -33,7 +33,6 @@ class CmaEarlyStopTests(unittest.TestCase):
             for name in (
                 "cma_early_stop_patience",
                 "cma_early_stop_min_delta",
-                "cma_early_stop_min_generations",
             )
         }
 
@@ -61,7 +60,6 @@ class CmaEarlyStopTests(unittest.TestCase):
         # counts as stalled and the run must stop as soon as it is allowed.
         cfg.cma_early_stop_patience = 2
         cfg.cma_early_stop_min_delta = 1.0
-        cfg.cma_early_stop_min_generations = 4
 
         seen = []
 
@@ -73,9 +71,10 @@ class CmaEarlyStopTests(unittest.TestCase):
         strategy = make_strategy()
         optimizer._run_generations(strategy, 20)
 
-        # Floor of 4 generations is respected despite a patience of 2.
-        self.assertEqual(strategy.countiter, 4)
-        self.assertEqual(len(seen), 4 * strategy.popsize)
+        # Generation 1 seeds the best; 2 and 3 both stall, so the patience of 2
+        # is met at generation 3.
+        self.assertEqual(strategy.countiter, 3)
+        self.assertEqual(len(seen), 3 * strategy.popsize)
 
     def test_progress_resets_the_stall_counter(self):
         # The best candidate keeps improving (CMA minimizes, so the value
@@ -83,7 +82,6 @@ class CmaEarlyStopTests(unittest.TestCase):
         # the full budget is used.
         cfg.cma_early_stop_patience = 2
         cfg.cma_early_stop_min_delta = 1e-2
-        cfg.cma_early_stop_min_generations = 2
 
         state = {"n": 0}
 
@@ -100,7 +98,6 @@ class CmaEarlyStopTests(unittest.TestCase):
     def test_patience_never_exceeds_budget(self):
         cfg.cma_early_stop_patience = 50
         cfg.cma_early_stop_min_delta = 1.0
-        cfg.cma_early_stop_min_generations = 0
 
         optimizer = make_optimizer(quadratic)
         strategy = make_strategy()

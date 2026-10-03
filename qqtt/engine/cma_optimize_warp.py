@@ -288,13 +288,6 @@ class OptimizerCMA:
         final_dashpot_damping = self.denormalize(optimal_x[9], 0, 200)
         final_global_mass = self.denormalize(optimal_x[10], float(getattr(cfg, "mass_min", 0.1)), float(getattr(cfg, "mass_max", 10.0)))
 
-        # Validate the selected parameters over the full sequence before saving them.
-        self.error_func(
-            optimal_x,
-            visualize=True,
-            video_path=f"{cfg.base_dir}/optimizeCMA/optimal.mp4",
-        )
-
         optimal_results = {}
         optimal_results["global_spring_Y"] = final_global_spring_Y
         optimal_results["object_radius"] = final_object_radius
@@ -310,9 +303,26 @@ class OptimizerCMA:
         optimal_results["dashpot_damping"] = final_dashpot_damping
         optimal_results["global_mass"] = final_global_mass
 
-        # Save out all the initialized parameters
+        # Persist the selected parameters before validating them. The rollout
+        # below is the longest single evaluation in the run and can raise (e.g. a
+        # non-finite state), which must never discard a finished search.
         with open(f"{cfg.base_dir}/optimal_params.pkl", "wb") as f:
             pickle.dump(optimal_results, f)
+
+        # Validate the selected parameters over the full sequence and render the
+        # optimal rollout. Best-effort by design: the parameters are already on
+        # disk, so a failure here costs only the video, not the search.
+        try:
+            self.error_func(
+                optimal_x,
+                visualize=True,
+                video_path=f"{cfg.base_dir}/optimizeCMA/optimal.mp4",
+            )
+        except (FloatingPointError, RuntimeError, ValueError) as error:
+            logger.warning(
+                f"Optimal parameters saved to {cfg.base_dir}/optimal_params.pkl, "
+                f"but the validation rollout failed: {error}"
+            )
 
     @staticmethod
     def _es_callbacks(es):
@@ -332,14 +342,13 @@ class OptimizerCMA:
         Disabled by default (cma_early_stop_patience == 0). When enabled, the
         search stops once the best objective has not improved by at least
         cma_early_stop_min_delta (relative) for cma_early_stop_patience
-        generations, and never before cma_early_stop_min_generations.
+        generations.
 
         Stopping is lossless: es.result keeps the best candidate ever
         evaluated, not the last one.
         """
         patience = int(getattr(cfg, "cma_early_stop_patience", 0) or 0)
         min_delta = float(getattr(cfg, "cma_early_stop_min_delta", 0.0) or 0.0)
-        min_generations = int(getattr(cfg, "cma_early_stop_min_generations", 0) or 0)
         callbacks = self._es_callbacks(es)
 
         generation = 0
@@ -383,11 +392,7 @@ class OptimizerCMA:
                 f"{stalled_generations} generation(s)"
             )
 
-            if (
-                patience > 0
-                and generation >= min_generations
-                and stalled_generations >= patience
-            ):
+            if patience > 0 and stalled_generations >= patience:
                 logger.info(
                     f"[CMA]: Early stopping at generation {generation}: no "
                     f"improvement >= {min_delta:.1%} over best objective "
