@@ -105,6 +105,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skip_warp", action="store_true")
     parser.add_argument("--skip_gaussians", action="store_true")
     parser.add_argument("--skip_cma", action="store_true")
+    parser.add_argument(
+        "--warp_verbose",
+        action="store_true",
+        help="Stream per-parameter gradient/update logging during warp training.",
+    )
     parser.add_argument("--force_prune", action="store_true")
     parser.add_argument("--smoke_test", action="store_true")
     parser.add_argument("--dry_run", action="store_true")
@@ -160,6 +165,7 @@ def main() -> None:
         print(f"Warp iterations: {warp_iterations or '<config default>'}")
         print(f"Gaussian iterations: {gaussian_iterations}")
         print(f"Visualization: {args.visualize}")
+        print(f"Warp verbose: {args.warp_verbose}")
         return
 
     if not args.skip_process:
@@ -200,6 +206,8 @@ def main() -> None:
         if warp_iterations is not None:
             warp_command.extend(["--iterations", str(warp_iterations)])
         warp_command.append("--visualize" if args.visualize else "--no_visualize")
+        if args.warp_verbose:
+            warp_command.append("--verbose")
         run(warp_command, "Warp parameter training")
         require(
             REPO_ROOT / "experiments" / args.case_name / "train" / "training_manifest.json",
