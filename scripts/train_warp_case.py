@@ -15,6 +15,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cma_max_iter", type=int, default=20)
     parser.add_argument("--iterations", type=int)
     parser.add_argument("--skip_cma", action="store_true")
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Stream per-parameter gradient/update logging to the console.",
+    )
     visualization = parser.add_mutually_exclusive_group()
     visualization.add_argument(
         "--visualize",
@@ -59,6 +64,8 @@ def main() -> None:
     if args.iterations is not None:
         train_command.extend(["--iterations", str(args.iterations)])
     train_command.append("--visualize" if args.visualize else "--no_visualize")
+    if args.verbose:
+        train_command.append("--verbose")
     subprocess.run(train_command, check=True)
 
     train_dir = Path("experiments") / args.case_name / "train"
