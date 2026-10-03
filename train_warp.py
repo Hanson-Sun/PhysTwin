@@ -8,6 +8,7 @@ from argparse import ArgumentParser
 import os
 import pickle
 import json
+import logging
 
 
 def set_all_seeds(seed):
@@ -43,6 +44,12 @@ if __name__ == "__main__":
         help="Disable saved training videos.",
     )
     parser.set_defaults(visualize=True)
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print per-parameter gradients/updates and checkpoint chatter "
+        "(still always written to the log file).",
+    )
     args = parser.parse_args()
 
     base_path = args.base_path
@@ -91,6 +98,8 @@ if __name__ == "__main__":
     cfg.overlay_path = f"{base_path}/{case_name}/color"
 
     logger.set_log_file(path=base_dir, name="inv_phy_log")
+    if args.verbose:
+        logger.set_stream_level(logging.DEBUG)
     trainer = InvPhyTrainerWarp(
         data_path=f"{base_path}/{case_name}/final_data.pkl",
         base_dir=base_dir,
