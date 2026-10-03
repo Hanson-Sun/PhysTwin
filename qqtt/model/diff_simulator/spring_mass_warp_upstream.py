@@ -258,9 +258,10 @@ def controller_contact_force(
 ):
     """Apply unilateral normal contact and publish the contact frame.
 
-    Contact stiffness is mass-normalized so penetration does not scale with
-    object mass: F = (k_base * m_i) * pen, a = F/m_i = k_base*pen.
-    With m_i=1 the behaviour is identical to the pre-mass-field baseline.
+    Contact stiffness is absolute (N/m), not mass-normalized: F = K * pen, so
+    grip capacity is ``mu * K * sum(pen)`` and does not depend on how much of the
+    object's mass happens to sit in the contact patch. Per-node penetration is
+    still mass-consistent because a = F/m_i. See tests/test_grip_capacity.py.
 
     Friction is NOT applied here. The load-weighted contact normal, the total
     normal load and the load-weighted controller velocity are written to
@@ -270,10 +271,6 @@ def controller_contact_force(
     """
     object_idx = wp.tid()
     object_position = x[object_idx]
-    # Mass-normalize to keep visual non-penetration independent of (learned) mass.
-    # Base stiffness k_base was tuned for m=1, so effective k = k_base * m_i.
-    mass_i = wp.max(masses[object_idx], 1e-6)
-    stiffness = contact_stiffness * mass_i
     total_force = wp.vec3(0.0, 0.0, 0.0)
     total_normal_force = wp.vec3(0.0, 0.0, 0.0)
     weighted_normal = wp.vec3(0.0, 0.0, 0.0)
@@ -314,7 +311,7 @@ def controller_contact_force(
             penetration = contact_radius - distance
             if penetration > 0.0:
                 normal = delta / wp.max(distance, 1e-6)
-                normal_force = stiffness * penetration
+                normal_force = contact_stiffness * penetration
                 normal_component = normal_force * normal
                 total_normal_force += normal_component
                 total_force += normal_component
@@ -363,17 +360,11 @@ def controller_contact_force_fixed(
     contact_surf_v_out: wp.array(dtype=wp.vec3),
 ):
     """Apply fixed contact for CMA without calibration component buffers.
-    Mass-normalized like the learnable variant. Publishes the same contact
+    Absolute stiffness like the learnable variant. Publishes the same contact
     frame as the learnable variant so friction behaves identically.
     """
     object_idx = wp.tid()
     object_position = x[object_idx]
-    # Mass-normalize: effective stiffness scales with per-vertex mass so that
-    # penetration depth `pen = m*a/k_eff` stays independent of global/local mass.
-    _mass_i = wp.max(masses[object_idx], 1e-6)
-    _stiffness_eff = contact_stiffness * _mass_i
-    # Shadow names used below so the remainder of the kernel is unchanged.
-    contact_stiffness = _stiffness_eff
     total_force = wp.vec3(0.0, 0.0, 0.0)
     weighted_normal = wp.vec3(0.0, 0.0, 0.0)
     weighted_surf_v = wp.vec3(0.0, 0.0, 0.0)
