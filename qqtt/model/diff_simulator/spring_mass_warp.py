@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 from qqtt.utils import logger, cfg
 import warp as wp
@@ -804,6 +805,16 @@ class SpringMassSystemWarp:
         self.wp_masses = wp.from_torch(
             init_masses, dtype=wp.float32, requires_grad=False
         )
+        # spring_Y and dashpot_damping are forces whose stability limits scale with
+        # mass (dashpot*dt/m <~ 2), so with physical node masses both are
+        # mass-normalized: the caller's value stays per unit mass and the force
+        # is scaled by the node mass. This preserves the mass=1 dynamics.
+        ref_mass = float(
+            init_masses[:object_massnodes_single].to(dtype=torch.float64).mean().item()
+        )
+        if not (ref_mass > 0.0) or not np.isfinite(ref_mass):
+            raise ValueError(f"invalid mean object-node mass: {ref_mass}")
+        self.mass_normalization = ref_mass
         self.wp_masks = None #only useful when self-collision is on
         if self_collision:
             if init_masks is None:
@@ -829,7 +840,7 @@ class SpringMassSystemWarp:
         #ones doesnt change 
         self.dt = dt
         self.num_substeps = num_substeps
-        self.dashpot_damping = dashpot_damping
+        self.dashpot_damping = dashpot_damping * ref_mass
         self.drag_damping = drag_damping
         self.collision_dist = collision_dist
         self.reverse_factor = 1.0 if not reverse_z else -1.0
@@ -884,6 +895,9 @@ class SpringMassSystemWarp:
 
         spring_Y_temp = spring_Y.to(device=self.device, dtype=torch.float32).contiguous()
         spring_Y_clamped = spring_Y_temp.clamp(min=self.spring_Y_min, max=self.spring_Y_max)
+        # Clamp in per-unit-mass units, then scale, so spring_Y_min/max keep their
+        # meaning (1e5 means 1e5 N/m per kg).
+        spring_Y_clamped = spring_Y_clamped * ref_mass
 
         self.wp_spring_Y_clamped = wp.from_torch(
             spring_Y_clamped, dtype=wp.float32, requires_grad=False
@@ -928,7 +942,21 @@ class SpringMassSystemWarp:
         )
         if self.controller_contact_activation_radius > self.controller_contact_release_radius:
             raise ValueError("controller contact activation radius must not exceed release radius")
-        self.controller_contact_stiffness = float(getattr(cfg, "controller_contact_stiffness", 3e4))
+        self.controller_contact_stiffness = float(
+            getattr(cfg, "controller_contact_stiffness", 2000.0)
+        )
+        # Unlike spring_Y/dashpot, contact is NOT mass-normalized: friction capacity
+        # must stay absolute to hold the object's weight. That bounds it by
+        # explicit integration, K <~ m*(0.5/dt)^2, which is far below the old
+        # 3e4; exceeding it NaNs mid-episode with no gradient signal.
+        k_max = ref_mass * (0.5 / dt) ** 2
+        if self.controller_contact_stiffness > k_max:
+            raise ValueError(
+                f"controller_contact_stiffness={self.controller_contact_stiffness:.1f} "
+                f"exceeds the explicit-integration limit {k_max:.1f} N/m for a node "
+                f"mass of {ref_mass:.3e} kg at dt={dt}. Contact would blow up. "
+                f"Lower controller_contact_stiffness (cfg default is 2000)."
+            )
         # ``controller_contact_friction`` overrides the config when supplied, so a
         # CMA-searched or checkpoint-restored value can be used for one run.
         self.controller_contact_friction = float(

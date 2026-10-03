@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 from qqtt.utils import logger, cfg
 import warp as wp
@@ -1064,7 +1065,17 @@ class SpringMassSystemWarp:
 
         self.dt = dt
         self.num_substeps = num_substeps
-        self.dashpot_damping = float(dashpot_damping)
+        # spring_Y and dashpot_damping are forces whose stability limits scale with
+        # mass (dashpot*dt/m <~ 2), so with physical node masses both are
+        # mass-normalized: the caller's value stays per unit mass and the force
+        # is scaled by the node mass. This preserves the mass=1 dynamics.
+        ref_mass = float(
+            init_masses[:num_object_points].to(dtype=torch.float64).mean().item()
+        )
+        if not (ref_mass > 0.0) or not np.isfinite(ref_mass):
+            raise ValueError(f"invalid mean object-node mass: {ref_mass}")
+        self.mass_normalization = ref_mass
+        self.dashpot_damping = float(dashpot_damping) * ref_mass
         self.drag_damping = float(drag_damping)
         learn_damping = bool(getattr(cfg, "learn_damping", False)) and not disable_backward
         self.wp_dashpot_damping = wp.from_torch(
@@ -1076,8 +1087,11 @@ class SpringMassSystemWarp:
             requires_grad=learn_damping,
         )
         self.reverse_factor = 1.0 if not reverse_z else -1.0
-        self.spring_Y_min = spring_Y_min
-        self.spring_Y_max = spring_Y_max
+        # Bounds are per unit mass too, so scale by the same reference; otherwise the
+        # absolute lower bound 1e3 exceeds a per-node stiffness and clamps every
+        # spring to the floor.
+        self.spring_Y_min = spring_Y_min * ref_mass
+        self.spring_Y_max = spring_Y_max * ref_mass
 
         if controller_points is None:
             assert num_object_points == self.n_vertices
@@ -1116,9 +1130,19 @@ class SpringMassSystemWarp:
         if self.controller_contact_activation_radius > self.controller_contact_release_radius:
             raise ValueError("controller contact activation radius must not exceed release radius")
         if controller_contact_stiffness is None:
-            controller_contact_stiffness = getattr(cfg, "controller_contact_stiffness", 3e4)
+            controller_contact_stiffness = getattr(cfg, "controller_contact_stiffness", 2000.0)
         if controller_contact_stiffness <= 0.0:
             raise ValueError("controller contact stiffness must be positive")
+        # Unlike spring_Y/dashpot, contact is NOT mass-normalized: friction capacity
+        # must stay absolute to hold the object's weight. That bounds it by
+        # explicit integration, K <~ m*(0.5/dt)^2.
+        k_max = ref_mass * (0.5 / dt) ** 2
+        if controller_contact_stiffness > k_max:
+            raise ValueError(
+                f"controller_contact_stiffness={controller_contact_stiffness:.1f} "
+                f"exceeds the explicit-integration limit {k_max:.1f} N/m for a "
+                f"node mass of {ref_mass:.3e} kg at dt={dt}. Contact would blow up."
+            )
         if controller_contact_friction is None:
             controller_contact_friction = getattr(cfg, "controller_contact_friction", 0.3)
         self.controller_contact_stiffness = float(controller_contact_stiffness)
@@ -1221,8 +1245,10 @@ class SpringMassSystemWarp:
         )
         # --- Learnable mass field (per-vertex or anchored FPS) ---
         self.learn_mass = bool(getattr(cfg, "learn_mass", False))
-        self.mass_min = float(getattr(cfg, "mass_min", 0.1))
-        self.mass_max = float(getattr(cfg, "mass_max", 10.0))
+        # Bounds are relative to the init node mass, not absolute kg: the old absolute
+        # mass_min=0.1 would clamp every node up and restore the huge object.
+        self.mass_min = ref_mass * float(getattr(cfg, "mass_min", 0.1))
+        self.mass_max = ref_mass * float(getattr(cfg, "mass_max", 10.0))
         self.init_mass = float(getattr(cfg, "init_mass", 1.0))
         if self.mass_min <= 0.0 or self.mass_max <= self.mass_min:
             raise ValueError(f"invalid mass bounds min={self.mass_min} max={self.mass_max}")
@@ -1242,7 +1268,8 @@ class SpringMassSystemWarp:
             N = int(num_object_points)
             use_anchor = 0 < K < N and method in ("fps", "random")
             if use_anchor:
-                import numpy as np
+                # numpy is imported at module scope; a local import here would make `np` a
+                # function-local name and shadow it for the whole __init__.
                 pts_np = init_vertices[:N].detach().cpu().numpy().astype(np.float32)
                 if method == "fps":
                     anchor_idx = _fps_indices(pts_np, K, seed=seed)
@@ -1359,8 +1386,12 @@ class SpringMassSystemWarp:
 
         # Parameter to be optimized
         # Damping wp arrays already created above (learn_damping flag)
+        # spring_Y is per unit mass (see above), stored in log space.
         self.wp_spring_Y = wp.from_torch(
-            torch.log(torch.tensor(spring_Y, dtype=torch.float32, device=self.device))
+            torch.log(
+                torch.tensor(spring_Y, dtype=torch.float32, device=self.device)
+                * ref_mass
+            )
             * torch.ones(self.n_springs, dtype=torch.float32, device=self.device),
             requires_grad=True,
         )

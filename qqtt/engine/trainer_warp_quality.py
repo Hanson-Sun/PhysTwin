@@ -33,6 +33,7 @@ from qqtt.model.diff_simulator import (
     SpringMassSystemWarp,
 )
 from qqtt.utils import logger, cfg
+from qqtt.utils.mass_init import uniform_node_masses
 from qqtt.utils.gaussian import (
     remove_gaussians_with_low_opacity,
 )
@@ -179,7 +180,11 @@ class InvPhyTrainerWarp:
             print(f" total springs {len(springs)}")
 
             rest_lengths = np.array(rest_lengths)
-            masses = np.ones(len(points))
+            # ``points`` also holds the controller points appended above, so the
+            # total mass is spread over the object nodes only.
+            masses = uniform_node_masses(
+                n_object_nodes=num_object_points, total_length=len(points)
+            )
 
             points_torch = torch.tensor(points, dtype=torch.float32, device=cfg.device)
             springs_torch = torch.tensor(springs, dtype=torch.int32, device=cfg.device)
@@ -249,7 +254,9 @@ class InvPhyTrainerWarp:
             vertices = np.array(vertices)
             springs = np.array(springs)
             rest_lengths = np.array(rest_lengths)
-            masses = np.ones(len(vertices))
+            masses = uniform_node_masses(
+                n_object_nodes=num_object_points, total_length=len(vertices)
+            )
 
             vertices_torch = torch.tensor(vertices, dtype=torch.float32, device=cfg.device)
             springs_torch = torch.tensor(springs, dtype=torch.int32, device=cfg.device)
