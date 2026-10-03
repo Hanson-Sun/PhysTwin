@@ -30,6 +30,7 @@ from qqtt.model.diff_simulator import (
     SpringMassSystemWarp,
 )
 from qqtt.utils import logger, cfg
+from qqtt.utils.mass_init import uniform_node_masses
 from qqtt.utils.gaussian import (
     build_batch_images_render_view,
     build_instance_selective_render_view,
@@ -331,7 +332,11 @@ class InvPhyTrainerWarp:
             print(f" total springs {len(springs)}")
 
             rest_lengths = np.array(rest_lengths)
-            masses = np.ones(len(points))
+            # ``points`` also holds the controller points appended above, so the
+            # total mass is spread over the object nodes only.
+            masses = uniform_node_masses(
+                n_object_nodes=num_object_points, total_length=len(points)
+            )
             
             # ============================================================
             # 🆕 NEW: Morton reordering section (entire block is new)
@@ -405,7 +410,9 @@ class InvPhyTrainerWarp:
             vertices = np.array(vertices)
             springs = np.array(springs)
             rest_lengths = np.array(rest_lengths)
-            masses = np.ones(len(vertices))
+            masses = uniform_node_masses(
+                n_object_nodes=num_object_points, total_length=len(vertices)
+            )
             
             # ============================================================
             # 🆕 NEW: Morton reordering section (entire block is new)

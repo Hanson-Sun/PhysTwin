@@ -1,5 +1,6 @@
 from qqtt.data import RealData
 from qqtt.utils import logger, cfg
+from qqtt.utils.mass_init import uniform_node_masses
 from qqtt.utils.visualize import visualize_pc
 from qqtt.model.diff_simulator.spring_mass_warp_upstream import SpringMassSystemWarp
 import open3d as o3d
@@ -139,7 +140,11 @@ class OptimizerCMA:
 
             springs = np.array(springs)
             rest_lengths = np.array(rest_lengths)
-            masses = np.ones(len(points))
+            # ``points`` also holds the controller points appended above, so the
+            # total mass is spread over the object nodes only.
+            masses = uniform_node_masses(
+                n_object_nodes=num_object_points, total_length=len(points)
+            )
             return (
                 torch.tensor(points, dtype=torch.float32, device=cfg.device),
                 torch.tensor(springs, dtype=torch.int32, device=cfg.device),
@@ -190,7 +195,10 @@ class OptimizerCMA:
             vertices = np.array(vertices)
             springs = np.array(springs)
             rest_lengths = np.array(rest_lengths)
-            masses = np.ones(len(vertices))
+            # Multi-object branch: every vertex is an object node.
+            masses = uniform_node_masses(
+                n_object_nodes=len(vertices), total_length=len(vertices)
+            )
 
             return (
                 torch.tensor(vertices, dtype=torch.float32, device=cfg.device),

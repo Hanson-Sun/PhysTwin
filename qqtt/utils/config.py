@@ -31,7 +31,11 @@ class Config:
         self.controller_contact_radius = 0.014
         self.controller_contact_activation_radius = 0.014
         self.controller_contact_release_radius = 0.0175
-        self.controller_contact_stiffness = 3e4
+        # Contact stiffness in N/m, deliberately NOT mass-normalized: friction
+        # capacity must stay absolute to hold the object. Bounded by explicit
+        # integration to K <~ m*(0.5/dt)^2, which is ~2.5e3 for physical node
+        # masses, so the old 3e4 was unstable.
+        self.controller_contact_stiffness = 2000.0
         self.controller_contact_friction = 0.3
         self.controller_collider_voxel_size = 0.003
 
@@ -45,6 +49,11 @@ class Config:
         # CoM/total-mass shifts for heavy-end objects.
         self.learn_mass = False
         self.init_mass = 1.0
+        # Total object mass in kg, spread uniformly over the mass nodes. Matches the
+        # MuJoCo soft body that generated the data (mujoco_sim/soft_body.py
+        # DEFAULT_MASS). At 1.0 kg/node an 11k-node object weighed ~115 kN,
+        # which no contact stiffness can hold, so friction grip was impossible.
+        self.object_total_mass = 0.3
         self.mass_min = 0.1
         self.mass_max = 10.0
         self.mass_reg_weight = 1e-4

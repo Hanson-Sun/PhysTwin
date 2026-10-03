@@ -5,11 +5,11 @@
 # Visualization is enabled by default; pass --no_visualize for a headless run.
 # Live Open3D preview has been removed from the simulation path.
 # All output is also written to logs/run_<timestamp>.log (override with LOG_DIR=...).
-# sim_rigid_box sim_rigid_box_grip_lift sim_rigid_box_heavy_end sim_rope sim_soft_ball sim_soft_ball_grip_lift
+# sim_rigid_box sim_rigid_box_grip_lift sim_rigid_box_heavy_end sim_rope sim_soft_ball sim_soft_sloth_grip_lift sim_soft_seal_grip_lift sim_soft_octopus_grip_lift sim_soft_teddy_bear_grip_lift
 
 set -euo pipefail
 
-CASES=(sim_soft_sloth_grip_lift sim_soft_seal_grip_lift sim_soft_octopus_grip_lift sim_soft_teddy_bear_grip_lift)
+CASES=(sim_soft_ball_grip_lift)
 
 LOG_DIR="${LOG_DIR:-logs}"
 mkdir -p "$LOG_DIR"
