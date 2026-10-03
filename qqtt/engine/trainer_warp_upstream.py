@@ -395,7 +395,6 @@ class InvPhyTrainerWarp:
             total_loss = 0.0
             total_controller_contacts = 0
             total_active_controller_contacts = 0
-            max_object_displacement = 0.0
             max_spring_grad_norm = 0.0
             max_gradient_norms = {name: 0.0 for name, _ in self.trainable_parameters}
             epoch_parameter_start = {
@@ -408,7 +407,10 @@ class InvPhyTrainerWarp:
             self.simulator.set_init_state(
                 self.simulator.wp_init_vertices, self.simulator.wp_init_velocities
             )
-            with wp.ScopedTimer("backward"):
+            # print=False: the per-epoch timing is already reported by the
+            # iteration line, and ScopedTimer's own stdout line bypasses the
+            # logger (unformatted, interleaved with tqdm).
+            with wp.ScopedTimer("backward", print=False, synchronize=True) as backward_timer:
                 for j in tqdm(range(1, cfg.train_frame)):
                     self.simulator.set_controller_target(j)
                     if self.simulator.object_collision_flag:
@@ -480,20 +482,6 @@ class InvPhyTrainerWarp:
                     )
                     total_controller_contacts += contact_count
                     total_active_controller_contacts += active_contact_count
-                    object_state = wp.to_torch(
-                        self.simulator.wp_states[-1].wp_x[: self.num_all_points],
-                        requires_grad=False,
-                    )
-                    object_start = wp.to_torch(
-                        self.simulator.wp_states[0].wp_x[: self.num_all_points],
-                        requires_grad=False,
-                    )
-                    object_displacement = torch.linalg.vector_norm(
-                        object_state - object_start, dim=1
-                    ).max().item()
-                    max_object_displacement = max(
-                        max_object_displacement, float(object_displacement)
-                    )
 
                     # --- mass regularization (small, keeps field from exploding) ---
                     if getattr(self.simulator, "learn_mass", False) and self.simulator.wp_log_mass is not None:
@@ -644,7 +632,6 @@ class InvPhyTrainerWarp:
                     ),
                     "controller_contact_count": total_controller_contacts,
                     "controller_active_contact_count": total_active_controller_contacts,
-                    "max_object_displacement": max_object_displacement,
                     "spring_gradient_norm": max_spring_grad_norm,
                     **_mass_log,
                     **{
@@ -659,13 +646,21 @@ class InvPhyTrainerWarp:
                 step=i,
             )
 
+            # Console gets a compact one-liner; the per-parameter gradient and
+            # update dicts are large float reprs and belong in the log file only
+            # (DEBUG), not on every iteration.
             logger.info(
-                f"[Train]: Iteration: {i}, Loss: {total_loss}, "
-                f"controller_contacts={total_controller_contacts}, "
-                f"active_contacts={total_active_controller_contacts}, "
-                f"max_object_displacement={max_object_displacement:.6g}, "
-                f"max_spring_grad_norm={max_spring_grad_norm:.6g}, "
-                f"parameter_updates={parameter_updates}, "
+                f"[Train]: iter {i:4d}  loss {total_loss:.4e}  "
+                f"contacts {total_active_controller_contacts}/{total_controller_contacts}  "
+                f"grad {max_spring_grad_norm:.3g}  "
+                f"{backward_timer.elapsed:.1f}s"
+            )
+            logger.debug(
+                f"[Train]: iter {i} loss={total_loss} "
+                f"chamfer={total_chamfer_loss if cfg.data_type == 'real' else 0.0} "
+                f"track={total_track_loss if cfg.data_type == 'real' else 0.0} "
+                f"max_spring_grad_norm={max_spring_grad_norm} "
+                f"parameter_updates={parameter_updates} "
                 f"max_gradient_norms={max_gradient_norms}"
             )
 
@@ -770,12 +765,12 @@ class InvPhyTrainerWarp:
                     # Save new best model
                     best_model_path = f"{cfg.base_dir}/train/best_{best_epoch}.pth"
                     torch.save(cur_model, best_model_path)
-                    logger.info(
+                    logger.debug(
                         f"Latest best model saved: epoch {best_epoch} with loss {best_loss}"
                     )
 
             torch.save(cur_model, f"{cfg.base_dir}/train/iter_{i}.pth")
-            logger.info(f"[Train]: Saved checkpoint for iteration {i}")
+            logger.debug(f"[Train]: Saved checkpoint for iteration {i}")
 
             if early_stop_patience > 0:
                 if (
@@ -879,7 +874,7 @@ class InvPhyTrainerWarp:
             wp.to_torch(self.simulator.wp_states[0].wp_x, requires_grad=False).cpu()
         ]
 
-        with wp.ScopedTimer("simulate"):
+        with wp.ScopedTimer("simulate", print=False, synchronize=True) as sim_timer:
             for i in tqdm(range(1, frame_len)):
                 if cfg.data_type == "real":
                     self.simulator.set_controller_target(i, pure_inference=True)
@@ -902,6 +897,7 @@ class InvPhyTrainerWarp:
         if self.simulator.controller_contact_enabled:
             self.simulator.controller_contact_grid = training_contact_grid
         vertices = torch.stack(vertices, dim=0)
+        logger.debug(f"[Viz]: replayed {frame_len - 1} frames in {sim_timer.elapsed:.1f}s")
 
         if save_trajectory:
             logger.info(f"Save the trajectory to {save_path}")

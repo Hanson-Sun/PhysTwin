@@ -95,6 +95,7 @@ class ExpLogger(logging.Logger):
             name = time.strftime("%Y_%m%d_%H%M_%S", time.localtime(time.time()))
         super().__init__(name)
         self.setLevel(logging.DEBUG)
+        self.stream_level = logging.INFO
 
         self.set_log_stream()
         self.filehandler = None
@@ -103,7 +104,7 @@ class ExpLogger(logging.Logger):
     def set_log_stream(self):
         self.stearmhandler = logging.StreamHandler()
         self.stearmhandler.setFormatter(SteamFormatter())
-        self.stearmhandler.setLevel(logging.DEBUG)
+        self.stearmhandler.setLevel(self.stream_level)
 
         self.addHandler(self.stearmhandler)
 
@@ -119,7 +120,9 @@ class ExpLogger(logging.Logger):
         )
         self.filehandler = logging.FileHandler(file_path)
         self.filehandler.setFormatter(FileFormatter())
-        self.filehandler.setLevel(logging.INFO)
+        # File keeps DEBUG so per-iteration diagnostics are still recoverable
+        # even though the console stays at INFO.
+        self.filehandler.setLevel(logging.DEBUG)
         self.addHandler(self.filehandler)
 
     @master_only
@@ -136,7 +139,17 @@ class ExpLogger(logging.Logger):
 
     @master_only
     def debug(self, msg, **kwargs) -> None:
+        # Stream handler defaults to DEBUG; per-iteration diagnostics are noisy
+        # (large float reprs) and only useful when actively debugging, so keep
+        # them out of the console unless --log-level debug is passed.
+        if self.stream_level > logging.DEBUG:
+            return None
         return super().debug(msg, **kwargs)
+
+    def set_stream_level(self, level: int) -> None:
+        """Set the console verbosity, independent of the file handler."""
+        self.stream_level = level
+        self.stearmhandler.setLevel(level)
 
     @master_only
     def critical(self, msg, **kwargs) -> None:
