@@ -88,14 +88,10 @@ class Config:
         # must be positive to enable it. Patience is counted in generations
         # (one population = one generation), not evaluations, so the stop
         # threshold does not shift with popsize.
-        # `cma_early_stop_min_generations` floors how long the search must run
-        # before a stall can stop it, so the initial exploratory phase (and
-        # candidates rejected as INVALID_OBJECTIVE) cannot end the run early.
         # Unlike Adam, stopping here is lossless: CMA-ES keeps the best
         # candidate ever evaluated in `es.result`.
         self.cma_early_stop_min_delta = 1e-2 # 1%
-        self.cma_early_stop_patience = 0
-        self.cma_early_stop_min_generations = 5 
+        self.cma_early_stop_patience = 0 
 
         self.reverse_z = True
         self.vp_front = [1, 0, -2]
