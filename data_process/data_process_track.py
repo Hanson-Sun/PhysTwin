@@ -15,8 +15,8 @@ from argparse import ArgumentParser
 try:
     from qqtt.utils.controller_collider import (
         count_visible_controller_frames,
+        controller_depth_consistency,
         fill_occluded_controller_points,
-        points_inside_any_mask,
     )
 except ModuleNotFoundError:
     # data_process_track.py is launched directly by process_data.py, so the
@@ -24,8 +24,8 @@ except ModuleNotFoundError:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from qqtt.utils.controller_collider import (
         count_visible_controller_frames,
+        controller_depth_consistency,
         fill_occluded_controller_points,
-        points_inside_any_mask,
     )
 
 parser = ArgumentParser()
@@ -366,6 +366,7 @@ def get_final_track_data(
     masks=None,
     intrinsics=None,
     w2cs=None,
+    depth_provider=None,
 ):
     object_points = track_data["object_points"]
     object_colors = track_data["object_colors"]
@@ -393,18 +394,28 @@ def get_final_track_data(
         controller_points[:, np.where(keep)[0], :], dense_visibilities
     )
 
-    # A filled frame is a reconstruction, and some land in empty space between
-    # the gripper fingers, where segmentation says nothing is present. Keep only
-    # points that stay inside some camera's controller mask on every frame: the
-    # collider needs a fixed point count per frame, so a drifting point is
-    # dropped whole rather than per frame.
-    drifting_points = 0
-    if masks is not None and intrinsics is not None and w2cs is not None:
-        inside = points_inside_any_mask(
-            dense_controller_points, masks, intrinsics, w2cs
+    # Preserve a fixed point count by pruning whole trajectories. Depth checks
+    # distinguish direct surface support from occlusion and free-space conflict.
+    depth_rejected = 0
+    if all(value is not None for value in (masks, intrinsics, w2cs, depth_provider)):
+        keep_depth, support_fraction, conflict_fraction = controller_depth_consistency(
+            dense_controller_points,
+            masks,
+            intrinsics,
+            w2cs,
+            depth_provider,
+            depth_tolerance=0.004,
+            min_support_fraction=0.7,
+            max_conflict_fraction=0.05,
         )
-        drifting_points = int((~inside.all(axis=0)).sum())
-        dense_controller_points = dense_controller_points[:, inside.all(axis=0), :]
+        depth_rejected = int((~keep_depth).sum())
+        dense_controller_points = dense_controller_points[:, keep_depth, :]
+        print(
+            f"Depth consistency: kept {int(keep_depth.sum())}/"
+            f"{keep_depth.size} tracks; median support="
+            f"{np.median(support_fraction):.1%}, median conflict="
+            f"{np.median(conflict_fraction):.1%}"
+        )
 
     dense_controller_points = dense_controller_points[~np.isnan(
         dense_controller_points).any(axis=2)].reshape(
@@ -413,7 +424,7 @@ def get_final_track_data(
     print(
         f"Dense Controller Point Number: {dense_controller_points.shape[1]} "
         f"(visible in >= {min_visible}/{controller_visibilities.shape[0]} frames, "
-        f"{drifting_points} points outside every mask)"
+        f"{depth_rejected} tracks rejected by depth consistency)"
     )
 
     # Do farthest point sampling on the valid controller points to select the
@@ -552,6 +563,15 @@ if __name__ == "__main__":
     # with open(f"test2.pkl", "rb") as f:
     #     track_data = pickle.load(f)
 
+    depth_cache = {}
+
+    def load_depth_m(frame, camera):
+        key = (frame, camera)
+        if key not in depth_cache:
+            depth = np.load(f"{base_path}/{case_name}/depth/{camera}/{frame}.npy")
+            depth_cache[key] = depth.astype(np.float32) / 1000.0
+        return depth_cache[key]
+
     track_data = get_final_track_data(
         track_data,
         controller_point_count=args.controller_point_count,
@@ -559,6 +579,7 @@ if __name__ == "__main__":
         masks=masks,
         intrinsics=intrinsics,
         w2cs=w2cs,
+        depth_provider=load_depth_m,
     )
 
     with open(f"{base_path}/{case_name}/track_process_data.pkl", "wb") as f:

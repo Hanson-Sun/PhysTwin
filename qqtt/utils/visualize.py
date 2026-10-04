@@ -94,8 +94,6 @@ def visualize_pc(
         px = (intrinsic @ cam.T).T
         uv = (px[:, :2] / px[:, 2:3]).astype(np.int32)
         for x, y in uv:
-            if mirror_saved_frame:
-                x = width - 1 - x
             if 0 <= x < width and 0 <= y < height:
                 cv2.circle(image, (int(x), int(y)), 4, (0, 255, 0), -1)
 
