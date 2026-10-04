@@ -30,3 +30,8 @@ sim_soft_sloth_grip_lift, sloth stuffed animal, True, interior
 sim_soft_seal_grip_lift, seal stuffed animal, True, interior
 sim_soft_octopus_grip_lift, octopus stuffed animal, True, interior
 sim_soft_teddy_bear_grip_lift, teddy bear stuffed animal, True, interior
+sim_soft_ball_push, blue ball, True, interior
+sim_soft_sloth_push, sloth stuffed animal, True, interior
+sim_soft_seal_push, seal stuffed animal, True, interior
+sim_soft_octopus_push, octopus stuffed animal, True, interior
+sim_soft_teddy_bear_push, teddy bear stuffed animal, True, interior

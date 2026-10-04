@@ -8,10 +8,11 @@
 # Warp training runs with --verbose (per-parameter gradients/updates) by default.
 # sim_rigid_box sim_rigid_box_grip_lift sim_rigid_box_heavy_end sim_rope sim_soft_ball sim_soft_sloth_grip_lift sim_soft_seal_grip_lift sim_soft_octopus_grip_lift sim_soft_teddy_bear_grip_lift
 #  sim_soft_seal_grip_lift sim_soft_octopus_grip_lift sim_soft_teddy_bear_grip_lift sim_soft_ball_grip_lift
+# sim_soft_ball_grip_lift sim_soft_sloth_grip_lift
 
 set -euo pipefail
 
-CASES=(sim_soft_ball_grip_lift sim_soft_sloth_grip_lift)
+CASES=( sim_soft_ball_push sim_soft_sloth_push sim_soft_seal_push sim_soft_octopus_push sim_soft_teddy_bear_push)
 
 LOG_DIR="${LOG_DIR:-logs}"
 mkdir -p "$LOG_DIR"
