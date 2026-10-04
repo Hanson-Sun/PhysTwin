@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import time
 import cv2
+from scipy.spatial import cKDTree
 from .config import cfg
 import pyrender
 import trimesh
@@ -14,6 +15,8 @@ def visualize_pc(
     controller_points=None,
     object_visibilities=None,
     object_motions_valid=None,
+    contact_points=None,
+    contact_radius=None,
     visualize=True,
     save_video=False,
     save_path=None,
@@ -37,6 +40,8 @@ def visualize_pc(
         object_motions_valid = object_motions_valid.cpu().numpy()
     if isinstance(controller_points, torch.Tensor):
         controller_points = controller_points.cpu().numpy()
+    if isinstance(contact_points, torch.Tensor):
+        contact_points = contact_points.cpu().numpy()
 
     if object_colors is None:
         object_colors = np.tile(
@@ -61,6 +66,39 @@ def visualize_pc(
             )
 
     # The pcs is a 4d pcd numpy array with shape (n_frames, n_points, 3)
+    def draw_contacts(frame, image):
+        """Circle colliding controller points directly onto the image.
+
+        Drawn in image space rather than as scene geometry: adding geometry to
+        the Open3D scene moves the calibrated pinhole camera, and the markers
+        must land on the composited frame alongside the overlay photo.
+        """
+        if contact_points is None or contact_radius is None:
+            return
+        obj = np.asarray(object_points[frame])
+        obj = obj[np.isfinite(obj).all(axis=1)]
+        claw = np.asarray(contact_points[frame])
+        claw = claw[np.isfinite(claw).all(axis=1)]
+        if len(obj) == 0 or len(claw) == 0:
+            return
+        dist, _ = cKDTree(obj).query(claw, distance_upper_bound=contact_radius)
+        hits = claw[np.isfinite(dist)]
+        if len(hits) == 0:
+            return
+        cam = (w2c @ np.concatenate([hits, np.ones((len(hits), 1))], axis=1).T).T
+        cam = cam[:, :3]  # drop the homogeneous column before applying K
+        front = cam[:, 2] > 1e-6
+        cam, hits = cam[front], hits[front]
+        if len(cam) == 0:
+            return
+        px = (intrinsic @ cam.T).T
+        uv = (px[:, :2] / px[:, 2:3]).astype(np.int32)
+        for x, y in uv:
+            if mirror_saved_frame:
+                x = width - 1 - x
+            if 0 <= x < width and 0 <= y < height:
+                cv2.circle(image, (int(x), int(y)), 4, (0, 255, 0), -1)
+
     vis = o3d.visualization.Visualizer()
     vis.create_window(visible=visualize, width=width, height=height)
 
@@ -142,6 +180,10 @@ def visualize_pc(
                 frame[mask] = overlay[mask]
             # Convert RGB to BGR
             frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            try:
+                draw_contacts(i, frame)
+            except Exception as exc:  # never lose a long run to the overlay
+                print(f"[Viz] contact markers skipped on frame {i}: {exc}")
             video_writer.write(frame)
 
         if visualize:

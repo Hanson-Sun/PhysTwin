@@ -220,6 +220,108 @@ drag_damping: 3           # initial global velocity decay [0,20]
 
 Single flag `learn_damping: true` makes both `dashpot` + `drag` trainable in Adam (2 scalars, `clamp[0,200]`/`[0,20]`, `0.2×lr`, graph-baked). No other change; with `false` behavior is identical to before. Useful for `sim_rope` where `chamfer+track+acc(0.01)` position loss under-constrains velocity — check `wandb` `dashpot_damping`/`drag_damping`. Checkpoints always save/restore both values. No anchored/per-spring field — global only (minimal change).
 
+### Which parameters are learnable
+
+There are two independent optimization stages with **different, overlapping** parameter sets. `scripts/train_warp_case.py` runs CMA-ES first, then Adam.
+
+**CMA-ES** (`qqtt/engine/cma_optimize_warp.py`) optimizes 11 normalized dimensions in `[0,1]`, denormalized in `error_func`:
+
+| # | Parameter | Range | Meaning |
+|---|---|---|---|
+| 0 | `init_spring_Y` | `[spring_Y_min, spring_Y_max]` | global spring Young's modulus |
+| 1 | `object_radius` | `[0.01, 0.05]` | object-object spring search radius |
+| 2 | `object_max_neighbours` | `[10, 50]` | object-object spring neighbour cap |
+| 3 | `collide_elas` | `[0, 1]` | object restitution |
+| 4 | `collide_fric` | `[0.3, 2.0]` | ground friction |
+| 5 | `collide_object_elas` | `[0, 1]` | object-object restitution |
+| 6 | `collide_object_fric` | `[0, 2]` | object-object friction |
+| 7 | `collision_dist` | `[0.01, 0.05]` | self-collision query radius |
+| 8 | `drag_damping` | `[0, 20]` | global velocity decay |
+| 9 | `dashpot_damping` | `[0, 200]` | per-spring Kelvin-Voigt damping |
+| 10 | `global_mass` | `[mass_min, mass_max]` | maps to `init_mass` |
+
+`controller_radius` and `controller_max_neighbours` are **explicitly fixed** during CMA — the claw's spring topology is not re-derived per candidate, so candidates stay comparable.
+
+**Adam** (`qqtt/engine/trainer_warp_upstream.py`, `trainable_parameters`) learns per-spring / per-particle fields rather than globals:
+
+- Always: `spring_Y` (per-spring), `collide_elas`, `collide_fric`, `collide_object_elas`, `collide_object_fric`
+- Only when `controller_contact_enabled`: `controller_contact_stiffness`, `controller_contact_friction`
+- Only when `learn_mass`: `log_mass` (per-vertex or K-anchored)
+- Only when `learn_damping`: `dashpot_damping`, `drag_damping` (both at `0.2×lr`)
+
+`log_mass` / `dashpot_damping` / `drag_damping` share a reduced learning rate (`_special` set) because they are global scalars whose gradients are otherwise poorly scaled.
+
+**Not learnable at any stage** (fixed config values): `controller_contact_radius`, `controller_contact_activation_radius`, `controller_contact_release_radius`, `object_total_mass` (CMA tunes the `init_mass` *scale*, not the total), `controller_radius`, `controller_max_neighbours`.
+
+Note the two stages see **different claw geometry**: CMA passes the sparse 30-point FPS proxy as `controller_contact_points`, while Adam trains on the dense hollow shell. Since 30 points cannot cover a 0.26 m claw at an 0.018 m contact radius, CMA's objective is effectively blind to grip capacity — see [Grip capacity is radius-bound](#grip-capacity-is-radius-bound-not-stiffness-bound).
+
+### `controller_radius` / `controller_max_neighbours`
+
+These two build the **legacy spring tethers** from claw to object, in `_init_start` (`qqtt/engine/trainer_warp_upstream.py`). They are *not* contact parameters and have no effect on grip force.
+
+```python
+for i in range(len(controller_points)):
+    [k, idx, _] = pcd_tree.search_hybrid_vector_3d(
+        controller_points[i], controller_radius, controller_max_neighbours,
+    )
+    for j in idx:
+        springs.append([num_object_points + i, j])
+```
+
+For each of the sparse claw points, find object nodes within `controller_radius` (default `0.04` m) and link up to `controller_max_neighbours` (default `50`) of them. Those links become ordinary springs evaluated by `eval_springs`, pulling the object toward the claw's rest offset — a bilateral attachment, not a unilateral contact.
+
+Consequences worth knowing:
+
+- They use the **sparse** `controller_points` (30 FPS-sampled), not `controller_points_dense`. Denser claw tracking does not add tethers.
+- Because they are bilateral, they also pull the object *down* when it rests below the claw — which is why grip failures can look like the object following the claw in one direction but not the other.
+- `controller_radius` too large starts grabbing nodes far from the pad surface, effectively welding a wide region of the object to the claw.
+
+The modern path is unilateral dense contact (`controller_contact_*`), which is why the tether parameters are frozen: changing them mid-pipeline would invalidate comparison against previously trained checkpoints.
+
+### Grip capacity is radius-bound, not stiffness-bound
+
+For contact to lift the object, the friction-limited force must clear its weight:
+
+```
+mu * K * sum(penetration)  >  m * g          mu = controller_contact_friction
+```
+
+`sum(penetration)` is dominated by `controller_contact_radius`, which is **not learnable**. Measured peak grip margin on the recorded soft-lift cases (0.3 kg, so weight = 2.94 N, `mu` = 0.3, **before** the occlusion fix below):
+
+| Case | `sum_pen` @ r=0.018 | margin @ K=250 | margin @ K=2000 |
+|---|---|---|---|
+| `sim_soft_ball_grip_lift` | 0.1507 | 3.84× | 30.7× |
+| `sim_soft_sloth_grip_lift` | **0.0052** | **0.13×** | **1.06×** |
+| `sim_soft_seal_grip_lift` | 0.1128 | 2.88× | 23.0× |
+| `sim_soft_teddy_bear_grip_lift` | 0.2296 | 5.85× | 46.8× |
+
+The sloth was ~29× weaker than the ball, so no reachable stiffness fixed it: `K=2000` only reached 1.06× and sits at 84% of the explicit-integration ceiling for its 12670 nodes (`K_max = node_mass * (0.5/dt)^2` = 2368 N/m). **Prefer fixing the collider over inflating either knob** — see the next section, which removes the need for both.
+
+### Occluded claw points are refilled, not discarded (new, automatic)
+
+**What changed:** the dense gripper collider used to keep only claw points visible in *every* frame (`mask = np.prod(controller_visibilities, axis=0)` in `filter_motion`). A grasped object hides the pad face that has to make contact, so that intersection discards the gripper's most important geometry exactly during the lift. `get_final_track_data` now keeps every point the gripper mask saw in *at least one* frame and rebuilds the hidden frames with `qqtt.utils.controller_collider.fill_occluded_controller_points`:
+
+- hidden between two observations -> linear interpolation between them,
+- hidden with only one side observed -> hold that measurement,
+- never observed -> dropped and counted in the log line.
+
+This is safe, unlike simply relaxing the filter. `filter_track` leaves unobserved frames as **zeros**, not estimates, so an interpolated frame is built from two real measurements, and the one-sided case clamps to an observation instead of extrapolating through the occluder. Extrapolating there is what would let the collider reach past the object and "grip" through it.
+
+**Effect** (`sim_soft_sloth_grip_lift`, at the unchanged `controller_contact_radius: 0.018`):
+
+| | claw pts/frame | `sum_pen` | grip margin |
+|---|---|---|---|
+| all-frames intersection | 2108 | 0.00518 | **0.13×** |
+| per-frame observation + fill | ~4300 | 0.08786 | **2.24×** |
+
+The ball also improves (3.84× → 9.13×) because it loses pad points too, just fewer.
+
+**User action:** none, but the tracking stages must be re-run for existing cases — `--skip_process` keeps the old `final_data.pkl` and the fix will not appear. Expect `Dense Controller Point Number` in the log to be larger than before; it now reports the all-frames count alongside it for comparison.
+
+Note this supersedes the radius workaround: with the collider refilled, `controller_contact_radius: 0.018` clears the object's weight on its own, so the raised `0.025` / stiffness `2000` currently in `configs/soft.yaml` are no longer needed and push contact ~7 mm deeper than the real claw reaches. Reverting them is the physically faithful setting.
+
+Inspect with `scripts/visualize_controller_points.py --dense --hollow`, and compare `min(claw→object)` distance per frame: a healthy grip sits well inside `controller_contact_radius`, not just outside it.
+
 ## Reconstruct Gaussians
 
 Run this once after RGB-D processing and before RL:

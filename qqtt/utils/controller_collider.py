@@ -77,6 +77,157 @@ def hollow_controller_points(
     return points[:, selected_indices, :].copy()
 
 
+def count_visible_controller_frames(
+    visibilities: np.ndarray,
+    min_fraction: float,
+) -> tuple[np.ndarray, int]:
+    """Select controller points observed in at least ``min_fraction`` of frames.
+
+    Returns ``(keep, min_visible)``: a boolean mask over points, and the frame
+    count the threshold resolves to.
+
+    A majority-visible point has every occluded gap bracketed by real
+    measurements, so the fill can interpolate across it. A point seen only
+    once is mostly CoTracker extrapolation and can reach through the object.
+    """
+    visibilities = np.asarray(visibilities).astype(bool)
+    if visibilities.ndim != 2:
+        raise ValueError(
+            f"visibilities must be (frames, points), got {visibilities.shape}"
+        )
+    if not 0.0 < min_fraction <= 1.0:
+        raise ValueError(f"min_fraction must be in (0, 1], got {min_fraction}")
+
+    num_frames = visibilities.shape[0]
+    min_visible = int(np.ceil(min_fraction * num_frames))
+    keep = np.count_nonzero(visibilities, axis=0) >= min_visible
+    return keep, min_visible
+
+
+def points_inside_any_mask(
+    points: np.ndarray,
+    masks: list,
+    intrinsics: np.ndarray,
+    w2cs: np.ndarray,
+    mask_key: str = "controller",
+) -> np.ndarray:
+    """Mark (frame, point) pairs whose projection falls inside any camera mask.
+
+    Relaxing the visibility threshold admits tracks whose occluded frames are
+    reconstructed rather than observed, and some of those land in empty space
+    between the gripper fingers -- where segmentation says nothing is present.
+    A point outside every camera's mask on a frame is therefore treated as
+    drifting, not as a genuine reconstruction.
+
+    Returns a boolean array shaped like ``points`` minus the coordinate axis.
+    """
+    points = np.asarray(points, dtype=np.float64)
+    if points.ndim != 3 or points.shape[2] != 3:
+        raise ValueError(f"points must be (frames, points, 3), got {points.shape}")
+    if not masks:
+        return np.ones(points.shape[:2], dtype=bool)
+
+    num_frames, num_points = points.shape[:2]
+    inside = np.zeros((num_frames, num_points), dtype=bool)
+    ones = np.ones((num_points, 1))
+    finite = np.isfinite(points).all(axis=2)
+
+    for frame in range(num_frames):
+        # masks[frame] maps camera index -> {"object": ..., "controller": ...}
+        for cam, cam_masks in sorted(masks[frame].items()):
+            mask = np.asarray(cam_masks[mask_key])
+            height, width = mask.shape
+            cam_pts = w2cs[cam] @ np.concatenate(
+                [points[frame], ones], axis=1
+            ).T
+            cam_pts = cam_pts.T[:, :3]
+            valid = finite[frame] & (cam_pts[:, 2] > 1e-6)
+            if not valid.any():
+                continue
+            uv = (intrinsics[cam] @ cam_pts[valid].T).T
+            uv = uv[:, :2] / uv[:, 2:3]
+            on_screen = (
+                (uv[:, 0] >= 0) & (uv[:, 0] < width)
+                & (uv[:, 1] >= 0) & (uv[:, 1] < height)
+            )
+            indices = np.nonzero(valid)[0][on_screen]
+            if indices.size == 0:
+                continue
+            pixels = np.floor(uv[on_screen]).astype(np.int64)
+            hit = mask[pixels[:, 1], pixels[:, 0]]
+            inside[frame, indices[hit]] = True
+
+    return inside
+
+
+def fill_occluded_controller_points(
+    points: np.ndarray,
+    visibilities: np.ndarray,
+) -> tuple[np.ndarray, int]:
+    """Rebuild controller positions on frames where a point was not observed.
+
+    ``filter_track`` allocates ``track_points`` as zeros and writes only the
+    frames CoTracker reported visible, so an occluded frame holds a zero, and a
+    zero in the collider sits at the world origin. The gripper is rigid and
+    moves smoothly (it rotates ~1.5 deg across a whole lift), so those frames
+    are recoverable from the observations either side of the gap:
+
+    * both sides observed -- linear interpolation between them,
+    * only one side observed -- hold that measurement. This clamps to a real
+      observation and never extrapolates through the occluder, which is what
+      would let the collider reach past the object and grip through it.
+
+    Which points are worth keeping is decided by
+    ``count_visible_controller_frames``.
+
+    Returns ``(filled, never_visible)``. Frames are interpolated or clamped;
+    a point with no observation in any frame is left as NaN so the caller can
+    drop it, and counted in ``never_visible``.
+    """
+    points = np.asarray(points, dtype=np.float64)
+    visibilities = np.asarray(visibilities).astype(bool)
+    if points.ndim != 3 or points.shape[2] != 3:
+        raise ValueError(f"points must be (frames, points, 3), got {points.shape}")
+    num_frames, num_points = visibilities.shape
+    if points.shape[:2] != (num_frames, num_points):
+        raise ValueError(
+            f"points {points.shape[:2]} do not match visibilities "
+            f"{(num_frames, num_points)}"
+        )
+
+    frames = np.arange(num_frames)
+    # Nearest observed frame at or before / at or after each (frame, point).
+    previous = np.maximum.accumulate(
+        np.where(visibilities, frames[:, None], -1), axis=0
+    )
+    following = np.minimum.accumulate(
+        np.where(visibilities, frames[:, None], num_frames)[::-1], axis=0
+    )[::-1]
+
+    out = points.copy()
+    never = (previous < 0) & (following >= num_frames)
+    out[never] = np.nan
+
+    trailing = (previous >= 0) & (following >= num_frames) & ~visibilities
+    if trailing.any():
+        out[trailing] = points[previous[trailing], np.nonzero(trailing)[1]]
+
+    leading = (previous < 0) & (following < num_frames) & ~visibilities
+    if leading.any():
+        out[leading] = points[following[leading], np.nonzero(leading)[1]]
+
+    between = (previous >= 0) & (following < num_frames) & ~visibilities
+    if between.any():
+        fi, pi = np.nonzero(between)
+        lo, hi = previous[between], following[between]
+        span = np.maximum((hi - lo).astype(np.float64), 1.0)
+        weight = (fi - lo) / span
+        start = points[lo, pi]
+        out[between] = start + (points[hi, pi] - start) * weight[:, None]
+
+    return out, int(never.sum())
+
+
 def save_controller_point_plot(
     controller_points: np.ndarray,
     output_path: str,
