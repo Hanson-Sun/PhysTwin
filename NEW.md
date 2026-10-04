@@ -1,6 +1,18 @@
 # Integration Notes
 
-The `asid-phystwin-integration` branch combines Boba's runtime with the original
+## Branch convention
+
+Work is split across phase branches, each branched from the previous one:
+
+- `PRSI/1-phystwin-real2sim` — real-to-sim pipeline on PhysTwin/Warp
+- `PRSI/2-asid-integration` — all ASID work, built on top of phase 1
+
+Keep phase 2 concerns off the phase 1 branch, so each phase stays reviewable on
+its own.
+
+## Background
+
+The PhysTwin integration combines Boba's runtime with the original
 PhysTwin preprocessing and warp-training pipeline. Boba's runtime trainer remains
 unchanged; the upstream training trainer is isolated under
 `qqtt/engine/trainer_warp_upstream.py`.
