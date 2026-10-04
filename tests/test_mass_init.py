@@ -212,6 +212,67 @@ class StabilityFollowsMassTests(unittest.TestCase):
         finally:
             cfg.controller_contact_stiffness = original
 
+    def test_stability_guard_bounds_k_by_scaled_mass_not_ref_mass(self):
+        """K is bounded by the mass in wp_masses (ref_mass*init_mass), not ref_mass.
+
+        CMA routinely sets init_mass well below 1, so a guard built on ref_mass
+        over-permits K by exactly 1/init_mass. On sim_soft_ball_grip_lift
+        (init_mass=0.150) that let K=2000 through a check whose real limit was
+        897 N/m. Only spring_mass_warp_upstream scales masses by init_mass, so
+        that is the module under test here.
+        """
+        from qqtt.model.diff_simulator import spring_mass_warp_upstream as smwu
+
+        n = 5027  # sim_soft_ball_grip_lift object node count
+        original_mass = cfg.init_mass
+        original_k = cfg.controller_contact_stiffness
+        original_type = cfg.data_type
+        original_graph = cfg.use_graph
+        cfg.init_mass = 0.150
+        cfg.data_type = "sim"  # skips the gt-visibility arrays the guard does not touch
+        cfg.use_graph = False  # graph capture needs a full scene; guard runs earlier
+        try:
+            ref_mass = cfg.object_total_mass / n
+            true_limit = ref_mass * cfg.init_mass * (0.5 / DT) ** 2
+            stale_limit = ref_mass * (0.5 / DT) ** 2
+
+            def build():
+                masses = torch.tensor(
+                    uniform_node_masses(n), dtype=torch.float32, device=cfg.device
+                )
+                return smwu.SpringMassSystemWarp(
+                    init_vertices=torch.zeros(n, 3, dtype=torch.float32, device=cfg.device),
+                    init_springs=torch.tensor([[0, 1]], dtype=torch.int32, device=cfg.device),
+                    init_rest_lengths=torch.tensor([0.01], dtype=torch.float32, device=cfg.device),
+                    init_masses=masses,
+                    dt=DT,
+                    num_substeps=2,
+                    spring_Y=torch.tensor([cfg.init_spring_Y], dtype=torch.float32, device=cfg.device),
+                    collide_elas=torch.tensor([cfg.collide_elas], device=cfg.device),
+                    collide_fric=torch.tensor([cfg.collide_fric], device=cfg.device),
+                    dashpot_damping=cfg.dashpot_damping,
+                    drag_damping=cfg.drag_damping,
+                    num_object_points=n,
+                    gt_object_points=torch.zeros(
+                        3, n, 3, dtype=torch.float32, device=cfg.device
+                    ),
+                )
+
+            # Legal under the stale ref_mass bound, illegal under the real one.
+            cfg.controller_contact_stiffness = 0.5 * (stale_limit + true_limit)
+            with self.assertRaises(ValueError) as ctx:
+                build()
+            self.assertIn("controller_contact_stiffness", str(ctx.exception))
+
+            # And a value under the real limit must still be accepted.
+            cfg.controller_contact_stiffness = 0.5 * true_limit
+            build()
+        finally:
+            cfg.init_mass = original_mass
+            cfg.controller_contact_stiffness = original_k
+            cfg.data_type = original_type
+            cfg.use_graph = original_graph
+
 
 if __name__ == "__main__":
     unittest.main()

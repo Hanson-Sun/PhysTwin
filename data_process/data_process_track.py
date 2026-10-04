@@ -45,7 +45,7 @@ parser.add_argument(
 parser.add_argument(
     "--controller_visibility_threshold",
     type=float,
-    default=0.7,
+    default=0.80,
     help="Minimum fraction of frames a controller point must be visible in.",
 )
 args = parser.parse_args()
@@ -362,7 +362,7 @@ def get_final_track_data(
     track_data,
     controller_threhsold=0.01,
     controller_point_count=30,
-    controller_visibility_threshold=0.7,
+    controller_visibility_threshold=0.80,
     masks=None,
     intrinsics=None,
     w2cs=None,
@@ -406,7 +406,7 @@ def get_final_track_data(
             depth_provider,
             depth_tolerance=0.004,
             min_support_fraction=0.7,
-            max_conflict_fraction=0.05,
+            max_conflict_fraction=0.10,
         )
         depth_rejected = int((~keep_depth).sum())
         dense_controller_points = dense_controller_points[:, keep_depth, :]

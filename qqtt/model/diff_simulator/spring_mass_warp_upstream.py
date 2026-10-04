@@ -1124,16 +1124,9 @@ class SpringMassSystemWarp:
             controller_contact_stiffness = getattr(cfg, "controller_contact_stiffness", 2000.0)
         if controller_contact_stiffness <= 0.0:
             raise ValueError("controller contact stiffness must be positive")
-        # Unlike spring_Y/dashpot, contact is NOT mass-normalized: friction capacity
-        # must stay absolute to hold the object's weight. That bounds it by
-        # explicit integration, K <~ m*(0.5/dt)^2.
-        k_max = ref_mass * (0.5 / dt) ** 2
-        if controller_contact_stiffness > k_max:
-            raise ValueError(
-                f"controller_contact_stiffness={controller_contact_stiffness:.1f} "
-                f"exceeds the explicit-integration limit {k_max:.1f} N/m for a "
-                f"node mass of {ref_mass:.3e} kg at dt={dt}. Contact would blow up."
-            )
+        # The explicit-integration ceiling on K is enforced further down, once
+        # wp_masses exists: it needs the REAL post-scaling node mass, which is not
+        # available yet at this point in __init__.
         if controller_contact_friction is None:
             controller_contact_friction = getattr(cfg, "controller_contact_friction", 0.3)
         self.controller_contact_stiffness = float(controller_contact_stiffness)
@@ -1314,6 +1307,30 @@ class SpringMassSystemWarp:
             base_masses = init_masses[:num_object_points].to(dtype=torch.float32, device=self.device)
             scaled = (base_masses * self.init_mass).clamp(min=1e-6)
             self.wp_masses = wp.from_torch(scaled.contiguous(), dtype=wp.float32, requires_grad=False)
+
+        # Unlike spring_Y/dashpot, contact is NOT mass-normalized: friction
+        # capacity must stay absolute to hold the object's weight. That bounds K
+        # by explicit integration, K <~ m*(0.5/dt)^2.
+        #
+        # m must be the node mass the integrator actually divides by (wp_masses),
+        # NOT ref_mass. ref_mass is the PRE-scaling reference used to turn
+        # per-unit-mass spring/dashpot settings into forces; the masses really in
+        # wp_masses are ref_mass * cfg.init_mass. CMA routinely sets init_mass well
+        # below 1, so testing against ref_mass over-permits K by exactly
+        # 1/init_mass -- 6.65x on sim_soft_ball_grip_lift (init_mass=0.150), which
+        # let the K=2000 default through a check whose true limit was 897 N/m.
+        # Use the LIGHTEST object node: that is the one that goes unstable first.
+        min_node_mass = float(
+            wp.to_torch(self.wp_masses, requires_grad=False).min().item()
+        )
+        k_max = min_node_mass * (0.5 / dt) ** 2
+        if controller_contact_stiffness > k_max:
+            raise ValueError(
+                f"controller_contact_stiffness={controller_contact_stiffness:.1f} "
+                f"exceeds the explicit-integration limit {k_max:.1f} N/m for a "
+                f"lightest node mass of {min_node_mass:.3e} kg at dt={dt} "
+                f"(init_mass={self.init_mass:.4g}). Contact would blow up."
+            )
 
         if cfg.data_type == "real":
             self.prev_acc = wp.zeros_like(self.wp_init_vertices, requires_grad=False)
