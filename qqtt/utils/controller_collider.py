@@ -113,7 +113,7 @@ def controller_depth_consistency(
     depth_provider: Callable[[int, int], np.ndarray],
     depth_tolerance: float = 0.004,
     min_support_fraction: float = 0.7,
-    max_conflict_fraction: float = 0.05,
+    max_conflict_fraction: float = 0.10,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Keep tracks supported by measured claw depth without free-space conflicts.
 

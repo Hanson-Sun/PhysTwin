@@ -322,6 +322,38 @@ Note this supersedes the radius workaround: with the collider refilled, `control
 
 Inspect with `scripts/visualize_controller_points.py --dense --hollow`, and compare `min(claw→object)` distance per frame: a healthy grip sits well inside `controller_contact_radius`, not just outside it.
 
+### The four claw-point thresholds
+
+Claw points go through two gates. The first asks "did we actually see this point?" The second asks "is it sitting where the claw really is?". Both drop whole tracks, never individual frames, because the collider needs the same point count every frame.
+
+**Gate 1 — visibility.** `controller_visibility_threshold`, default `0.80`. A track must be visible in at least 80% of frames. "Visible" means CoTracker saw it *and* its pixel was still inside the controller mask in `filter_track`. The missing 20% get filled in afterwards (interpolate between two real measurements, or hold the nearest one). No geometry involved — this gate is purely about tracking quality.
+
+**Gate 2 — depth consistency.** Runs after filling, in `controller_depth_consistency`. It projects each point into every camera and compares against the measured depth image. Every (frame, camera) pair ends up in one of three buckets:
+
+- **supported** — lands inside the controller mask and matches measured depth
+- **contradicted** — floats in front of the measured surface, or matches depth but the mask says it isn't claw
+- **neutral** — buried behind the measured surface, off-screen, or no depth at that pixel. Counts as neither.
+
+Two settings decide those buckets and the final verdict:
+
+| Setting | Default | What it means |
+|---|---|---|
+| `depth_tolerance` | `0.004` (4 mm) | How close counts as "matching". Not a filter itself — it's the width of the agreement band. |
+| `min_support_fraction` | `0.7` | Must be supported in at least 70% of frames. |
+| `max_conflict_fraction` | `0.10` | May be contradicted in at most 10% of frames. |
+
+A track survives gate 2 only if it clears both fractions. The `Depth consistency: kept X/Y tracks; median support=…, median conflict=…` log line prints the distributions *before* the cutoffs, so use it to decide what to change instead of guessing.
+
+**Three things worth knowing before you tune these:**
+
+1. **`depth_tolerance` is not a "looser = keep more" knob.** Widen the band and a previously-neutral frame becomes supported *or* contradicted, depending on whether its pixel is inside the mask. It can cut either way, and past ~10 mm it starts accepting points that visibly float off the claw.
+
+2. **`min_support_fraction: 0.7` is in tension with the occlusion refill above.** Support is counted over *all* frames, and neutral frames don't help it. A pad point hidden for 30% of the lift can never exceed ~0.70 support, so it gets rejected — which throws away exactly the geometry the refill exists to recover. If support is the binding constraint in the log, this is the number to lower (try ~0.25–0.35, roughly one minus the fraction of frames typically occluded).
+
+3. **`max_conflict_fraction` is rarely the binding one.** Contradicted frames are uncommon in practice; the median is usually near zero. Loosening it past 0.10 tends to change very little.
+
+Only `controller_visibility_threshold` is a CLI flag (`--controller_visibility_threshold`). The three depth settings are hardcoded at the `controller_depth_consistency(...)` call in `data_process/data_process_track.py`, so changing them means editing that call.
+
 ## Reconstruct Gaussians
 
 Run this once after RGB-D processing and before RL:

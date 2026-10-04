@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-CASES=(sim_soft_sloth_grip_lift)
+CASES=(sim_soft_ball_grip_lift sim_soft_sloth_grip_lift)
 
 LOG_DIR="${LOG_DIR:-logs}"
 mkdir -p "$LOG_DIR"
