@@ -16,11 +16,11 @@ object_radius: 0.02
 object_max_neighbours: 30
 controller_radius: 0.04
 controller_max_neighbours: 50
-controller_contact_radius: 0.018
-controller_contact_activation_radius: 0.018
-controller_contact_release_radius: 0.0225
+controller_contact_radius: 0.020
+controller_contact_activation_radius: 0.020
+controller_contact_release_radius: 0.025
 # not mass normalized btw, lowered to to see if gradients are better
-controller_contact_stiffness: 250
+controller_contact_stiffness: 1000
 spring_Y_min: 0
 spring_Y_max: 1e5
 reverse_z: true

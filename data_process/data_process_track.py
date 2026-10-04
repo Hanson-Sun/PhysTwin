@@ -9,7 +9,24 @@ import glob
 import json
 import pickle
 import matplotlib.pyplot as plt
+import sys
 from argparse import ArgumentParser
+
+try:
+    from qqtt.utils.controller_collider import (
+        count_visible_controller_frames,
+        fill_occluded_controller_points,
+        points_inside_any_mask,
+    )
+except ModuleNotFoundError:
+    # data_process_track.py is launched directly by process_data.py, so the
+    # repository root is not on sys.path.
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from qqtt.utils.controller_collider import (
+        count_visible_controller_frames,
+        fill_occluded_controller_points,
+        points_inside_any_mask,
+    )
 
 parser = ArgumentParser()
 parser.add_argument(
@@ -24,6 +41,12 @@ parser.add_argument(
     type=int,
     default=30,
     help="Number of sparse controller points retained for legacy consumers.",
+)
+parser.add_argument(
+    "--controller_visibility_threshold",
+    type=float,
+    default=0.7,
+    help="Minimum fraction of frames a controller point must be visible in.",
 )
 args = parser.parse_args()
 
@@ -336,13 +359,20 @@ def filter_motion(track_data, neighbor_dist=0.01, visualize=True):
 
 
 def get_final_track_data(
-    track_data, controller_threhsold=0.01, controller_point_count=30
+    track_data,
+    controller_threhsold=0.01,
+    controller_point_count=30,
+    controller_visibility_threshold=0.7,
+    masks=None,
+    intrinsics=None,
+    w2cs=None,
 ):
     object_points = track_data["object_points"]
     object_colors = track_data["object_colors"]
     object_visibilities = track_data["object_visibilities"]
     object_motions_valid = track_data["object_motions_valid"]
     controller_points = track_data["controller_points"]
+    controller_visibilities = track_data["controller_visibilities"]
     mask = track_data["controller_mask"]
 
     new_controller_points = controller_points[:, np.where(mask)[0], :]
@@ -354,9 +384,37 @@ def get_final_track_data(
             f"required {controller_point_count}, found {len(new_controller_points[0])}"
         )
 
-    # Preserve all valid, consistently tracked controller points for future
-    # collider construction. The legacy sparse field remains available below.
-    dense_controller_points = new_controller_points.copy()
+    # Dense collider: points visible in most frames, with occluded frames filled.
+    keep, min_visible = count_visible_controller_frames(
+        controller_visibilities, controller_visibility_threshold
+    )
+    dense_visibilities = controller_visibilities[:, np.where(keep)[0]]
+    dense_controller_points, dropped = fill_occluded_controller_points(
+        controller_points[:, np.where(keep)[0], :], dense_visibilities
+    )
+
+    # A filled frame is a reconstruction, and some land in empty space between
+    # the gripper fingers, where segmentation says nothing is present. Keep only
+    # points that stay inside some camera's controller mask on every frame: the
+    # collider needs a fixed point count per frame, so a drifting point is
+    # dropped whole rather than per frame.
+    drifting_points = 0
+    if masks is not None and intrinsics is not None and w2cs is not None:
+        inside = points_inside_any_mask(
+            dense_controller_points, masks, intrinsics, w2cs
+        )
+        drifting_points = int((~inside.all(axis=0)).sum())
+        dense_controller_points = dense_controller_points[:, inside.all(axis=0), :]
+
+    dense_controller_points = dense_controller_points[~np.isnan(
+        dense_controller_points).any(axis=2)].reshape(
+        dense_controller_points.shape[0], -1, 3
+    )
+    print(
+        f"Dense Controller Point Number: {dense_controller_points.shape[1]} "
+        f"(visible in >= {min_visible}/{controller_visibilities.shape[0]} frames, "
+        f"{drifting_points} points outside every mask)"
+    )
 
     # Do farthest point sampling on the valid controller points to select the
     # sparse controller representation used by existing PhysTwin consumers.
@@ -474,7 +532,14 @@ if __name__ == "__main__":
     # files in pcd: a shorter regeneration leaves stale frames behind, and
     # counting them would silently mix two captures into one case.
     with open(f"{base_path}/{case_name}/metadata.json", "r") as f:
-        frame_num = json.load(f)["frame_num"]
+        metadata = json.load(f)
+        frame_num = metadata["frame_num"]
+
+    with open(f"{mask_path}/processed_masks.pkl", "rb") as f:
+        masks = pickle.load(f)
+    with open(f"{base_path}/{case_name}/calibrate.pkl", "rb") as f:
+        w2cs = np.array([np.linalg.inv(c2w) for c2w in pickle.load(f)])
+    intrinsics = np.array(metadata["intrinsics"])
 
     # Filter the track data using the semantic mask of object and controller
     track_data = filter_track(track_path, pcd_path, mask_path, frame_num, num_cam)
@@ -488,7 +553,12 @@ if __name__ == "__main__":
     #     track_data = pickle.load(f)
 
     track_data = get_final_track_data(
-        track_data, controller_point_count=args.controller_point_count
+        track_data,
+        controller_point_count=args.controller_point_count,
+        controller_visibility_threshold=args.controller_visibility_threshold,
+        masks=masks,
+        intrinsics=intrinsics,
+        w2cs=w2cs,
     )
 
     with open(f"{base_path}/{case_name}/track_process_data.pkl", "wb") as f:

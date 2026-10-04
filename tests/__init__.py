@@ -15,6 +15,8 @@ SMOKE_MODULES = (
     "tests.test_runtime_visualization_cli",
     "tests.test_cuda13_runtime_hooks",
     "tests.test_controller_proximity",
+    "tests.test_controller_fill",
+    "tests.test_controller_mask_constraint",
     "tests.test_soft_body",
     "tests.test_sim_export",
     "tests.test_interior_sample",

@@ -51,6 +51,17 @@ import time
 
 
 class InvPhyTrainerWarp:
+    def _contact_visual_radius(self):
+        """Contact radius for marking colliding claw points, or None.
+
+        Contact only exists when the simulator was built with a dense cloud.
+        """
+        if not getattr(self, "simulator", None):
+            return None
+        if not self.simulator.controller_contact_enabled:
+            return None
+        return float(getattr(cfg, "controller_contact_radius", 0.0)) or None
+
     def __init__(
         self,
         data_path,
@@ -910,6 +921,8 @@ class InvPhyTrainerWarp:
                 vertices[:, : self.num_all_points, :],
                 self.object_colors,
                 self.controller_points_visual,
+                contact_points=self.controller_points_dense,
+                contact_radius=self._contact_visual_radius(),
                 visualize=True,
             )
         else:
@@ -918,6 +931,8 @@ class InvPhyTrainerWarp:
                 vertices[:, : self.num_all_points, :],
                 self.object_colors,
                 self.controller_points_visual,
+                contact_points=self.controller_points_dense,
+                contact_radius=self._contact_visual_radius(),
                 visualize=False,
                 save_video=True,
                 save_path=video_path,
