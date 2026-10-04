@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable
 
 import numpy as np
 from scipy.spatial import cKDTree
@@ -104,60 +105,106 @@ def count_visible_controller_frames(
     return keep, min_visible
 
 
-def points_inside_any_mask(
+def controller_depth_consistency(
     points: np.ndarray,
     masks: list,
     intrinsics: np.ndarray,
     w2cs: np.ndarray,
-    mask_key: str = "controller",
-) -> np.ndarray:
-    """Mark (frame, point) pairs whose projection falls inside any camera mask.
+    depth_provider: Callable[[int, int], np.ndarray],
+    depth_tolerance: float = 0.004,
+    min_support_fraction: float = 0.7,
+    max_conflict_fraction: float = 0.05,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Keep tracks supported by measured claw depth without free-space conflicts.
 
-    Relaxing the visibility threshold admits tracks whose occluded frames are
-    reconstructed rather than observed, and some of those land in empty space
-    between the gripper fingers -- where segmentation says nothing is present.
-    A point outside every camera's mask on a frame is therefore treated as
-    drifting, not as a genuine reconstruction.
+    A camera supports a point when its projection hits the controller mask and
+    measured depth agrees within ``depth_tolerance``. A closer measured surface
+    is treated as occlusion; it is not evidence against the point. A point is
+    contradicted when it lies in front of measured depth, or agrees with depth
+    outside the controller mask. Tracks are retained if enough frames have
+    direct support and conflicts occur in no more than the configured fraction.
 
-    Returns a boolean array shaped like ``points`` minus the coordinate axis.
+    ``depth_provider(frame, camera)`` must return that camera's depth image in
+    metres. Returns the per-track keep mask and support/conflict frame rates.
     """
     points = np.asarray(points, dtype=np.float64)
+    intrinsics = np.asarray(intrinsics, dtype=np.float64)
+    w2cs = np.asarray(w2cs, dtype=np.float64)
     if points.ndim != 3 or points.shape[2] != 3:
         raise ValueError(f"points must be (frames, points, 3), got {points.shape}")
-    if not masks:
-        return np.ones(points.shape[:2], dtype=bool)
+    if not 0.0 <= min_support_fraction <= 1.0:
+        raise ValueError("min_support_fraction must be in [0, 1]")
+    if not 0.0 <= max_conflict_fraction <= 1.0:
+        raise ValueError("max_conflict_fraction must be in [0, 1]")
+    if depth_tolerance < 0.0:
+        raise ValueError("depth_tolerance must be non-negative")
 
     num_frames, num_points = points.shape[:2]
-    inside = np.zeros((num_frames, num_points), dtype=bool)
-    ones = np.ones((num_points, 1))
+    if len(masks) != num_frames:
+        raise ValueError(f"expected {num_frames} mask frames, got {len(masks)}")
+    if intrinsics.ndim != 3 or intrinsics.shape[1:] != (3, 3):
+        raise ValueError(f"intrinsics must be (cameras, 3, 3), got {intrinsics.shape}")
+    if w2cs.shape != (len(intrinsics), 4, 4):
+        raise ValueError(f"w2cs must be ({len(intrinsics)}, 4, 4), got {w2cs.shape}")
+
+    supported = np.zeros((num_frames, num_points), dtype=bool)
+    contradicted = np.zeros_like(supported)
+    homogeneous = np.ones((num_points, 1), dtype=np.float64)
     finite = np.isfinite(points).all(axis=2)
 
     for frame in range(num_frames):
-        # masks[frame] maps camera index -> {"object": ..., "controller": ...}
-        for cam, cam_masks in sorted(masks[frame].items()):
-            mask = np.asarray(cam_masks[mask_key])
-            height, width = mask.shape
-            cam_pts = w2cs[cam] @ np.concatenate(
-                [points[frame], ones], axis=1
-            ).T
-            cam_pts = cam_pts.T[:, :3]
-            valid = finite[frame] & (cam_pts[:, 2] > 1e-6)
-            if not valid.any():
+        for camera, camera_masks in sorted(masks[frame].items()):
+            controller_mask = np.asarray(camera_masks["controller"], dtype=bool)
+            height, width = controller_mask.shape
+            camera_points = (w2cs[camera] @ np.c_[points[frame], homogeneous].T).T[:, :3]
+            in_front = finite[frame] & (camera_points[:, 2] > 1e-6)
+            if not in_front.any():
                 continue
-            uv = (intrinsics[cam] @ cam_pts[valid].T).T
-            uv = uv[:, :2] / uv[:, 2:3]
+
+            projected = (intrinsics[camera] @ camera_points[in_front].T).T
+            uv = projected[:, :2] / projected[:, 2:3]
             on_screen = (
-                (uv[:, 0] >= 0) & (uv[:, 0] < width)
+                np.isfinite(uv).all(axis=1)
+                & (uv[:, 0] >= 0) & (uv[:, 0] < width)
                 & (uv[:, 1] >= 0) & (uv[:, 1] < height)
             )
-            indices = np.nonzero(valid)[0][on_screen]
-            if indices.size == 0:
+            point_indices = np.flatnonzero(in_front)[on_screen]
+            if not point_indices.size:
                 continue
-            pixels = np.floor(uv[on_screen]).astype(np.int64)
-            hit = mask[pixels[:, 1], pixels[:, 0]]
-            inside[frame, indices[hit]] = True
 
-    return inside
+            pixels = np.floor(uv[on_screen]).astype(np.int64)
+            measured_depth = np.asarray(depth_provider(frame, camera))
+            if measured_depth.shape != controller_mask.shape:
+                raise ValueError(
+                    f"depth shape {measured_depth.shape} does not match mask "
+                    f"shape {controller_mask.shape} at frame={frame}, camera={camera}"
+                )
+            observed_z = measured_depth[pixels[:, 1], pixels[:, 0]]
+            has_depth = np.isfinite(observed_z) & (observed_z > 0)
+            if not has_depth.any():
+                continue
+
+            point_indices = point_indices[has_depth]
+            pixels = pixels[has_depth]
+            observed_z = observed_z[has_depth]
+            candidate_z = camera_points[point_indices, 2]
+            in_controller = controller_mask[pixels[:, 1], pixels[:, 0]]
+            residual = candidate_z - observed_z
+
+            supported[frame, point_indices] |= (
+                in_controller & (np.abs(residual) <= depth_tolerance)
+            )
+            contradicted[frame, point_indices] |= (
+                (residual < -depth_tolerance)
+                | ((np.abs(residual) <= depth_tolerance) & ~in_controller)
+            )
+
+    support_fraction = supported.mean(axis=0)
+    conflict_fraction = contradicted.mean(axis=0)
+    keep = (support_fraction >= min_support_fraction) & (
+        conflict_fraction <= max_conflict_fraction
+    )
+    return keep, support_fraction, conflict_fraction
 
 
 def fill_occluded_controller_points(
