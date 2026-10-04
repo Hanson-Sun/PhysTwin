@@ -18,6 +18,13 @@ data_collect*
 past*
 deprecated/
 *.npz
+
+# MuJoCo writes its solver warnings here; regenerated on every run.
+# It was committed once before the *.txt rule above existed.
+MUJOCO_LOG.TXT
+
+# Personal scratch notes. NEW.md is the kept integration doc.
+/todo.md
 test_code/
 co-tracker/
 test_output/
