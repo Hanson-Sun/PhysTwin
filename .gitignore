@@ -206,13 +206,34 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-!assets/arrow_1.png
-!assets/arrow_2.png
-!assets/arrow_empty.png
-!assets/arrow_empty_v1.png
-!assets/arrow_fill_v1.png
-!assets/Picture1.png
-!assets/Picture2.png
+# --- Never commit media (videos / raw images) ---
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+*.jpg
+*.jpeg
+*.gif
+*.webp
+*.bmp
+*.tiff
+*.heic
+# Windows download/ADS sidecar files
+*:Zone.Identifier
+
+# --- Output / run artifact directories ---
+outputs/
+output/
+runs/
+logs/
+checkpoints/
+wandb/
+tensorboard/
+tb_logs/
+depth_output*/
+*_renders/
+
 # --- Build artifacts inside submodules ---
 # (effective ignores live in each submodule's .git/info/exclude; these document them)
 nvdiffrast/build/
