@@ -1,0 +1,12 @@
+diff --git a/src/depth_anything_3/api.py b/src/depth_anything_3/api.py
+index d0f18aa..d2e7358 100644
+--- a/src/depth_anything_3/api.py
++++ b/src/depth_anything_3/api.py
+@@ -355,7 +355,6 @@ class DepthAnything3(nn.Module, PyTorchModelHubMixin):
+             extrinsics.numpy(),
+             ransac=len(extrinsics) >= ransac_view_thresh,
+             return_aligned=True,
+-            random_state=42,
+         )
+         if align_to_input_ext_scale:
+             prediction.extrinsics = extrinsics[..., :3, :].numpy()

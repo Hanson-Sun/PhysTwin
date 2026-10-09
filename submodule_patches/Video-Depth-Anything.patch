@@ -1,0 +1,47 @@
+diff --git a/__init__.py b/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/get_weights.sh b/get_weights.sh
+index a7a3b07..93f9b8a 100644
+--- a/get_weights.sh
++++ b/get_weights.sh
+@@ -2,5 +2,6 @@
+ 
+ mkdir checkpoints
+ cd checkpoints
+-wget https://huggingface.co/depth-anything/Video-Depth-Anything-Small/resolve/main/video_depth_anything_vits.pth
+-wget https://huggingface.co/depth-anything/Video-Depth-Anything-Large/resolve/main/video_depth_anything_vitl.pth
+\ No newline at end of file
++# wget https://huggingface.co/depth-anything/Video-Depth-Anything-Small/resolve/main/video_depth_anything_vits.pth
++wget https://huggingface.co/depth-anything/Video-Depth-Anything-Base/resolve/main/video_depth_anything_vitb.pth
++# wget https://huggingface.co/depth-anything/Video-Depth-Anything-Large/resolve/main/video_depth_anything_vitl.pth
+\ No newline at end of file
+diff --git a/run.py b/run.py
+index 18531b3..15107db 100644
+--- a/run.py
++++ b/run.py
+@@ -37,11 +37,18 @@ if __name__ == '__main__':
+                         help='Focal length along the x-axis.')
+     parser.add_argument('--focal-length-y', default=470.4, type=float,
+                         help='Focal length along the y-axis.')
++    parser.add_argument('--low_memory', action='store_true', help='Enable low memory mode with additional optimizations')
+ 
+     args = parser.parse_args()
+ 
+     DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+ 
++    # Low memory optimizations
++    if args.low_memory:
++        torch.backends.cudnn.benchmark = False
++        torch.backends.cuda.matmul.allow_tf32 = True
++        torch.backends.cudnn.allow_tf32 = True
++
+     model_configs = {
+         'vits': {'encoder': 'vits', 'features': 64, 'out_channels': [48, 96, 192, 384]},
+         'vitb': {'encoder': 'vitb', 'features': 128, 'out_channels': [96, 192, 384, 768]},
+diff --git a/utils/__init__.py b/utils/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/video_depth_anything/__init__.py b/video_depth_anything/__init__.py
+new file mode 100644
+index 0000000..e69de29

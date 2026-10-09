@@ -213,3 +213,10 @@ cython_debug/
 !assets/arrow_fill_v1.png
 !assets/Picture1.png
 !assets/Picture2.png
+# --- Build artifacts inside submodules ---
+# (effective ignores live in each submodule's .git/info/exclude; these document them)
+nvdiffrast/build/
+nvdiffrast/*.egg-info/
+GroundingDINO/groundingdino/version.py
+mip-splatting/**/egg-info/
+dust3r/croco/models/curope/build/
