@@ -252,7 +252,7 @@ def visualize_first_frame_3d(
     try:
         import sys
 
-        sys.path.insert(0, str(Path(__file__).parent.parent))
+        sys.path.insert(0, str(Path(__file__).parent.parent / "scripts" / "visualization"))
         from visualize_3d_scene import visualize_depth_scene
 
         cam_0_dir = output_root / "0"

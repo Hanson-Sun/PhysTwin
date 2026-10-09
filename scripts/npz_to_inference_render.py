@@ -33,7 +33,7 @@ DEFAULT_LAMBDA_SEG = 1.0
 
 def detect_workspace_root(script_file: Path) -> Path:
     """Find repository root by searching upward for core pipeline entry files."""
-    markers = ["split_video.py", "gs_render_dynamics.py", "visualize_render_results.py"]
+    markers = ["gs_render_dynamics.py", "visualize_render_results.py"]
 
     script_file = script_file.resolve()
     search_roots = [script_file.parent, *script_file.parents]
@@ -709,7 +709,7 @@ def main():
     ensure_case_video(source_video, target_video, overwrite=args.overwrite_source_video)
 
     run_cmd(
-        [python_exec, workspace_root / "split_video.py", "--input_dir", color_dir],
+        [python_exec, workspace_root / "scripts" / "pipeline" / "split_video.py", "--input_dir", color_dir],
         cwd=workspace_root,
     )
 

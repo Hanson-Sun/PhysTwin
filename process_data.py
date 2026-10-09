@@ -92,7 +92,7 @@ class Timer:
 # if ALIGN_DATA:
 #     with Timer("Align depths and color"):
 #         os.system(
-#             f"python ./align_color_and_depth.py --depth_dir {base_path}/{case_name}/depth --color_dir {base_path}/{case_name}/color --output_dir {base_path}/{case_name}/color --overwrite"
+#             f"python ./evaluation/align_color_and_depth.py --depth_dir {base_path}/{case_name}/depth --color_dir {base_path}/{case_name}/color --output_dir {base_path}/{case_name}/color --overwrite"
 #         )
 
 

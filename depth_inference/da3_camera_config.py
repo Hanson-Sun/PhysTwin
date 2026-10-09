@@ -100,7 +100,7 @@ def refine_extrinsics_icp(
     """Refine w2c extrinsics via ICP. Delegates to refine_extrinsics_icp.refine()."""
     import sys
 
-    sys.path.insert(0, str(Path(__file__).parent.parent))
+    sys.path.insert(0, str(Path(__file__).parent.parent / "evaluation"))
     import refine_extrinsics_icp as _icp
 
     new_c2ws = _icp.refine(

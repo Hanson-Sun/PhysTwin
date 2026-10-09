@@ -38,9 +38,9 @@ step() {
 step "Parse depth data"
 
 conda activate phystwin_data
-# python -u script_depth_inference.py
+# python -u scripts/pipeline/script_depth_inference.py
 
-# python script_smooth_phystwin_data.py
+# python scripts/pipeline/script_smooth_phystwin_data.py
 
 conda activate phystwin
 # =====================================================
@@ -48,16 +48,16 @@ conda activate phystwin
 # =====================================================
 
 step "Process the data"
-# python -u script_process_data.py
+# python script_process_data.py
 
 # step "Detect environment planes"
-# python script_detect_environment_planes.py
+# python scripts/pipeline/script_detect_environment_planes.py
 
 # step "Align extrinsics to detected plane (delete .aligned_to_plane to run again)"
-# python -u script_align_to_plane.py
+# python -u scripts/pipeline/script_align_to_plane.py
 
 # step "Calibrate camera extrinsics"
-# python -u script_calibrate_camera_extrinsics.py 
+# python -u scripts/pipeline/script_calibrate_camera_extrinsics.py 
 
 step "Export Gaussian data"
 python -u export_gaussian_data.py
