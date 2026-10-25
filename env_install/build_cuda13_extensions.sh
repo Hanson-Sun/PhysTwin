@@ -65,8 +65,9 @@ nvcc --version
 
 # PyPI wheels do not expose the CUDA/OpenGL interop API used by Boba's PBO
 # renderer. Rebuild the pinned release from source with GL support enabled.
+# WSL only exposes libcuda.so.1.
 BOBA_CUDA_DRIVER_LIBRARY="$({ ldconfig -p 2>/dev/null || true; } | awk '
-  $1 == "libcuda.so" && $0 ~ /x86-64/ && !found { print $NF; found = 1 }
+  ($1 == "libcuda.so" || $1 == "libcuda.so.1") && $0 ~ /x86-64/ && !found { print $NF; found = 1 }
 ')"
 if [[ -z "${BOBA_CUDA_DRIVER_LIBRARY}" || ! -f "${BOBA_CUDA_DRIVER_LIBRARY}" ]]; then
   echo "Unable to locate the x86-64 NVIDIA driver library (libcuda.so)." >&2
@@ -152,6 +153,47 @@ torch.backends.cuda.preferred_linalg_library("cusolver")
 from gaussian_splatting.rotation_utils import eigh_3x3
 eigh_3x3(probe)
 torch.cuda.synchronize()
+PY
+
+# ---------------------------------------------------------------------------
+# RGB-D processing stack
+# ---------------------------------------------------------------------------
+SAM2_COMMIT="2b90b9f5ceec907a1c18123530e92e794ad901a4"
+GROUNDINGDINO_COMMIT="856dde20aee659246248e20734ef9ba5214f5e44"
+# PyTorch3D main has the CUDA 13 flags its Pulsar kernels need; 0.7.8 only
+# ships wheels for PyTorch 2.4 / CUDA 12.1.
+PYTORCH3D_COMMIT="204fe5831b3a5bbe079f09d72afb4515178f8892"
+
+python -m pip install --no-build-isolation --no-deps \
+  "git+https://github.com/facebookresearch/sam2.git@${SAM2_COMMIT}"
+
+# Patch the removed at::DeprecatedTypeProperties -> ScalarType conversion.
+GROUNDINGDINO_SRC_ROOT="$(mktemp -d)"
+trap 'rm -rf -- "${PYCUDA_BUILD_ROOT}" "${GROUNDINGDINO_SRC_ROOT}"' EXIT
+git clone https://github.com/IDEA-Research/GroundingDINO.git \
+  "${GROUNDINGDINO_SRC_ROOT}"
+git -C "${GROUNDINGDINO_SRC_ROOT}" checkout "${GROUNDINGDINO_COMMIT}"
+git -C "${GROUNDINGDINO_SRC_ROOT}" apply \
+  "${REPO_ROOT}/env_install/patches/groundingdino_ms_deform_attn_scalar_type.patch"
+python -m pip install --no-build-isolation --no-deps "${GROUNDINGDINO_SRC_ROOT}"
+
+python -m pip install --no-build-isolation --no-deps \
+  "git+https://github.com/facebookresearch/pytorch3d.git@${PYTORCH3D_COMMIT}"
+
+# evdev does not build against conda's sysroot; the X11 backend only needs
+# python-xlib (installed with the environment).
+python -m pip install --no-deps "pynput==1.8.2"
+
+python - <<'PY'
+import groundingdino
+from groundingdino import _C  # noqa: F401  (multi-scale deformable attention)
+import pytorch3d
+from pytorch3d import _C as pytorch3d_c  # noqa: F401  (rasterizer)
+import sam2
+from sam2.build_sam import build_sam2  # noqa: F401  (also checks hydra-core)
+import pynput
+
+print("Segmentation, shape-prior and input imports passed.")
 PY
 
 # Persist the environment-local runtime paths only after every build and

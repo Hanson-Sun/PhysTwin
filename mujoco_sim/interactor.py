@@ -4,12 +4,12 @@ import mujoco
 import numpy as np
 
 IDENTITY_QUAT = (1.0, 0.0, 0.0, 0.0)
-END_PAUSE_SECONDS = 0.4
+END_PAUSE_SECONDS = 0.3
 DEFAULT_STEP_DT = 0.002  # fallback when no model is available; match your sim step
-# Smallest gap left between the claw's lowest geometry and the floor while
-# pushing. Enough to stop the pads sinking into the ground without lifting the
-# claw off the object it is pushing.
+
 PUSH_FLOOR_CLEARANCE = 0.002
+PUSH_DISTANCE = 0.52
+PUSH_START_CLEARANCE = 0.005
 
 
 def pause_steps(seconds: float, dt: float) -> int:
@@ -179,15 +179,18 @@ def object_push_trajectory(
     data,
     steps_per_segment: int = 30,
     body_name: str = "object",
-    margin: float = 0.06,
+    margin: float = PUSH_START_CLEARANCE,
     approach_height: float = 0.16,
     controller_name: str = "interactor0",
     end_pause_seconds: float = END_PAUSE_SECONDS,
+    push_distance: float = PUSH_DISTANCE,
 ) -> list:
-    """Approach, push through, and retract from an object's bounds.
+    """Approach an object, push it a fixed distance, and retract.
 
-    ``margin`` is the clearance between the controller geometry AABB and the
-    object AABB, rather than the clearance between their reference points.
+    ``margin`` is the clearance the claw starts at, so the approach ends just
+    short of the object rather than stopping well back from it. The stroke is
+    ``push_distance`` rather than a function of the object bounds, which is what
+    used to make a wide object travel several times further than a narrow one.
     """
     lower, upper = object_bounds(model, data, body_name)
     controller_lower, controller_upper = controller_local_bounds(
@@ -204,7 +207,7 @@ def object_push_trajectory(
     # above that (every box) keeps its centre height untouched.
     contact_z = max(center[2], -controller_lower[2] + PUSH_FLOOR_CLEARANCE)
     side_x = lower[0] - controller_upper[0] - margin
-    exit_x = upper[0] - controller_lower[0] + margin
+    exit_x = side_x + push_distance
     y = center[1]
     points = [
         (side_x, y, contact_z + approach_height),

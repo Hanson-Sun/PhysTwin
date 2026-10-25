@@ -26,7 +26,7 @@
              with a corner. -->
         <geom name="__NAME___pad_l" type="box" pos="0.052 0 -0.13" euler="0 -0.3 0"
               size="0.011 0.016 0.024"
-              material="claw_pad" friction="6.0 0.04 0.002" condim="4"
+              material="claw_pad" friction="1.5 0.04 0.002" condim="4"
               solref="0.004 1" margin="0.0005" contype="1" conaffinity="1"/>
       </body>
       <body name="__NAME___finger_r" pos="0.068 0 0.13">
@@ -42,7 +42,7 @@
               solref="0.01 1" contype="1" conaffinity="1"/>
         <geom name="__NAME___pad_r" type="box" pos="-0.052 0 -0.13" euler="0 0.3 0"
               size="0.011 0.016 0.024"
-              material="claw_pad" friction="6.0 0.04 0.002" condim="4"
+              material="claw_pad" friction="1.5 0.04 0.002" condim="4"
               solref="0.004 1" margin="0.0005" contype="1" conaffinity="1"/>
       </body>
 
