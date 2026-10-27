@@ -9,14 +9,15 @@ from pathlib import Path
 
 import numpy as np
 
+from asid.fim.cache import ActionRunner, FactorCache, factor_key
 from asid.fim.case import load_case
 from asid.fim.fim import Prior, posterior_std
 from asid.fim.group import build_partition
 from asid.fim.logging_utils import Run, progress_printer
-from asid.fim.operators import default_observation, parameterized_run
-from asid.fim.simulator import Rollout, SimConfig
+from asid.fim.operators import default_observation
+from asid.fim.simulator import SimConfig
 from asid.planning.actions import contact_frames, generate_actions, require_contact
-from asid.planning.dictionary import SUBSPACES, build_dictionary
+from asid.planning.dictionary import SUBSPACES, build_dictionary, subspace_seed
 from asid.planning.select import accumulate, greedy
 from asid.planning.viz import plot_action_gains
 
@@ -38,10 +39,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--tilts", type=float, nargs="+", default=[0.0],
         help="pitch in degrees; the family is every azimuth x tilt pair",
     )
-    parser.add_argument("--select", type=int, default=3)
+    parser.add_argument(
+        "--select", type=int, default=1, help="actions to keep; one per ASID iteration"
+    )
     parser.add_argument("--subspace", choices=SUBSPACES, default="shared")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--run-id", default=None)
+    parser.add_argument(
+        "--cache-dir",
+        type=Path,
+        default=None,
+        help="factor cache; defaults to <root>/<case>/.factor_cache",
+    )
     return parser
 
 
@@ -60,13 +69,27 @@ def main() -> None:
     actions = generate_actions(case, azimuths, tilts=args.tilts)
     clearance = require_contact(case, actions, config.contact_radius)
 
-    started = time.time()
-    requests = []
-    for action in actions:
-        rollout = Rollout(case, config)
-        rollout.set_action(action.controller, action.contact)
-        requests.append((action.name, parameterized_run(rollout, partition, observation)))
+    cache = FactorCache(args.cache_dir or Path(args.root) / case_name / ".factor_cache")
 
+    def key(index: int, name: str) -> str:
+        return factor_key(
+            case,
+            config,
+            partition.phi0,
+            actions[index].controller,
+            actions[index].contact,
+            rank,
+            args.step,
+            args.sigma,
+            subspace_seed(args.seed, index, args.subspace),
+        )
+
+    started = time.time()
+    runner = ActionRunner(case, config)
+    requests = [
+        (action.name, runner.run(action.controller, action.contact, partition, observation))
+        for action in actions
+    ]
     entries = build_dictionary(
         requests,
         partition.phi0,
@@ -77,6 +100,8 @@ def main() -> None:
         seed=args.seed,
         subspace=args.subspace,
         progress=progress_printer(started),
+        cache=cache,
+        key=key,
     )
     selected = greedy(entries, args.select)
     factors = None
@@ -131,6 +156,7 @@ def main() -> None:
             ),
             contact_radius=config.contact_radius,
         )
+    print(cache.report())
     print(f"run: {Path(args.root) / case_name / run_id}")
     print(f"figure: {figure}")
     print(f"selected: {[entry.name for entry, _ in selected]}")

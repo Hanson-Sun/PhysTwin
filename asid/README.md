@@ -20,14 +20,23 @@ subsample, 60 frames, 167 substeps, on one RTX 3060.
    a push can be scored for a fraction of the exact cost. At $\ell = 12$ it
    reproduces the exact action ranking (Spearman 0.94–1.0, same top action and
    greedy set at $g = 10$ and $g = 20$).
-3. **Selection.** Greedy selection on the Woodbury marginal gain, and a myopic
-   sequential rule that re-simulates every candidate from the deformed body and
-   scores $\log\det(I + P^{-1} H_a)$ against the accumulated posterior precision.
-   On the sloth the sequential set is `az240 → az180 → az300`, which differs from
-   the simultaneous greedy set at the second push.
+3. **Selection.** Ranking and greedy selection on the Woodbury marginal gain
+   $\log\det(I + P^{-1} H_a)$ against the accumulated posterior precision. Each
+   ASID iteration commits to **one** trajectory: screen the family, take the
+   argmax, refresh that action at the current state, execute, refit, recompute.
+   `plan_sequential.py` instead picks a *set* of pushes by re-simulating every
+   candidate from each deformed body (on the sloth `az240 → az180 → az300`,
+   which differs from the simultaneous greedy set at the second push). It is an
+   offline study of that question and is not part of the loop.
 4. **Harness.** Rollout wrapper with parameter writes, action swaps and start
    from a deformed state; run directories that record config, arrays and a
    manifest; figure scripts.
+5. **Trajectory planning.** The screened argmax initializes CEM over a spline
+   tool motion — per-waypoint offsets, a time warp and ±30° claw yaw/pitch —
+   scored by the same Woodbury marginal gain, with workspace, speed and contact
+   constraints. One trajectory per iteration, `1 + samples * iterations`
+   sketches, no nested rounds. Factors are cached by action bytes; the
+   simulator is reused across candidates. See [planning.md](planning.md).
 
 ## How it works
 
@@ -51,9 +60,10 @@ subsample, 60 frames, 167 substeps, on one RTX 3060.
 5. **Selection.** Keep factors, never reassemble $F$:
    $\text{gain}(a) = \log\det(I + U_a^\top H_\text{cur}^{-1} U_a)$,
    $H_\text{cur} = I + \sum_a U_a U_a^\top$.
-6. **Sequential.** Execute the chosen push, carry the body state, update
-   $P \leftarrow P + H_a$, then re-simulate every remaining candidate from that
-   state and repeat.
+6. **Plan.** Screen the azimuth/tilt family, refine its winner with CEM over the
+   spline, replay the plan through the MuJoCo capture path, then execute, refit
+   and recompute $P \leftarrow P + H_a$. `plan_sequential.py` (re-simulating every
+   candidate from each deformed body) is an offline set study, not the loop.
 
 ## Outputs and how to read them
 
@@ -178,7 +188,26 @@ conda run -n phystwin-cu132 env PYTHONPATH=. python -m unittest \
   tests.test_planning_trajectory tests.test_planning_mujoco
 
 conda run -n phystwin-cu132 env PYTHONPATH=. python scripts/plan_mujoco_smoke.py
+
+conda run -n phystwin-cu132 env PYTHONPATH=. python scripts/plan_push_trajectory.py \
+  --out experiments-fim/sim_soft_sloth_push/trajectory.json
+
+conda run -n phystwin-cu132 env PYTHONPATH=. python scripts/generate_sim_data.py \
+  models.json --case sim_soft_sloth_push \
+  --trajectory experiments-fim/sim_soft_sloth_push/trajectory.json \
+  --output_dir experiments-fim/sim_soft_sloth_push --output_name plan_push
 ```
+
+`plan_push_trajectory.py` screens the azimuth/tilt family, then refines the
+winner with CEM over a spline tool motion (waypoint offsets, time warp and claw
+orientation) and writes `trajectory.json`;
+`generate_sim_data.py --trajectory` replays it through the normal capture path,
+so the output has the case's own model, cameras, 848x480, fps and cadence and
+`color/{0,1,2}.mp4` is comparable to the dataset's videos. `run_fisher.sh` at the
+repository root chains every Fisher stage above and ends with those two steps.
+Read that video as a pipeline check: the objective is the rank-2 sketch gain at
+the nominal parameters with the prior only, it is exactly flat before contact,
+and after contact it is dominated by contact sensitivity (see `RUNBOOK.md` §5).
 
 The smoke run scores three small grouped-FIM candidate pushes, executes the
 selected trajectory with a coarse two-point tool approximation, and captures
@@ -204,6 +233,70 @@ conda run -n phystwin-cu132 env PYTHONPATH=. python scripts/plan_sequential.py \
 
 Use focused tests with `conda run -n phystwin-cu132`; name individual test
 modules because some simulator tests require CUDA and saved case data.
+
+## Warm-start prototype and data path
+
+MuJoCo's `scripts/generate_sim_data.py` captures three-camera RGB-D and
+`mujoco_sim/phystwin_export.py` writes color images/videos, depth in millimetres,
+calibration, metadata and a train/test split. `process_data.py` segments and
+tracks the images, lifts observations to 3D and writes `final_data.pkl` via
+`data_process/data_process_sample.py`. `qqtt/data/real_data.py` loads the tracked
+object/controller points and visibility masks to initialize the Warp trainer.
+This prototype starts at an existing, trusted `final_data.pkl`: it does **not**
+track fresh MuJoCo frames or connect new interactions to the trainer.
+
+From the repository root in an interactive WSL shell, with an existing case,
+its calibration and `experiments_optimization/<case>/optimal_params.pkl`:
+
+```bash
+cat > logs/continual_config.json <<'EOF'
+{
+  "case_name": "sim_soft_sloth_push",
+  "base_path": "data/different_types",
+  "output_dir": "experiments-fim/continual_example",
+  "frame_prefixes": [8, 12],
+  "iterations_per_round": 2,
+  "tracked_points": 96
+}
+EOF
+conda run -n phystwin-cu132 env PYTHONPATH=. WANDB_MODE=disabled \
+  python scripts/continue_warp.py logs/continual_config.json
+conda run -n phystwin-cu132 env PYTHONPATH=. WANDB_MODE=disabled \
+  python -m unittest -v tests.test_continue_warp
+```
+
+Choose a new `output_dir`: the runner refuses to overwrite an existing one.
+Each `round_NNN` contains its input prefix, training logs, every epoch's Warp
+checkpoint, `parameters.npz`, and `summary.json`; `config.json` and
+`history.json` record the overall run. The next round restores raw trainable
+values and Adam state, and rejects incompatible geometry, graph, and selected
+simulation settings. Older checkpoints lacking the resume metadata cannot be
+resumed. Treat pickle and PyTorch checkpoints as trusted input only. With
+`tracked_points` set, the reduced test model drops untracked surface and
+interior points, so it is not equivalent to the full model.
+
+A two-round WSL/CUDA run used the configuration above: 96 tracked points,
+8 and 12 frames, and two epochs per round. Adam steps advanced 14 to 36 and
+parameters changed with finite values. Both windows reported zero controller
+contacts; the losses use different frame prefixes and are not comparable as a
+learning curve. Warp emitted warnings about backward-disabled kernels. The
+run validates this restricted continuation and artifacts, not gradients,
+contact identification, fresh RGB-D preprocessing, or a closed active loop.
+Full preprocessing and CMA/training may exceed two minutes. For a manual
+end-to-end run, first create a project-local `models.json` manifest with a new
+case name and suitable MuJoCo object/trajectory settings, then run:
+
+```bash
+conda run -n phystwin-cu132 env PYTHONPATH=. python scripts/generate_sim_data.py \
+  models.json --output_dir data/different_types --case sim_soft_new_push
+conda run -n phystwin-cu132 env PYTHONPATH=. WANDB_MODE=disabled \
+  python scripts/run_case_pipeline.py --base_path data/different_types \
+  --case_name sim_soft_new_push --category sloth --no_visualize --skip_gaussians
+```
+
+The second command performs segmentation, tracking, 3D processing, CMA and Warp
+training and needs their existing models/assets; change the category and manifest
+for the chosen object. These long commands were not run in the bounded check.
 
 ## Limits
 

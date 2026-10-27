@@ -11,6 +11,9 @@ PUSH_FLOOR_CLEARANCE = 0.002
 PUSH_DISTANCE = 0.52
 PUSH_START_CLEARANCE = 0.005
 
+# PhysTwin's reconstructed world has z pointing down; MuJoCo's points up.
+PHYSTWIN_TO_MUJOCO = np.array([1.0, 1.0, -1.0])
+
 
 def pause_steps(seconds: float, dt: float) -> int:
     """Number of trajectory waypoints needed to hold for ``seconds``."""
@@ -47,6 +50,68 @@ def poke_trajectory(
     trajectory = approach + hold + retract
     trajectory += [trajectory[-1]] * pause_steps(end_pause_seconds, dt)
     return [(p, quat) for p in trajectory]
+
+
+def _quat(axis: str, angle: float) -> np.ndarray:
+    half = 0.5 * float(angle)
+    cosine, sine = np.cos(half), np.sin(half)
+    if axis == "y":
+        return np.array([cosine, 0.0, sine, 0.0])
+    return np.array([cosine, 0.0, 0.0, sine])
+
+
+def _quat_mul(a, b) -> np.ndarray:
+    aw, ax, ay, az = a
+    bw, bx, by, bz = b
+    return np.array(
+        [
+            aw * bw - ax * bx - ay * by - az * bz,
+            aw * bx + ax * bw + ay * bz - az * by,
+            aw * by - ax * bz + ay * bw + az * bx,
+            aw * bz + ax * by - ay * bx + az * bw,
+        ]
+    )
+
+
+def apply_tool_motion(trajectory: list, offsets, yaw=None, pitch=None) -> list:
+    """Add a per-frame tool motion to a scripted interactor trajectory.
+
+    ``offsets`` (T, 3) and the angles (T,) come from the ASID planner in
+    PhysTwin's z-down frame. With ``M = diag(1, 1, -1)`` the motion mirrors as
+    ``M Rz(yaw) Ry(pitch) M = Rz(yaw) Ry(-pitch)``: positions reflect in z, yaw
+    keeps its sign and pitch flips. Samples are resampled onto the waypoint grid.
+    """
+    offsets = np.asarray(offsets, dtype=float)
+    if offsets.ndim != 2 or offsets.shape[1] != 3 or len(offsets) < 2:
+        raise ValueError("offsets must be (frames, 3) with at least two frames")
+    if not trajectory:
+        raise ValueError("trajectory cannot be empty")
+    angles = []
+    for values in (yaw, pitch):
+        values = np.zeros(len(offsets)) if values is None else np.asarray(values, dtype=float)
+        if values.shape != (len(offsets),) or not np.isfinite(values).all():
+            raise ValueError("yaw and pitch must be finite and match the offsets")
+        angles.append(values)
+    if not np.isfinite(offsets).all():
+        raise ValueError("offsets must be finite")
+
+    times = np.linspace(0.0, 1.0, len(trajectory))
+    samples = np.linspace(0.0, 1.0, len(offsets))
+    delta = np.column_stack(
+        [np.interp(times, samples, offsets[:, axis]) for axis in range(3)]
+    ) * PHYSTWIN_TO_MUJOCO
+    yaw_t = np.interp(times, samples, angles[0])
+    pitch_t = -np.interp(times, samples, angles[1])
+    rotated = []
+    for (position, quat), shift, psi, theta in zip(trajectory, delta, yaw_t, pitch_t):
+        base = np.asarray(quat, dtype=float)
+        rotation = _quat_mul(_quat("z", psi), _quat("y", theta))
+        combined = _quat_mul(rotation, base)
+        combined /= np.linalg.norm(combined)
+        rotated.append(
+            (tuple(np.asarray(position, dtype=float) + shift), tuple(combined))
+        )
+    return rotated
 
 
 def multi_poke_trajectory(

@@ -73,19 +73,33 @@ def make_trajectory(controller: np.ndarray, contact: np.ndarray, controls: np.nd
     return Trajectory(offsets, controller + offsets[:, None, :], contact + offsets[:, None, :])
 
 
-def feasible(trajectory: Trajectory, lower: np.ndarray, upper: np.ndarray, max_speed: float, dt: float) -> bool:
-    """Check all template points against world bounds and framewise speed."""
+def feasible_points(
+    controller: np.ndarray,
+    contact: np.ndarray,
+    lower: np.ndarray,
+    upper: np.ndarray,
+    max_speed: float,
+    dt: float,
+) -> bool:
+    """Check point clouds against world bounds and framewise speed."""
     lower, upper = np.asarray(lower, float), np.asarray(upper, float)
     if (lower.shape != (3,) or upper.shape != (3,) or not np.isfinite(lower).all()
         or not np.isfinite(upper).all() or np.any(lower >= upper)
         or not np.isfinite(max_speed) or not np.isfinite(dt) or max_speed <= 0 or dt <= 0):
         raise ValueError("invalid workspace, speed, or timestep")
-    for points in (trajectory.controller, trajectory.contact):
+    for points in (controller, contact):
         if np.any(points < lower) or np.any(points > upper):
             return False
         if np.any(np.linalg.norm(np.diff(points, axis=0), axis=-1) > max_speed * dt):
             return False
     return True
+
+
+def feasible(trajectory: Trajectory, lower: np.ndarray, upper: np.ndarray, max_speed: float, dt: float) -> bool:
+    """Check all template points against world bounds and framewise speed."""
+    return feasible_points(
+        trajectory.controller, trajectory.contact, lower, upper, max_speed, dt
+    )
 
 
 def fisher_score(

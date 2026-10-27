@@ -51,6 +51,9 @@ def main() -> None:
     prior = Prior().std(partition.groups)
 
     started = time.time()
+    # One simulator for every action: set_action swaps the trajectory and run()
+    # restarts the state, so rebuilding per action only repeats kernel setup.
+    rollout = Rollout(case, sim_config)
     exact_entries = []
     exact_gains = {}
     whitened = {}
@@ -60,7 +63,6 @@ def main() -> None:
         if args.reuse_fisher and matrix_path.exists():
             fisher = Fisher(np.load(matrix_path), prior)
         else:
-            rollout = Rollout(case, sim_config)
             rollout.set_action(
                 np.load(directory / "controller.npy"), np.load(directory / "contact.npy")
             )
