@@ -30,6 +30,9 @@ if __name__ == "__main__":
     parser.add_argument("--case_name", type=str, required=True)
     parser.add_argument("--train_frame", type=int, required=True)
     parser.add_argument("--iterations", type=int)
+    parser.add_argument("--resume", help="Trusted checkpoint from a compatible earlier training run")
+    parser.add_argument("--output_dir", help="Separate output directory for this training run")
+    parser.add_argument("--data_path", help="Tracked PhysTwin data file (defaults to case final_data.pkl)")
     visualization = parser.add_mutually_exclusive_group()
     visualization.add_argument(
         "--visualize",
@@ -74,7 +77,7 @@ if __name__ == "__main__":
 
     print(f"[DATA TYPE]: {cfg.data_type}")
 
-    base_dir = f"experiments/{case_name}"
+    base_dir = args.output_dir or f"experiments/{case_name}"
 
     # Read the first-satage optimized parameters
     optimal_path = f"experiments_optimization/{case_name}/optimal_params.pkl"
@@ -101,8 +104,14 @@ if __name__ == "__main__":
     if args.verbose:
         logger.set_stream_level(logging.DEBUG)
     trainer = InvPhyTrainerWarp(
-        data_path=f"{base_path}/{case_name}/final_data.pkl",
+        data_path=args.data_path or f"{base_path}/{case_name}/final_data.pkl",
         base_dir=base_dir,
         train_frame=train_frame,
     )
-    trainer.train()
+    if args.resume:
+        start_epoch = trainer.resume_training(args.resume)
+        # --iterations counts additional epochs, not the absolute epoch index.
+        cfg.iterations += start_epoch + 1
+        trainer.train(start_epoch=start_epoch)
+    else:
+        trainer.train()
