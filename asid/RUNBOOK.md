@@ -116,6 +116,12 @@ Exact re-check of those candidates (24 min at `g = 10`, 54 min at `g = 20`):
 python scripts/validate_actions.py experiments-fim/$CASE/plan_g20_$TAG
 ```
 
+`--exact-top N` is what decides the push: the sketch only proposes a shortlist,
+because at 124 frames and `g = 20` its ordering disagrees with the exact Fisher
+(it ranked az270 first, the exact check ranked az090 first by 64 nats). Each
+exact Fisher costs `2P` rollouts (~18 min at `g = 20`, 124 frames) and is cached
+under `<root>/<case>/.exact_cache`, so raising `N` is a one-off cost.
+
 `plan_sequential.py`/`plot_sequential.py` pick a *set* of pushes by greedy
 re-simulation from each deformed state. That answers "which three pushes would
 I pick at once", which is not the loop: the loop plans one trajectory per
@@ -133,7 +139,7 @@ python scripts/plan_mujoco_smoke.py 2>&1 | tee logs/mujoco_smoke_$TAG.log
 
 python scripts/plan_push_trajectory.py --case $BASE/$CASE \
   --frames 60 --nodes 500 --groups 20 --azimuth-count 6 --tilts 0 \
-  --knots 3 --samples 8 --iterations 3 --offset-limit 0.05 \
+  --knots 3 --samples 8 --iterations 3 --offset-limit 0.05 --exact-top 4 \
   --out experiments-fim/$CASE/trajectory_$TAG.json \
   2>&1 | tee logs/trajectory_$TAG.log
 python scripts/generate_sim_data.py models.json --case $CASE \

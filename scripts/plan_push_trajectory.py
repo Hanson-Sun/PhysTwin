@@ -21,15 +21,23 @@ from pathlib import Path
 
 import numpy as np
 
-from asid.fim.cache import ActionRunner, FactorCache, factor_key
+from asid.fim.cache import (
+    ActionRunner,
+    ExactCache,
+    FactorCache,
+    exact_gain,
+    exact_key,
+    factor_key,
+)
 from asid.fim.case import load_case
 from asid.fim.fim import Prior
 from asid.fim.group import build_partition
 from asid.fim.operators import default_observation
 from asid.fim.simulator import SimConfig
 from asid.fim.sketch import gain_against, randomized_sketch
-from asid.planning.actions import generate_actions, require_contact
+from asid.planning.actions import Action, generate_actions, require_contact
 from asid.planning.dictionary import build_dictionary
+from asid.planning.select import exact_ordered, shortlist
 from asid.planning.spline import controls, plan_spline
 
 
@@ -56,6 +64,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--margin", type=float, default=0.15, help="workspace padding, metres")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--cache-dir", type=Path, default=None)
+    parser.add_argument(
+        "--exact-top",
+        type=int,
+        default=1,
+        help=(
+            "screen the family, then compute the exact Fisher for its best N actions "
+            "and start CEM from the exact-best; 0 starts from the sketch-best"
+        ),
+    )
+    parser.add_argument("--exact-cache", type=Path, default=None)
+    parser.add_argument(
+        "--skip-exact-score",
+        action="store_true",
+        help="skip the exact Fisher score of the plan and of its initializer",
+    )
     parser.add_argument("--current-factors", type=Path, default=None)
     parser.add_argument("--out", type=Path, default=None)
     return parser
@@ -107,10 +130,53 @@ def main() -> None:
         cache=cache,
         key=key,
     )
-    start_entry, start = max(zip(entries, actions), key=lambda pair: pair[0].gain)
-    print(f"screened {len(actions)} actions ({cache.report()})", flush=True)
+    by_name = {action.name: action for action in actions}
+    exact = ExactCache(
+        args.exact_cache or Path(args.root) / case_dir.name / ".exact_cache"
+    )
+
+    def exact_of(action: Action) -> float:
+        """Exact Fisher log-det of a screened action, cached by its own bytes."""
+        action_key = exact_key(
+            case,
+            config,
+            partition.phi0,
+            action.controller,
+            action.contact,
+            args.step,
+            args.sigma,
+        )
+        cached = exact.get(action_key)
+        if cached is None:
+            print(
+                f"exact Fisher {action.name}: {2 * partition.dimension + 1} rollouts",
+                flush=True,
+            )
+            cached = exact_gain(
+                runner.run(action.controller, action.contact, partition, observation),
+                partition.phi0,
+                args.step,
+                args.sigma,
+                prior,
+            )
+            exact.put(action_key, *cached)
+        return float(cached[0])
+
+    exact_gains: dict[str, float] = {}
+    if args.exact_top > 0:
+        candidates = shortlist(entries, min(args.exact_top, len(entries)))
+        for entry in candidates:
+            exact_gains[entry.name] = exact_of(by_name[entry.name])
+        start_entry = exact_ordered(candidates, exact_gains)[0]
+        basis = f"exact Fisher over the best {len(candidates)} of {len(entries)} screened"
+    else:
+        start_entry = max(entries, key=lambda item: item.gain)
+        basis = f"rank-{rank} sketch over {len(entries)} screened"
+    start = by_name[start_entry.name]
+    print(f"screened {len(actions)} actions ({cache.report()}); initializer basis: {basis}", flush=True)
     for entry in sorted(entries, key=lambda item: item.gain, reverse=True):
-        print(f"  {entry.name:<10} gain {entry.gain:7.2f}", flush=True)
+        note = f"  exact {exact_gains[entry.name]:7.2f}" if entry.name in exact_gains else ""
+        print(f"  {entry.name:<10} sketch {entry.gain:7.2f}{note}", flush=True)
 
     current = None
     if args.current_factors is not None:
@@ -164,12 +230,36 @@ def main() -> None:
         flush=True,
     )
 
+    exact_scores: dict[str, float] = {}
+    if not args.skip_exact_score:
+        exact_scores["start"] = (
+            exact_gains[start_entry.name] if start_entry.name in exact_gains else exact_of(start)
+        )
+        plan_gain, _ = exact_gain(
+            runner.run(plan.controller, plan.contact, partition, observation),
+            partition.phi0,
+            args.step,
+            args.sigma,
+            prior,
+        )
+        exact_scores["plan"] = float(plan_gain)
+        exact_scores["delta"] = float(plan_gain) - exact_scores["start"]
+        print(
+            f"exact Fisher: initializer {exact_scores['start']:.2f} -> plan "
+            f"{exact_scores['plan']:.2f} ({exact_scores['delta']:+.2f})",
+            flush=True,
+        )
+
     payload = {
         "case": case_dir.name,
         "start_action": start_entry.name,
         "start_gain": start_entry.gain,
         "screen": {entry.name: entry.gain for entry in entries},
+        "selection_basis": basis,
+        "exact": exact_gains,
+        "exact_scores": exact_scores,
         "score": plan.result.score,
+        "score_basis": "rank-{} sketch, prior factors only".format(rank),
         "history": plan.result.history,
         "evaluations": plan.result.evaluations,
         "spec": {

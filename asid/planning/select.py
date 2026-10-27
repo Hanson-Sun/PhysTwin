@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Mapping, Sequence
 
 import numpy as np
 
@@ -25,6 +25,30 @@ def subspace_entry(name: str, whitened: np.ndarray, Q: np.ndarray) -> Entry:
     U = np.asarray(Q, dtype=np.float64) @ (vectors * np.sqrt(values))
     gain = float(np.linalg.slogdet(np.eye(len(values)) + np.diag(values))[1])
     return Entry(name=name, gain=gain, U=U)
+
+
+def shortlist(entries: Sequence[Entry], count: int) -> list[Entry]:
+    """The ``count`` best entries by sketch gain, keeping name order on ties."""
+    if count < 1:
+        raise ValueError("a shortlist needs at least one entry")
+    return sorted(entries, key=lambda entry: entry.gain, reverse=True)[:count]
+
+
+def exact_ordered(
+    entries: Sequence[Entry], gains: Mapping[str, float]
+) -> list[Entry]:
+    """Order a shortlist by exact log-det.
+
+    The sketch ranks the family cheaply but its finite-difference protocol
+    differs from the exact one, so at g = 20 it can invert close candidates
+    (measured: az270 233.23 > az090 230.75 by sketch against 628.37 < 692.67
+    exactly). The decision therefore comes from the exact metric over the
+    shortlist; every shortlisted entry must have a gain.
+    """
+    missing = [entry.name for entry in entries if entry.name not in gains]
+    if missing:
+        raise ValueError(f"exact gains missing for shortlisted actions: {missing}")
+    return sorted(entries, key=lambda entry: gains[entry.name], reverse=True)
 
 
 def greedy(entries: Sequence[Entry], count: int) -> list[tuple[Entry, float]]:

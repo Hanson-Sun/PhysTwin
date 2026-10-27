@@ -9,7 +9,14 @@ from pathlib import Path
 
 import numpy as np
 
-from asid.fim.cache import ActionRunner, FactorCache, factor_key
+from asid.fim.cache import (
+    ActionRunner,
+    ExactCache,
+    FactorCache,
+    exact_gain,
+    exact_key,
+    factor_key,
+)
 from asid.fim.case import load_case
 from asid.fim.fim import Prior, posterior_std
 from asid.fim.group import build_partition
@@ -18,7 +25,7 @@ from asid.fim.operators import default_observation
 from asid.fim.simulator import SimConfig
 from asid.planning.actions import contact_frames, generate_actions, require_contact
 from asid.planning.dictionary import SUBSPACES, build_dictionary, subspace_seed
-from asid.planning.select import accumulate, greedy
+from asid.planning.select import accumulate, exact_ordered, greedy, shortlist
 from asid.planning.viz import plot_action_gains
 
 
@@ -50,6 +57,23 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help="factor cache; defaults to <root>/<case>/.factor_cache",
+    )
+    parser.add_argument(
+        "--exact-top",
+        type=int,
+        default=1,
+        help=(
+            "compute the exact Fisher for the best N screened actions and select on "
+            "that; 0 keeps pure sketch selection. The sketch's finite-difference "
+            "protocol differs from the exact one, so on close candidates it can "
+            "rank them the wrong way round."
+        ),
+    )
+    parser.add_argument(
+        "--exact-cache",
+        type=Path,
+        default=None,
+        help="exact Fisher cache; defaults to <root>/<case>/.exact_cache",
     )
     return parser
 
@@ -103,7 +127,51 @@ def main() -> None:
         cache=cache,
         key=key,
     )
-    selected = greedy(entries, args.select)
+    exact_gains: dict[str, float] = {}
+    exact_matrices: dict[str, np.ndarray] = {}
+    exact = ExactCache(
+        args.exact_cache or Path(args.root) / case_name / ".exact_cache"
+    )
+    if args.exact_top > 0:
+        candidates = shortlist(entries, min(args.exact_top, len(entries)))
+        allowed = {entry.name for entry in candidates}
+        for entry, action in zip(entries, actions):
+            if entry.name not in allowed:
+                continue
+            action_key = exact_key(
+                case,
+                config,
+                partition.phi0,
+                action.controller,
+                action.contact,
+                args.step,
+                args.sigma,
+            )
+            cached = exact.get(action_key)
+            if cached is None:
+                print(
+                    f"exact Fisher {entry.name}: {2 * partition.dimension + 1} rollouts",
+                    flush=True,
+                )
+                value = exact_gain(
+                    runner.run(action.controller, action.contact, partition, observation),
+                    partition.phi0,
+                    args.step,
+                    args.sigma,
+                    prior,
+                )
+                exact.put(action_key, *value)
+                cached = value
+            exact_gains[entry.name] = cached[0]
+            exact_matrices[entry.name] = cached[1]
+        ranked = exact_ordered(candidates, exact_gains)
+        selected = [(entry, exact_gains[entry.name]) for entry in ranked[: args.select]]
+        basis = f"exact Fisher over the best {len(candidates)} of {len(entries)} screened"
+        print(f"{exact.report()}; selected by exact gain: {[e.name for e, _ in selected]}")
+    else:
+        ranked = []
+        selected = greedy(entries, args.select)
+        basis = f"rank-{rank} sketch"
     factors = None
     for entry, _ in selected:
         factors = accumulate(factors, entry.U)
@@ -129,6 +197,19 @@ def main() -> None:
         "selected": [
             {"name": entry.name, "marginal_gain": gain} for entry, gain in selected
         ],
+        "selection_basis": basis,
+        "exact_top": args.exact_top,
+        "exact": exact_gains,
+        "exact_selected": [entry.name for entry, _ in selected],
+        # What the screen alone would have chosen, so a comparison run can score
+        # the sketch against the exact metric after the decision stopped using it.
+        "sketch_selected": [entry.name for entry, _ in greedy(entries, args.select)],
+        "rank_agreement": {
+            "sketch_top": max(entries, key=lambda item: item.gain).name,
+            "exact_top": ranked[0].name if ranked else None,
+            "top1_match": bool(ranked)
+            and max(entries, key=lambda item: item.gain).name == ranked[0].name,
+        },
         "rank": rank,
         "dimension": int(partition.dimension),
         "elapsed_minutes": (time.time() - started) / 60.0,
@@ -141,6 +222,10 @@ def main() -> None:
             experiment.save_array(f"{directory}/contact.npy", action.contact, "contact")
             experiment.save_array(f"{directory}/U.npy", entry.U, "sketch factor")
             experiment.save_array(f"{directory}/JQ.npy", entry.JQ, "sketch projection")
+        for name, matrix in exact_matrices.items():
+            experiment.save_array(
+                f"actions/{name}/fisher.npy", matrix, "exact Fisher"
+            )
         experiment.save_json("gains.json", payload)
         experiment.save_array("posterior_std.npy", posterior, "posterior std")
         figure = plot_action_gains(

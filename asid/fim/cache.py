@@ -14,6 +14,8 @@ from pathlib import Path
 
 import numpy as np
 
+from asid.fim.fim import Fisher
+from asid.fim.operators import jacobian
 from asid.fim.sketch import Sketch
 
 # Bump when the simulator, sketch or observation model changes: factors keyed by
@@ -32,8 +34,7 @@ def digest(*parts) -> str:
     return hasher.hexdigest()
 
 
-def factor_key(case, config, phi0, controller, contact, rank, step, sigma, seed) -> str:
-    """Everything a ``randomized_sketch`` result depends on, plus a version."""
+def _action_key(case, config, phi0, controller, contact, step, sigma) -> str:
     return digest(
         CACHE_VERSION,
         case.name,
@@ -42,11 +43,27 @@ def factor_key(case, config, phi0, controller, contact, rank, step, sigma, seed)
         np.asarray(phi0),
         np.asarray(controller),
         np.asarray(contact),
-        rank,
         step,
         sigma,
-        seed,
     )
+
+
+def factor_key(case, config, phi0, controller, contact, rank, step, sigma, seed) -> str:
+    """Everything a ``randomized_sketch`` result depends on, plus a version."""
+    return digest(_action_key(case, config, phi0, controller, contact, step, sigma), rank, seed)
+
+
+def exact_key(case, config, phi0, controller, contact, step, sigma) -> str:
+    """Everything an exact Fisher log-det depends on. No rank or seed: exact is exact."""
+    return digest("exact", _action_key(case, config, phi0, controller, contact, step, sigma))
+
+
+def exact_gain(run, phi0, step, sigma, prior_std) -> tuple[float, np.ndarray]:
+    """Exact Fisher log-det of one trajectory and its parameter-space matrix."""
+    fisher = Fisher.from_jacobian(
+        jacobian(run, phi0, step, central=True), sigma, np.asarray(prior_std, dtype=np.float64)
+    )
+    return fisher.logdet(), fisher.matrix
 
 
 class ActionRunner:
@@ -114,3 +131,38 @@ class FactorCache:
     def report(self) -> str:
         total = self.hits + self.misses
         return f"factor cache: {self.hits}/{total} hits"
+
+
+class ExactCache:
+    """Exact Fisher log-dets on disk, keyed by :func:`exact_key`.
+
+    The exact metric costs ``2P`` rollouts per action, so a shortlist is worth
+    caching; unlike a sketch factor it does not depend on rank or seed.
+    """
+
+    def __init__(self, root: Path | str | None = None):
+        self.root = Path(root) if root is not None else None
+        self.hits = 0
+        self.misses = 0
+
+    def get(self, key: str):
+        if self.root is None:
+            self.misses += 1
+            return None
+        path = self.root / f"{key}.npz"
+        if not path.is_file():
+            self.misses += 1
+            return None
+        data = np.load(path)
+        self.hits += 1
+        return float(data["gain"]), data["matrix"]
+
+    def put(self, key: str, gain: float, matrix: np.ndarray) -> None:
+        if self.root is None:
+            return
+        self.root.mkdir(parents=True, exist_ok=True)
+        np.savez(self.root / f"{key}.npz", gain=gain, matrix=matrix)
+
+    def report(self) -> str:
+        total = self.hits + self.misses
+        return f"exact cache: {self.hits}/{total} hits"
