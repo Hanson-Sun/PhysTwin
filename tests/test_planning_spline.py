@@ -70,12 +70,19 @@ class SpecTest(unittest.TestCase):
         for knots in (2, 3, 5):
             lower, upper = spline.bounds(knots, 0.05)
             self.assertEqual(lower.shape, (6 * knots - 2,))
-            self.assertTrue(np.all(upper[3:] > lower[3:]))
+            pinned = np.zeros(lower.size, dtype=bool)
+            pinned[[0, 1, 2, 4 * knots - 2, 5 * knots - 2]] = True
+            self.assertTrue(np.all(upper[pinned] == lower[pinned]))
+            self.assertTrue(np.all(upper[~pinned] > lower[~pinned]))
         lower, upper = spline.bounds(3, 0.05)
         np.testing.assert_allclose(lower[:3], 0.0)
         np.testing.assert_allclose(upper[:3], 0.0)
         np.testing.assert_allclose(lower[3:9], -0.05)
         np.testing.assert_allclose(upper[3:9], 0.05)
+        # The wrist also starts where the tool is: first yaw and pitch pinned,
+        # later waypoints free to rotate.
+        np.testing.assert_allclose(lower[10:13], [0.0, -np.deg2rad(30.0), -np.deg2rad(30.0)])
+        np.testing.assert_allclose(upper[10:13], [0.0, np.deg2rad(30.0), np.deg2rad(30.0)])
 
     def test_mirror_convention(self) -> None:
         positions = np.array([[0.01, 0.0, 0.02]])
@@ -84,6 +91,99 @@ class SpecTest(unittest.TestCase):
         np.testing.assert_allclose(mirrored, [[0.01, 0.0, -0.02]])
         np.testing.assert_allclose(yaw_mirrored, yaw)
         np.testing.assert_allclose(pitch_mirrored, -pitch)
+
+
+class PlanTest(unittest.TestCase):
+    """The searched plan must obey the envelope *as sampled*, not only at knots."""
+
+    def _plan(self, offset_limit: float = 0.05):
+        controller, contact = _template(frames=8, points=4)
+        nodes = np.asarray(contact, dtype=float).reshape(-1, 3)
+        scored = []
+
+        def score(candidate, contact_points):
+            scored.append(1.0)
+            return 1.0
+
+        plan = spline.plan_spline(
+            score,
+            (controller, contact),
+            nodes,
+            frames=8,
+            lower=np.full(3, -1.0),
+            upper=np.full(3, 1.0),
+            max_speed=10.0,
+            dt=1.0 / 30.0,
+            contact_radius=10.0,
+            knots=3,
+            offset_limit=offset_limit,
+            samples=6,
+            iterations=2,
+            elites=2,
+            seed=0,
+        )
+        return plan, scored
+
+    def test_plan_respects_the_sampled_envelope(self) -> None:
+        plan, _ = self._plan()
+        positions, yaw, pitch = spline.controls(plan.spec, 8)
+        self.assertLessEqual(float(np.abs(positions).max()), 0.05 + 1e-12)
+        self.assertLessEqual(
+            float(max(np.abs(yaw).max(), np.abs(pitch).max())), np.deg2rad(30.0) + 1e-12
+        )
+        self.assertLessEqual(
+            float(max(np.abs(np.diff(yaw)).max(), np.abs(np.diff(pitch)).max())),
+            spline.MAX_ANGULAR_RATE / 30.0 + 1e-12,
+        )
+        self.assertEqual(yaw[0], 0.0)
+        self.assertEqual(pitch[0], 0.0)
+        self.assertEqual(float(np.abs(positions[0]).max()), 0.0)
+
+    def test_search_improves_while_staying_in_the_envelope(self) -> None:
+        """Guards the regression where every sample was rejected and CEM stalled.
+
+        Measured on this objective: with a natural cubic interpolant the search
+        returns the initializer unchanged (-0.000845), because the overshoot puts
+        every candidate outside the envelope; with the shape-preserving spline it
+        reaches 0.0352 while the offsets stay inside the box.
+        """
+        frames = 60
+        controller, contact = _template(frames=frames, points=4)
+        nodes = np.asarray(contact, dtype=float).reshape(-1, 3)
+
+        def score(candidate, contact_points):
+            return float(candidate.mean(axis=1)[:, 0].mean())
+
+        start = score(controller, contact)
+        plan = spline.plan_spline(
+            score,
+            (controller, contact),
+            nodes,
+            frames=frames,
+            lower=np.full(3, -1.0),
+            upper=np.full(3, 1.0),
+            max_speed=10.0,
+            dt=1.0 / 30.0,
+            contact_radius=10.0,
+            knots=3,
+            offset_limit=0.05,
+            samples=6,
+            iterations=4,
+            elites=2,
+            seed=0,
+        )
+        self.assertGreater(plan.result.score, start + 1e-3)
+        positions, yaw, pitch = spline.controls(plan.spec, frames)
+        self.assertLessEqual(float(np.abs(positions).max()), 0.05 + 1e-12)
+        self.assertLessEqual(
+            float(max(np.abs(yaw).max(), np.abs(pitch).max())), np.deg2rad(30.0) + 1e-12
+        )
+
+    def test_out_of_envelope_samples_are_rejected(self) -> None:
+        plan, scored = self._plan(offset_limit=0.005)
+        self.assertLess(len(scored), plan.result.evaluations)
+        positions, _, _ = spline.controls(plan.spec, 8)
+        self.assertLessEqual(float(np.abs(positions).max()), 0.005 + 1e-12)
 
 
 class ReplayTest(unittest.TestCase):
