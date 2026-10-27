@@ -234,6 +234,62 @@ def eval_springs(
 
 
 @wp.kernel
+def eval_springs_deterministic(
+    x: wp.array(dtype=wp.vec3),
+    v: wp.array(dtype=wp.vec3),
+    control_x: wp.array(dtype=wp.vec3),
+    control_v: wp.array(dtype=wp.vec3),
+    num_object_points: int,
+    springs: wp.array(dtype=wp.vec2i),
+    rest_lengths: wp.array(dtype=float),
+    spring_Y: wp.array(dtype=float),
+    dashpot_damping: wp.array(dtype=float),
+    spring_Y_min: float,
+    spring_Y_max: float,
+    spring_start: wp.array(dtype=wp.int32),
+    spring_ids: wp.array(dtype=wp.int32),
+    f: wp.array(dtype=wp.vec3),
+):
+    """Accumulate each vertex's springs in a fixed order, without atomics."""
+    vertex = wp.tid()
+    total = wp.vec3(0.0, 0.0, 0.0)
+    for k in range(spring_start[vertex], spring_start[vertex + 1]):
+        tid = spring_ids[k]
+        if wp.exp(spring_Y[tid]) > spring_Y_min:
+            idx1 = springs[tid][0]
+            idx2 = springs[tid][1]
+            if idx1 >= num_object_points:
+                x1 = control_x[idx1 - num_object_points]
+                v1 = control_v[idx1 - num_object_points]
+            else:
+                x1 = x[idx1]
+                v1 = v[idx1]
+            if idx2 >= num_object_points:
+                x2 = control_x[idx2 - num_object_points]
+                v2 = control_v[idx2 - num_object_points]
+            else:
+                x2 = x[idx2]
+                v2 = v[idx2]
+
+            dis = x2 - x1
+            dis_len = wp.length(dis)
+            d = dis / wp.max(dis_len, 1e-6)
+            spring_force = (
+                wp.clamp(wp.exp(spring_Y[tid]), low=spring_Y_min, high=spring_Y_max)
+                * (dis_len / rest_lengths[tid] - 1.0)
+                * d
+            )
+            v_rel = wp.dot(v2 - v1, d)
+            dashpot = wp.clamp(dashpot_damping[0], low=0.0, high=200.0)
+            force = spring_force + dashpot * v_rel * d
+            if idx1 == vertex:
+                total += force
+            else:
+                total -= force
+    f[vertex] = total
+
+
+@wp.kernel
 def controller_contact_force(
     x: wp.array(dtype=wp.vec3),
     v: wp.array(dtype=wp.vec3),
@@ -776,6 +832,44 @@ def integrate_ground_collision(
     v_new[tid] = velocity_after
 
 
+@wp.kernel
+def soft_ground_force(
+    x: wp.array(dtype=wp.vec3),
+    v: wp.array(dtype=wp.vec3),
+    stiffness: float,
+    damping: float,
+    smoothing: float,
+    reverse_factor: float,
+    f: wp.array(dtype=wp.vec3),
+):
+    """Smooth penalty contact with the ground plane, no impact condition."""
+    tid = wp.tid()
+    normal = wp.vec3(0.0, 0.0, 1.0) * reverse_factor
+    signed_z = x[tid][2] * reverse_factor
+    z = -signed_z / smoothing
+    if z > 20.0:
+        penetration = -signed_z
+    else:
+        penetration = wp.log(1.0 + wp.exp(z)) * smoothing
+    contact = 1.0 / (1.0 + wp.exp(wp.clamp(signed_z / smoothing, -60.0, 60.0)))
+    signed_v = wp.dot(v[tid], normal)
+    force = stiffness * penetration - damping * signed_v * contact
+    f[tid] += normal * force
+
+
+@wp.kernel
+def integrate_soft(
+    x: wp.array(dtype=wp.vec3),
+    v: wp.array(dtype=wp.vec3),
+    dt: float,
+    x_new: wp.array(dtype=wp.vec3),
+    v_new: wp.array(dtype=wp.vec3),
+):
+    tid = wp.tid()
+    x_new[tid] = x[tid] + v[tid] * dt
+    v_new[tid] = v[tid]
+
+
 @wp.kernel(enable_backward=False)
 def compute_distances(
     pred: wp.array(dtype=wp.vec3),
@@ -1026,8 +1120,18 @@ class SpringMassSystemWarp:
         gt_object_motions_valid=None,
         self_collision=False,
         disable_backward=False,
+        deterministic_forces=False,
+        soft_ground=False,
+        ground_stiffness=1000.0,
+        ground_damping=2.0,
+        ground_smoothing=1e-4,
     ):
         logger.info(f"[SIMULATION]: Initialize the Spring-Mass System")
+        self.deterministic_forces = bool(deterministic_forces)
+        self.soft_ground = bool(soft_ground)
+        self.ground_stiffness = float(ground_stiffness)
+        self.ground_damping = float(ground_damping)
+        self.ground_smoothing = float(ground_smoothing)
         self.device = cfg.device
         self.disable_backward = disable_backward
         self.ground_contact_smoothing = float(
@@ -1053,6 +1157,10 @@ class SpringMassSystemWarp:
 
         self.n_vertices = init_vertices.shape[0]
         self.n_springs = init_springs.shape[0]
+        if self.deterministic_forces:
+            self.deterministic_start, self.deterministic_ids = self._build_incidence(
+                init_springs, num_object_points
+            )
 
         self.dt = dt
         self.num_substeps = num_substeps
@@ -1633,6 +1741,38 @@ class SpringMassSystemWarp:
                     outputs=[self.wp_masses],
                 )
 
+    def _build_incidence(self, springs, num_object_points):
+        pairs = springs.detach().cpu().numpy()
+        counts = np.zeros(num_object_points, dtype=np.int64)
+        for a, b in pairs:
+            if a < num_object_points:
+                counts[a] += 1
+            if b < num_object_points:
+                counts[b] += 1
+        start = np.zeros(num_object_points + 1, dtype=np.int32)
+        start[1:] = np.cumsum(counts)
+        ids = np.empty(int(start[-1]), dtype=np.int32)
+        cursor = start[:-1].copy()
+        for spring, (a, b) in enumerate(pairs):
+            if a < num_object_points:
+                ids[cursor[a]] = spring
+                cursor[a] += 1
+            if b < num_object_points:
+                ids[cursor[b]] = spring
+                cursor[b] += 1
+        return (
+            wp.from_torch(
+                torch.from_numpy(start).to(self.device),
+                dtype=wp.int32,
+                requires_grad=False,
+            ),
+            wp.from_torch(
+                torch.from_numpy(ids).to(self.device),
+                dtype=wp.int32,
+                requires_grad=False,
+            ),
+        )
+
     def step(self):
         if self.learn_mass and self.wp_log_mass is not None:
             if getattr(self, "use_anchor", False):
@@ -1687,24 +1827,34 @@ class SpringMassSystemWarp:
                     )
 
             # Calculate the spring forces
-            wp.launch(
-                kernel=eval_springs,
-                dim=self.n_springs,
-                inputs=[
-                    self.wp_states[i].wp_x,
-                    self.wp_states[i].wp_v,
-                    self.wp_states[i].wp_control_x,
-                    self.wp_states[i].wp_control_v,
-                    self.num_object_points,
-                    self.wp_springs,
-                    self.wp_rest_lengths,
-                    self.wp_spring_Y,
-                    self.wp_dashpot_damping,
-                    self.spring_Y_min,
-                    self.spring_Y_max,
-                ],
-                outputs=[self.wp_states[i].wp_vertice_forces],
-            )
+            spring_inputs = [
+                self.wp_states[i].wp_x,
+                self.wp_states[i].wp_v,
+                self.wp_states[i].wp_control_x,
+                self.wp_states[i].wp_control_v,
+                self.num_object_points,
+                self.wp_springs,
+                self.wp_rest_lengths,
+                self.wp_spring_Y,
+                self.wp_dashpot_damping,
+                self.spring_Y_min,
+                self.spring_Y_max,
+            ]
+            if self.deterministic_forces:
+                wp.launch(
+                    kernel=eval_springs_deterministic,
+                    dim=self.num_object_points,
+                    inputs=spring_inputs
+                    + [self.deterministic_start, self.deterministic_ids],
+                    outputs=[self.wp_states[i].wp_vertice_forces],
+                )
+            else:
+                wp.launch(
+                    kernel=eval_springs,
+                    dim=self.n_springs,
+                    inputs=spring_inputs,
+                    outputs=[self.wp_states[i].wp_vertice_forces],
+                )
 
             if self.controller_contact_enabled:
                 self.controller_contact_grid.build(
@@ -1775,6 +1925,21 @@ class SpringMassSystemWarp:
                 output_v = self.wp_states[i].wp_v_before_collision
             else:
                 output_v = self.wp_states[i].wp_v_before_ground
+
+            if self.soft_ground:
+                wp.launch(
+                    kernel=soft_ground_force,
+                    dim=self.num_object_points,
+                    inputs=[
+                        self.wp_states[i].wp_x,
+                        self.wp_states[i].wp_v,
+                        self.ground_stiffness,
+                        self.ground_damping,
+                        self.ground_smoothing,
+                        self.reverse_factor,
+                        self.wp_states[i].wp_vertice_forces,
+                    ],
+                )
 
             # Update the output_v using the vertive_forces
             wp.launch(
@@ -1850,18 +2015,30 @@ class SpringMassSystemWarp:
             )
 
             # Update the x and v
-            wp.launch(
-                kernel=integrate_ground_collision,
-                dim=self.num_object_points,
-                inputs=[
-                    self.wp_states[i].wp_x,
-                    self.wp_states[i].wp_v_after_ground_friction,
-                    self.wp_collide_elas,
-                    self.dt,
-                    self.reverse_factor,
-                ],
-                outputs=[self.wp_states[i + 1].wp_x, self.wp_states[i + 1].wp_v],
-            )
+            if self.soft_ground:
+                wp.launch(
+                    kernel=integrate_soft,
+                    dim=self.num_object_points,
+                    inputs=[
+                        self.wp_states[i].wp_x,
+                        self.wp_states[i].wp_v_after_ground_friction,
+                        self.dt,
+                    ],
+                    outputs=[self.wp_states[i + 1].wp_x, self.wp_states[i + 1].wp_v],
+                )
+            else:
+                wp.launch(
+                    kernel=integrate_ground_collision,
+                    dim=self.num_object_points,
+                    inputs=[
+                        self.wp_states[i].wp_x,
+                        self.wp_states[i].wp_v_after_ground_friction,
+                        self.wp_collide_elas,
+                        self.dt,
+                        self.reverse_factor,
+                    ],
+                    outputs=[self.wp_states[i + 1].wp_x, self.wp_states[i + 1].wp_v],
+                )
 
     def calculate_loss(self):
         # Compute the chamfer loss
