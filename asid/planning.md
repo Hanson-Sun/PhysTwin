@@ -50,6 +50,22 @@ Serialized controls, the vector CEM actually searches over:
 v = [ positions.ravel(), times[1:-1], yaw, pitch ]     dims = 6K - 2
 ```
 
+## Selection: the screen proposes, the exact Fisher decides
+
+The rank-`l` sketch is a *screen*, and its finite-difference protocol differs from
+the exact one: it perturbs `phi` along `step * W q` (whitened step `step`), while
+`jacobian` perturbs one raw coordinate by `step`. On close candidates that bias
+is decisive. Measured at 124 frames, `g = 20`: the sketch ranked
+`az270 233.23 > az090 230.75`, the exact Fisher ranked `az090 692.67 > 628.37`,
+and the same rank-12 subspace evaluated with the *exact* Fisher reproduces the
+exact order (203.79 vs 223.15) — so the inversion is the estimator's step, not
+subspace coverage (0 of 200 random subspaces inverted the order at any rank from
+8 to 41). The pipeline therefore screens with the sketch, computes the **exact**
+Fisher for the best `--exact-top N` candidates, and starts the iteration from the
+exact-best of those. Exact gains are cached by `exact_key` (case, config, `phi0`,
+trajectory bytes, step, sigma — no rank or seed), and the run writes each
+`actions/<name>/fisher.npy` so validation and heatmaps reuse them.
+
 ## Objective
 
 The screened action family supplies an initializer, not the answer. For a
@@ -143,9 +159,15 @@ direction is worth pushing from", not the planner's decision space.
 `scripts/plan_push_trajectory.py` writes `trajectory.json`:
 
 ```
-spec, samples {offsets[T,3], yaw[T], pitch[T]}, start_action, screen, score,
-history, evaluations, knots, rank, groups, frames, nodes, basis
+spec, samples {offsets[T,3], yaw[T], pitch[T]}, start_action, start_gain (sketch),
+screen, selection_basis, exact {action: exact log-det}, exact_scores {start, plan,
+delta}, score (sketch), history, evaluations, knots, rank, groups, frames, nodes,
+basis
 ```
+
+`exact_scores` is the comparison that matters: the exact Fisher log-det of the
+screened initializer and of the CEM plan itself, evaluated at the same `phi0`,
+under the same observation model.
 
 `scripts/generate_sim_data.py --trajectory <json>` resamples `samples` onto the
 scripted waypoint grid and applies them with `mujoco_sim.interactor.apply_tool_motion`,
@@ -181,7 +203,7 @@ cache only ever helps across repeated screens of the same family.
 | `asid/planning/cem.py` | Bounded CEM with infeasible-sample rejection |
 | `asid/planning/actions.py` | Screened azimuth/tilt family and contact checks |
 | `asid/planning/dictionary.py`, `select.py` | Sketch factors, marginal-gain selection |
-| `asid/fim/cache.py` | `ActionRunner` (one simulator), on-disk `FactorCache` |
+| `asid/fim/cache.py` | `ActionRunner` (one simulator), `FactorCache`, `ExactCache` |
 | `scripts/plan_push_trajectory.py` | Screen → CEM → `trajectory.json` |
 | `scripts/generate_sim_data.py` | `--trajectory` replay through the capture path |
 

@@ -7,7 +7,13 @@ import numpy as np
 from asid.fim.fim import posterior_std
 from asid.fim.sketch import gain_against
 from asid.planning.dictionary import Entry
-from asid.planning.select import accumulate, greedy, subspace_entry
+from asid.planning.select import (
+    accumulate,
+    exact_ordered,
+    greedy,
+    shortlist,
+    subspace_entry,
+)
 
 
 def entry(name: str, U: np.ndarray, gain: float = 0.0) -> Entry:
@@ -54,6 +60,40 @@ class GainTests(unittest.TestCase):
         entries = [entry("a", np.eye(2)), entry("b", np.eye(2))]
         self.assertEqual(len(greedy(entries, 5)), 2)
         self.assertEqual(greedy(entries, 0), [])
+
+
+class ShortlistTests(unittest.TestCase):
+    """The screen proposes candidates; the exact metric decides between them."""
+
+    def setUp(self):
+        self.entries = [
+            entry("az270", np.eye(2), gain=233.23),
+            entry("az090", np.eye(2), gain=230.75),
+            entry("az000", np.eye(2), gain=219.48),
+            entry("az180", np.eye(2), gain=209.25),
+        ]
+
+    def test_shortlist_takes_the_best_sketch_gains(self):
+        self.assertEqual(
+            [item.name for item in shortlist(self.entries, 2)], ["az270", "az090"]
+        )
+        self.assertEqual([item.name for item in shortlist(self.entries, 9)],
+                         ["az270", "az090", "az000", "az180"])
+        with self.assertRaises(ValueError):
+            shortlist(self.entries, 0)
+
+    def test_exact_order_overrides_the_sketch(self):
+        # Measured at 124 frames / g = 20: the sketch puts az270 first by 2.5
+        # nats while the exact Fisher puts az090 first by 64.3.
+        gains = {"az270": 628.373, "az090": 692.671}
+        ordered = exact_ordered(shortlist(self.entries, 2), gains)
+        self.assertEqual([item.name for item in ordered], ["az090", "az270"])
+        self.assertNotEqual(ordered[0].name, shortlist(self.entries, 1)[0].name)
+
+    def test_exact_order_requires_every_shortlisted_gain(self):
+        with self.assertRaises(ValueError) as caught:
+            exact_ordered(shortlist(self.entries, 2), {"az270": 1.0})
+        self.assertIn("az090", str(caught.exception))
 
 
 class SubspaceTests(unittest.TestCase):

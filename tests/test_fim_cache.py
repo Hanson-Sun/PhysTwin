@@ -7,7 +7,14 @@ from pathlib import Path
 
 import numpy as np
 
-from asid.fim.cache import FactorCache, digest, factor_key
+from asid.fim.cache import (
+    ExactCache,
+    FactorCache,
+    digest,
+    exact_gain,
+    exact_key,
+    factor_key,
+)
 from asid.fim.sketch import Sketch
 
 
@@ -86,6 +93,81 @@ class FactorCacheTest(unittest.TestCase):
     def test_digest_distinguishes_arrays(self) -> None:
         self.assertNotEqual(digest(np.zeros(3)), digest(np.ones(3)))
         self.assertEqual(digest(np.zeros(3)), digest(np.zeros(3)))
+
+
+class ExactCacheTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+
+    def _key(self, **overrides):
+        values = dict(
+            case=_Case(nodes=np.zeros((4, 3))),
+            config=_Config(),
+            phi0=np.zeros(5),
+            controller=np.zeros((4, 2, 3)),
+            contact=np.zeros((4, 6, 3)),
+            step=0.01,
+            sigma=0.005,
+        )
+        values.update(overrides)
+        return exact_key(**values)
+
+    def test_round_trip_and_gain_is_scalar(self) -> None:
+        cache = ExactCache(self.root)
+        self.assertIsNone(cache.get("missing"))
+        cache.put("key", 628.373, np.eye(3))
+        cached = cache.get("key")
+        self.assertIsNotNone(cached)
+        self.assertAlmostEqual(cached[0], 628.373)
+        np.testing.assert_allclose(cached[1], np.eye(3))
+        self.assertEqual((cache.hits, cache.misses), (1, 1))
+        self.assertIn("1/2", cache.report())
+
+    def test_disabled_cache_never_hits(self) -> None:
+        cache = ExactCache(None)
+        cache.put("key", 1.0, np.eye(2))
+        self.assertIsNone(cache.get("key"))
+        self.assertEqual(cache.hits, 0)
+
+    def test_key_ignores_rank_and_seed_but_tracks_the_action(self) -> None:
+        base = self._key()
+        self.assertEqual(base, self._key())
+        self.assertNotEqual(base, self._key(controller=np.ones((4, 2, 3))))
+        self.assertNotEqual(base, self._key(contact=np.ones((4, 6, 3))))
+        self.assertNotEqual(base, self._key(step=0.02))
+        self.assertNotEqual(base, self._key(sigma=0.01))
+        self.assertNotEqual(base, self._key(phi0=np.ones(5)))
+        self.assertNotEqual(base, self._key(config=_Config(frames=8)))
+        # An exact gain has no rank or seed, so it must not be keyed like a factor.
+        self.assertNotEqual(base, factor_key(**self._key_args()))
+
+    def _key_args(self):
+        return dict(
+            case=_Case(nodes=np.zeros((4, 3))),
+            config=_Config(),
+            phi0=np.zeros(5),
+            controller=np.zeros((4, 2, 3)),
+            contact=np.zeros((4, 6, 3)),
+            rank=2,
+            step=0.01,
+            sigma=0.005,
+            seed=0,
+        )
+
+    def test_exact_gain_matches_a_direct_logdet(self) -> None:
+        """One-dimensional run: the exact gain is the Fisher log-determinant."""
+        phi0 = np.zeros(1)
+
+        def run(phi):
+            return np.array([3.0 * phi[0], 2.0 * phi[0]])
+
+        gain, matrix = exact_gain(run, phi0, 0.01, 0.5, np.array([0.5]))
+        # J = [[3], [2]] / sigma = 0.5, whitened by prior std 0.5.
+        expected = np.log1p(((3.0 / 0.5) ** 2 + (2.0 / 0.5) ** 2) * 0.25)
+        self.assertAlmostEqual(gain, float(expected), places=8)
+        self.assertEqual(matrix.shape, (1, 1))
 
 
 if __name__ == "__main__":
