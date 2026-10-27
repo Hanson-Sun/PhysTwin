@@ -48,11 +48,12 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
-# Grounded-SAM2 is intentionally isolated in the data-processing environment.
+# SAM 2 ships with the unified environment; fail early with the fix if it is missing.
 if not args.skip_segmentation and importlib.util.find_spec("sam2") is None:
     raise RuntimeError(
-        "SAM2 is unavailable in this Python environment. Run process_data.py "
-        "with the phystwin-data interpreter or use scripts/run_case_pipeline.py."
+        "SAM2 is unavailable in this Python environment. Activate phystwin-cu132 "
+        "and run env_install/build_cuda13_extensions.sh to install the "
+        "segmentation stack into it."
     )
 
 # Set the debug flags

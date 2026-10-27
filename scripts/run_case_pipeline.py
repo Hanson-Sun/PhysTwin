@@ -2,8 +2,6 @@
 
 import argparse
 import csv
-import os
-import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -36,27 +34,14 @@ def case_config(
     return None, False, None
 
 
-def run(command: list[str], label: str, clean_data_environment: bool = False) -> None:
+def run(command: list[str], label: str) -> None:
     print(f"\n=== {label} ===")
-    environment = None
-    if clean_data_environment:
-        environment = os.environ.copy()
-        environment.pop("CUDA_HOME", None)
-        environment.pop("LD_LIBRARY_PATH", None)
-        environment["CUDA_HOME"] = "/usr/local/cuda-12.1"
-        environment["LD_LIBRARY_PATH"] = "/usr/local/cuda-12.1/lib64"
-    subprocess.run(command, cwd=REPO_ROOT, check=True, env=environment)
+    subprocess.run(command, cwd=REPO_ROOT, check=True)
 
 
 def require(path: Path, description: str) -> None:
     if not path.exists():
         raise FileNotFoundError(f"{description} was not produced: {path}")
-
-
-def default_data_python() -> str:
-    """Prefer the phystwin-data env's python for RGB-D processing (sam2 lives there)."""
-    data_python = Path(sys.executable).parents[2] / "phystwin-data" / "bin" / "python"
-    return str(data_python) if data_python.is_file() else sys.executable
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -65,12 +50,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--base_path", type=Path, default=DEFAULT_BASE_PATH)
     parser.add_argument("--category")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
-    parser.add_argument(
-        "--data_python",
-        default=default_data_python(),
-        help="Python executable for RGB-D processing; defaults to the "
-        "phystwin-data environment's python, falling back to the active interpreter.",
-    )
     parser.add_argument("--shape_prior", action="store_true")
     parser.add_argument("--no_shape_prior", action="store_true")
     parser.add_argument(
@@ -154,7 +133,6 @@ def main() -> None:
 
     if args.dry_run:
         print(f"Case: {args.case_name}")
-        print(f"Data python: {args.data_python}")
         print(f"Category: {category or '<not needed with --skip_process>'}")
         print(f"Shape prior: {use_shape_prior}")
         print(f"Shape generator: {shape_generator}")
@@ -170,7 +148,7 @@ def main() -> None:
 
     if not args.skip_process:
         process_command = [
-            *shlex.split(args.data_python),
+            sys.executable,
             "process_data.py",
             "--base_path",
             str(args.base_path),
@@ -186,7 +164,7 @@ def main() -> None:
             process_command.append("--skip_segmentation")
         if args.visualize:
             process_command.append("--visualize")
-        run(process_command, "PhysTwin RGB-D processing", clean_data_environment=True)
+        run(process_command, "PhysTwin RGB-D processing")
     require(case_dir / "final_data.pkl", "Processed motion data")
     require(case_dir / "split.json", "Train/test split")
 

@@ -384,6 +384,63 @@ class InvPhyTrainerWarp:
                 num_object_springs,
             )
 
+    def resume_training(self, model_path):
+        """Restore a training checkpoint for the same initial geometry and topology.
+
+        Only load trusted checkpoints. Refuse old inference-only checkpoints and
+        changed point/spring order rather than associating parameters with the
+        wrong physical elements.
+        """
+        checkpoint = torch.load(model_path, map_location=cfg.device, weights_only=False)
+        required = ("resume_geometry", "trainable_names", "trainable_values", "optimizer_state_dict", "epoch")
+        if any(key not in checkpoint for key in required):
+            raise ValueError("checkpoint lacks training-resume geometry or optimizer metadata")
+        geometry = checkpoint["resume_geometry"]
+        for name, actual in (
+            ("vertices", self.init_vertices),
+            ("springs", self.init_springs),
+            ("rest_lengths", self.init_rest_lengths),
+            ("masses", self.init_masses),
+            ("contact_points", self.controller_points_dense[0] if self.controller_points_dense is not None else None),
+        ):
+            saved = geometry.get(name)
+            if actual is None and saved is None:
+                continue
+            if saved is None or actual is None or saved.shape != actual.shape or not torch.equal(saved.to(actual.device), actual):
+                raise ValueError(f"checkpoint {name} do not match the training geometry")
+        names = [name for name, _ in self.trainable_parameters]
+        if checkpoint["trainable_names"] != names:
+            raise ValueError("checkpoint trainable parameter layout does not match")
+        expected_settings = {
+            "dt": float(self.simulator.dt),
+            "num_substeps": int(self.simulator.num_substeps),
+            "mass_normalization": float(self.simulator.mass_normalization),
+            "learn_mass": bool(self.simulator.learn_mass),
+        }
+        if checkpoint.get("resume_settings") != expected_settings:
+            raise ValueError("checkpoint simulation settings do not match")
+        if checkpoint["num_object_springs"] != self.num_object_springs:
+            raise ValueError("checkpoint object spring count does not match")
+        if bool(checkpoint.get("mass_use_anchor", False)) != bool(getattr(self.simulator, "use_anchor", False)):
+            raise ValueError("checkpoint mass representation does not match")
+        if getattr(self.simulator, "use_anchor", False):
+            saved_indices = checkpoint.get("mass_anchor_indices")
+            if saved_indices is None or not np.array_equal(saved_indices.cpu().numpy(), self.simulator.anchor_indices):
+                raise ValueError("checkpoint mass anchors do not match")
+        values = checkpoint["trainable_values"]
+        for name, parameter in self.trainable_parameters:
+            saved = values.get(name)
+            if saved is None or saved.shape != parameter.shape or not torch.isfinite(saved).all():
+                raise ValueError(f"checkpoint {name} trainable parameters are invalid")
+        # Optimizer state refers to these same Warp-backed tensors. Restore their
+        # raw values rather than clamped/exp-transformed visualization values.
+        with torch.no_grad():
+            for name, parameter in self.trainable_parameters:
+                parameter.copy_(values[name].to(parameter.device))
+        self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        wp.synchronize()
+        return int(checkpoint["epoch"])
+
     def train(self, start_epoch=-1):
         # Render the initial visualization
         video_path = f"{cfg.base_dir}/train/init.mp4"
@@ -725,6 +782,28 @@ class InvPhyTrainerWarp:
                     "dashpot_damping": wp.to_torch(self.simulator.wp_dashpot_damping, requires_grad=False).clone(),
                     "drag_damping": wp.to_torch(self.simulator.wp_drag_damping, requires_grad=False).clone(),
                     "optimizer_state_dict": self.optimizer.state_dict(),
+                    "trainable_names": [name for name, _ in self.trainable_parameters],
+                    "trainable_values": {
+                        name: parameter.detach().cpu().clone()
+                        for name, parameter in self.trainable_parameters
+                    },
+                    "resume_settings": {
+                        "dt": float(self.simulator.dt),
+                        "num_substeps": int(self.simulator.num_substeps),
+                        "mass_normalization": float(self.simulator.mass_normalization),
+                        "learn_mass": bool(self.simulator.learn_mass),
+                    },
+                    "resume_geometry": {
+                        "vertices": self.init_vertices.detach().cpu().clone(),
+                        "springs": self.init_springs.detach().cpu().clone(),
+                        "rest_lengths": self.init_rest_lengths.detach().cpu().clone(),
+                        "masses": self.init_masses.detach().cpu().clone(),
+                        "contact_points": (
+                            self.controller_points_dense[0].detach().cpu().clone()
+                            if self.controller_points_dense is not None else None
+                        ),
+                    },
+                    "training_loss": float(total_loss),
             }
             if getattr(self.simulator, "learn_mass", False) and self.simulator.wp_log_mass is not None:
                 masses = self.simulator.get_mass().cpu()

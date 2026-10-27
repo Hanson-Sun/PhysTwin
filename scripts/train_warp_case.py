@@ -15,6 +15,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cma_max_iter", type=int, default=20)
     parser.add_argument("--iterations", type=int)
     parser.add_argument("--skip_cma", action="store_true")
+    parser.add_argument("--resume", type=Path, help="Trusted prior training checkpoint")
+    parser.add_argument("--output_dir", type=Path, help="Separate training output directory")
     parser.add_argument(
         "--verbose",
         action="store_true",
@@ -55,6 +57,8 @@ def main() -> None:
         "--train_frame",
         str(train_frame),
     ]
+    if args.resume and not args.skip_cma:
+        raise ValueError("resuming requires --skip_cma to preserve the prior model")
     if not args.skip_cma:
         subprocess.run(
             [sys.executable, "optimize_cma.py", *common, "--max_iter", str(args.cma_max_iter)],
@@ -63,12 +67,16 @@ def main() -> None:
     train_command = [sys.executable, "train_warp.py", *common]
     if args.iterations is not None:
         train_command.extend(["--iterations", str(args.iterations)])
+    if args.resume:
+        train_command.extend(["--resume", str(args.resume)])
+    if args.output_dir:
+        train_command.extend(["--output_dir", str(args.output_dir)])
     train_command.append("--visualize" if args.visualize else "--no_visualize")
     if args.verbose:
         train_command.append("--verbose")
     subprocess.run(train_command, check=True)
 
-    train_dir = Path("experiments") / args.case_name / "train"
+    train_dir = (args.output_dir or Path("experiments") / args.case_name) / "train"
     checkpoints = list(train_dir.glob("best_*.pth"))
     if not checkpoints:
         raise FileNotFoundError(f"Training completed without a best checkpoint in {train_dir}")

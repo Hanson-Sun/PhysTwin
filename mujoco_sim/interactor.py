@@ -4,12 +4,15 @@ import mujoco
 import numpy as np
 
 IDENTITY_QUAT = (1.0, 0.0, 0.0, 0.0)
-END_PAUSE_SECONDS = 0.4
+END_PAUSE_SECONDS = 0.3
 DEFAULT_STEP_DT = 0.002  # fallback when no model is available; match your sim step
-# Smallest gap left between the claw's lowest geometry and the floor while
-# pushing. Enough to stop the pads sinking into the ground without lifting the
-# claw off the object it is pushing.
+
 PUSH_FLOOR_CLEARANCE = 0.002
+PUSH_DISTANCE = 0.52
+PUSH_START_CLEARANCE = 0.005
+
+# PhysTwin's reconstructed world has z pointing down; MuJoCo's points up.
+PHYSTWIN_TO_MUJOCO = np.array([1.0, 1.0, -1.0])
 
 
 def pause_steps(seconds: float, dt: float) -> int:
@@ -47,6 +50,68 @@ def poke_trajectory(
     trajectory = approach + hold + retract
     trajectory += [trajectory[-1]] * pause_steps(end_pause_seconds, dt)
     return [(p, quat) for p in trajectory]
+
+
+def _quat(axis: str, angle: float) -> np.ndarray:
+    half = 0.5 * float(angle)
+    cosine, sine = np.cos(half), np.sin(half)
+    if axis == "y":
+        return np.array([cosine, 0.0, sine, 0.0])
+    return np.array([cosine, 0.0, 0.0, sine])
+
+
+def _quat_mul(a, b) -> np.ndarray:
+    aw, ax, ay, az = a
+    bw, bx, by, bz = b
+    return np.array(
+        [
+            aw * bw - ax * bx - ay * by - az * bz,
+            aw * bx + ax * bw + ay * bz - az * by,
+            aw * by - ax * bz + ay * bw + az * bx,
+            aw * bz + ax * by - ay * bx + az * bw,
+        ]
+    )
+
+
+def apply_tool_motion(trajectory: list, offsets, yaw=None, pitch=None) -> list:
+    """Add a per-frame tool motion to a scripted interactor trajectory.
+
+    ``offsets`` (T, 3) and the angles (T,) come from the ASID planner in
+    PhysTwin's z-down frame. With ``M = diag(1, 1, -1)`` the motion mirrors as
+    ``M Rz(yaw) Ry(pitch) M = Rz(yaw) Ry(-pitch)``: positions reflect in z, yaw
+    keeps its sign and pitch flips. Samples are resampled onto the waypoint grid.
+    """
+    offsets = np.asarray(offsets, dtype=float)
+    if offsets.ndim != 2 or offsets.shape[1] != 3 or len(offsets) < 2:
+        raise ValueError("offsets must be (frames, 3) with at least two frames")
+    if not trajectory:
+        raise ValueError("trajectory cannot be empty")
+    angles = []
+    for values in (yaw, pitch):
+        values = np.zeros(len(offsets)) if values is None else np.asarray(values, dtype=float)
+        if values.shape != (len(offsets),) or not np.isfinite(values).all():
+            raise ValueError("yaw and pitch must be finite and match the offsets")
+        angles.append(values)
+    if not np.isfinite(offsets).all():
+        raise ValueError("offsets must be finite")
+
+    times = np.linspace(0.0, 1.0, len(trajectory))
+    samples = np.linspace(0.0, 1.0, len(offsets))
+    delta = np.column_stack(
+        [np.interp(times, samples, offsets[:, axis]) for axis in range(3)]
+    ) * PHYSTWIN_TO_MUJOCO
+    yaw_t = np.interp(times, samples, angles[0])
+    pitch_t = -np.interp(times, samples, angles[1])
+    rotated = []
+    for (position, quat), shift, psi, theta in zip(trajectory, delta, yaw_t, pitch_t):
+        base = np.asarray(quat, dtype=float)
+        rotation = _quat_mul(_quat("z", psi), _quat("y", theta))
+        combined = _quat_mul(rotation, base)
+        combined /= np.linalg.norm(combined)
+        rotated.append(
+            (tuple(np.asarray(position, dtype=float) + shift), tuple(combined))
+        )
+    return rotated
 
 
 def multi_poke_trajectory(
@@ -179,15 +244,18 @@ def object_push_trajectory(
     data,
     steps_per_segment: int = 30,
     body_name: str = "object",
-    margin: float = 0.06,
+    margin: float = PUSH_START_CLEARANCE,
     approach_height: float = 0.16,
     controller_name: str = "interactor0",
     end_pause_seconds: float = END_PAUSE_SECONDS,
+    push_distance: float = PUSH_DISTANCE,
 ) -> list:
-    """Approach, push through, and retract from an object's bounds.
+    """Approach an object, push it a fixed distance, and retract.
 
-    ``margin`` is the clearance between the controller geometry AABB and the
-    object AABB, rather than the clearance between their reference points.
+    ``margin`` is the clearance the claw starts at, so the approach ends just
+    short of the object rather than stopping well back from it. The stroke is
+    ``push_distance`` rather than a function of the object bounds, which is what
+    used to make a wide object travel several times further than a narrow one.
     """
     lower, upper = object_bounds(model, data, body_name)
     controller_lower, controller_upper = controller_local_bounds(
@@ -204,7 +272,7 @@ def object_push_trajectory(
     # above that (every box) keeps its centre height untouched.
     contact_z = max(center[2], -controller_lower[2] + PUSH_FLOOR_CLEARANCE)
     side_x = lower[0] - controller_upper[0] - margin
-    exit_x = upper[0] - controller_lower[0] + margin
+    exit_x = side_x + push_distance
     y = center[1]
     points = [
         (side_x, y, contact_z + approach_height),

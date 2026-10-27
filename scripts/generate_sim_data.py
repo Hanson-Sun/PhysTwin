@@ -11,6 +11,7 @@ import json
 import sys
 from pathlib import Path
 
+import numpy as np
 from tqdm import tqdm
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -18,6 +19,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from mujoco_sim.interactor import (
+    apply_tool_motion,
     object_grip_lift_trajectory,
     object_push_trajectory,
 )
@@ -179,8 +181,34 @@ def normalize(model: dict, manifest: Path) -> dict:
     }
 
 
-def generate(model: dict, output_dir: Path, overwrite: bool) -> Path:
-    case_dir = output_dir / model["case_name"]
+def load_trajectory(path: Path) -> dict[str, np.ndarray]:
+    """Read a planned tool motion: per-frame offsets, yaw and pitch.
+
+    The file is what ``scripts/plan_push_trajectory.py`` writes. ``samples`` holds
+    PhysTwin-frame arrays of shape (T, 3) and (T,) covering the plan horizon.
+    """
+    document = json.loads(path.read_text())
+    samples = document["samples"] if isinstance(document, dict) else document
+    offsets = np.asarray(samples["offsets"], dtype=float)
+    if offsets.ndim != 2 or offsets.shape[1] != 3 or len(offsets) < 2:
+        raise ValueError("offsets must be a (frames, 3) table")
+    motion = {"offsets": offsets}
+    for name in ("yaw", "pitch"):
+        values = np.asarray(samples.get(name, np.zeros(len(offsets))), dtype=float)
+        if values.shape != (len(offsets),):
+            raise ValueError(f"{name} must have one value per offset row")
+        motion[name] = values
+    return motion
+
+
+def generate(
+    model: dict,
+    output_dir: Path,
+    overwrite: bool,
+    motion: dict[str, np.ndarray] | None = None,
+    output_name: str | None = None,
+) -> Path:
+    case_dir = output_dir / (output_name or model["case_name"])
     if case_dir.exists() and any(case_dir.iterdir()) and not overwrite:
         raise FileExistsError(f"case already exists: {case_dir}; use --overwrite")
 
@@ -218,6 +246,10 @@ def generate(model: dict, output_dir: Path, overwrite: bool) -> Path:
             sim.data,
             steps_per_segment=model["steps_per_segment"],
         )
+        if motion is not None:
+            trajectory = apply_tool_motion(
+                trajectory, motion["offsets"], motion["yaw"], motion["pitch"]
+            )
         trajectories = {
             f"interactor{i}": trajectory for i in range(model["n_interactors"])
         }
@@ -238,7 +270,7 @@ def generate(model: dict, output_dir: Path, overwrite: bool) -> Path:
     )
 
     with tqdm(
-        total=None if model["max_controller_speed"] is not None else trajectory_length,
+        total=None if model["max_controller_speed"] is not None else len(trajectory),
         desc=model["case_name"],
         unit="step",
         dynamic_ncols=True,
@@ -277,7 +309,21 @@ def main() -> None:
         dest="cases",
         help="Only generate the named case(s); repeatable. Defaults to every model in the manifest.",
     )
+    parser.add_argument(
+        "--trajectory",
+        type=Path,
+        default=None,
+        help="Planned tool-motion JSON from plan_push_trajectory.py, applied to the push",
+    )
+    parser.add_argument(
+        "--output_name",
+        default=None,
+        help="Directory name for the capture; defaults to the case name",
+    )
     args = parser.parse_args()
+    if args.trajectory is not None and (args.cases is None or len(args.cases) != 1):
+        raise ValueError("--trajectory replays one case; pass exactly one --case")
+    motion = load_trajectory(args.trajectory) if args.trajectory is not None else None
 
     manifest = args.manifest.resolve()
     models = [normalize(model, manifest) for model in load_manifest(manifest)]
@@ -297,7 +343,14 @@ def main() -> None:
             f"({model['trajectory']}, interactors={model['n_interactors']})"
         )
         if not args.dry_run:
-            print(f"  wrote {generate(model, output_dir, args.overwrite)}")
+            written = generate(
+                model,
+                output_dir,
+                args.overwrite,
+                motion=motion,
+                output_name=args.output_name,
+            )
+            print(f"  wrote {written}")
 
 
 if __name__ == "__main__":
