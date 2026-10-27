@@ -160,15 +160,19 @@ direction is worth pushing from", not the planner's decision space.
 `scripts/plan_push_trajectory.py` writes `trajectory.json`:
 
 ```
-spec, samples {offsets[T,3], yaw[T], pitch[T]}, start_action, start_gain (sketch),
-screen, selection_basis, exact {action: exact log-det}, exact_scores {start, plan,
-delta}, score (sketch), history, evaluations, knots, rank, groups, frames, nodes,
-basis
+spec, samples {offsets[T,3], yaw[T], pitch[T]}, diagnostics {max_offset, max_yaw,
+max_pitch, max_slew, min_clearance}, start_action, start_gain (sketch), screen,
+selection_basis, exact {action: exact log-det}, exact_scores {start, plan, delta},
+score (sketch), history, evaluations, knots, rank, groups, frames, nodes, basis
 ```
 
 `exact_scores` is the comparison that matters: the exact Fisher log-det of the
 screened initializer and of the CEM plan itself, evaluated at the same `phi0`,
-under the same observation model.
+under the same observation model. Measured at 124 frames, 500 nodes, `g = 20`:
+`692.67 -> 850.86` (+158.19), with `diagnostics` recording how hard each guard
+bound (offset 0.050 m, yaw 0.174 rad, pitch 0.458 rad, slew 0.0218 rad/frame,
+clearance 0.9 mm). That run costs 39 min end to end including the replay, once
+the screen and arbitration are cached.
 
 `scripts/generate_sim_data.py --trajectory <json>` resamples `samples` onto the
 scripted waypoint grid and applies them with `mujoco_sim.interactor.apply_tool_motion`,
