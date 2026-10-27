@@ -105,7 +105,10 @@ twice and is local to its parameter/state linearization.
 forms `T = D^T D`, score `logdet(I + T)`, and `U = Q T^(1/2)` so the stored
 approximation is `U U^T = Q Q^T H Q Q^T`. In exact arithmetic this score is no
 larger than the full score, but finite-difference noise can invalidate that
-comparison. A random subspace is not guaranteed to capture the informative
+comparison. The projected matrix `Q Q^T H Q Q^T` is not generally bounded
+above by `H` in PSD order. Therefore, after conditioning on a non-identity
+precision, the sketched marginal gain can be either above or below the true
+marginal gain. A random subspace is not guaranteed to capture the informative
 spectrum or rank close candidates correctly. Reusing the same `Q` over actions
 and rounds confines accumulated approximate information to its span, which can
 understate information and distort the conditioned scores. Compare rank, seed,

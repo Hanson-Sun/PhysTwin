@@ -22,8 +22,14 @@ class Sketch:
 def random_subspace(dimension: int, rank: int, seed: int = 0) -> np.ndarray:
     """Orthonormal basis of a random Rademacher sketch subspace."""
     rng = np.random.default_rng(seed)
-    omega = rng.choice([-1.0, 1.0], size=(int(dimension), int(rank)))
-    return np.linalg.qr(omega)[0]
+    if not 1 <= rank <= dimension:
+        raise ValueError("rank must be between 1 and dimension")
+    # Reject rank-deficient draws: QR would otherwise add arbitrary directions.
+    for _ in range(100):
+        omega = rng.choice([-1.0, 1.0], size=(int(dimension), int(rank)))
+        if np.linalg.matrix_rank(omega) == rank:
+            return np.linalg.qr(omega, mode="reduced")[0]
+    raise RuntimeError("could not draw a full-rank random subspace")
 
 
 def randomized_sketch(
@@ -56,4 +62,6 @@ def gain_against(U: np.ndarray, current: np.ndarray | None) -> float:
     small = np.eye(current.shape[1]) + current.T @ current
     solved = np.linalg.solve(small, current.T @ U)
     correction = np.eye(U.shape[1]) + U.T @ U - U.T @ current @ solved
-    return float(np.linalg.slogdet(correction)[1])
+    correction = 0.5 * (correction + correction.T)
+    chol = np.linalg.cholesky(correction)
+    return float(2.0 * np.log(np.diag(chol)).sum())

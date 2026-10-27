@@ -73,7 +73,7 @@ def main() -> None:
     print("sampled scores (nats):", plan.sampled_scores)
     print("selected score and controls:", plan.score, plan.controls)
     print("RGB-D frames, commands, elapsed:", len(result.frames), len(result.commands), result.times[-1])
-    if len(result.frames) != 5 or len(result.commands) != 150 or not np.isfinite(plan.score):
+    if len(result.frames) != 6 or len(result.commands) != 150 or not np.isfinite(plan.score):
         raise RuntimeError("sim2sim smoke test did not produce the expected result")
 
 

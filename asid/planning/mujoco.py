@@ -37,7 +37,8 @@ def execute(
     A mocap-driven interactor is required so commanded and actual poses agree.
     The current MuJoCo pose must match the provided first-frame alignment;
     this routine never silently teleports a controller to a trajectory start.
-    The return contains the actual command per physics step and RGB-D frames.
+    The return contains the actual command per physics step and RGB-D frames,
+    including the initial frame before the first physics step.
     """
     points = np.asarray(trajectory.controller, dtype=np.float64)
     contact = np.asarray(trajectory.contact, dtype=np.float64)
@@ -75,8 +76,9 @@ def execute(
     positions = initial + translation * np.array([1.0, 1.0, -1.0])
     from mujoco_sim.simulation import Frame
 
-    frames, commands, times = [], [], []
     start_time = float(sim.data.time)
+    frames = [Frame(time=start_time, rgbd=sim.render_all_cameras(), object_qpos={})]
+    commands, times = [], []
     for index in range(1, len(positions)):
         for substep in range(1, steps + 1):
             fraction = substep / steps

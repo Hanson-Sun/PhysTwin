@@ -157,10 +157,17 @@ class Rollout:
         wp.synchronize()
 
     def set_action(self, controller: np.ndarray, contact: np.ndarray) -> None:
+        controller = np.asarray(controller)
+        contact = np.asarray(contact)
+        if (controller.ndim != 3 or controller.shape[1:] != (self.sim.num_control_points, 3)
+            or contact.ndim != 3 or contact.shape[1:] != (self.sim.num_contact_points, 3)):
+            raise ValueError("action point counts must match the simulator's controller geometry")
         if len(controller) != len(contact):
             raise ValueError("controller and contact trajectories disagree")
         if len(controller) < self.config.frames:
             raise ValueError("action is shorter than the rollout")
+        if not np.isfinite(controller).all() or not np.isfinite(contact).all():
+            raise ValueError("action points must be finite")
         self.sim.controller_points = torch.as_tensor(controller, dtype=torch.float32, device=cfg.device)
         self.sim.controller_contact_points = torch.as_tensor(contact, dtype=torch.float32, device=cfg.device)
         motion = torch.linalg.vector_norm(

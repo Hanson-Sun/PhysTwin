@@ -238,7 +238,7 @@ def generate(model: dict, output_dir: Path, overwrite: bool) -> Path:
     )
 
     with tqdm(
-        total=None if model["max_controller_speed"] is not None else trajectory_length,
+        total=None if model["max_controller_speed"] is not None else len(trajectory),
         desc=model["case_name"],
         unit="step",
         dynamic_ncols=True,

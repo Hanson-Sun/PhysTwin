@@ -25,7 +25,10 @@ class MuJoCoTrajectoryTests(unittest.TestCase):
             dt=dt, offset_limit=0.001, knots=1, candidates=2, seed=2,
         )
         result = execute(sim, plan.trajectory, initial_position=initial, quaternion=quat, frame_dt=dt)
-        self.assertEqual(len(result.frames), 2)
+        self.assertEqual(len(result.frames), 3)
+        np.testing.assert_allclose(
+            [frame.time for frame in result.frames], [0.0, dt, 2 * dt]
+        )
         self.assertEqual(result.commands.shape, (4, 3))
         expected = initial + (offsets[-1] + plan.trajectory.offsets[-1]) * [1, 1, -1]
         np.testing.assert_allclose(result.commands[-1], expected)

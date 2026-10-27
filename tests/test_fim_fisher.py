@@ -125,6 +125,16 @@ class SketchTests(unittest.TestCase):
         scaled = sketch.directions / self.prior[:, None]
         np.testing.assert_allclose(scaled.T @ scaled, np.eye(3), atol=1e-10)
 
+    def test_conditional_sketch_can_overestimate_gain(self):
+        # Projecting H before conditioning need not preserve its PSD ordering.
+        H = np.ones((2, 2))
+        factors = np.array([[2.0], [2.0]])
+        precision = np.eye(2) + factors @ factors.T
+        U = np.array([[1.0], [0.0]])
+        projected = gain_against(U, factors)
+        actual = np.linalg.slogdet(precision + H)[1] - np.linalg.slogdet(precision)[1]
+        self.assertGreater(projected, actual)
+
     def test_incremental_gain_matches_recomputation(self):
         rng = np.random.default_rng(4)
         current = rng.normal(size=(self.P, 3))

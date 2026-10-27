@@ -61,8 +61,8 @@ contact-active sloth window (100 nodes, two groups, 6 frames, rank 2, two
 candidate trajectories), the sampled scores were 8.2224 and 8.0653 nats;
 gradient refinement was rejected as unstable and the best sampled candidate
 was retained. This is a feasibility probe, not evidence that the sampled
-winner is robust at higher rank or representative of a complete push. The finite-difference gradient cost grows
-with the number of action knots and
+winner is robust at higher rank or representative of a complete push. The
+finite-difference gradient cost grows with the number of action knots and
 sketch rank; no speedup has been established. The existing control/contact
 path does not expose end-to-end autodiff.
 
@@ -74,7 +74,7 @@ segment at MuJoCo's physics timestep, and returns commands, timestamps and
 RGB-D frames. A focused test executes a selected synthetic trajectory.
 `scripts/plan_mujoco_smoke.py` scores three candidate pushes on a 200-node
 sloth reconstruction, then executes the best candidate in a MuJoCo sloth
-scene and captures five RGB-D frames. The smoke test represents the claw by
+scene and captures six RGB-D frames including the initial state. The smoke test represents the claw by
 only two pad centres in Warp, and initial object states are not an exact match;
 it validates plumbing, not transfer of predicted information or contact
 fidelity. The recorded sloth controller tracks are not rigid translations (up

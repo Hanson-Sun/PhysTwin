@@ -65,6 +65,11 @@ class RolloutTests(unittest.TestCase):
         swapped = rollout.run()
         self.assertLess(float((nominal - swapped).abs().max()), 1e-5)
 
+    def test_action_rejects_mismatched_point_counts(self):
+        rollout = Rollout(self.case, self.config())
+        with self.assertRaisesRegex(ValueError, "point counts"):
+            rollout.set_action(self.case.controller[:, :-1], self.case.contact)
+
     def test_carried_start_reproduces_a_fresh_run(self):
         rollout = Rollout(self.case, self.config())
         nominal = rollout.run()

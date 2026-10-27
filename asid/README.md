@@ -168,6 +168,26 @@ sequential selection at $g = 10$, 42 min. Figures regenerate in seconds.
 
 ## Reproduce
 
+Use an interactive WSL shell with the `phystwin-cu132` conda environment; the
+smoke case requires its existing `final_data.pkl`, CUDA, MuJoCo rendering, and
+`gmsh` for the soft mesh. From the repository root:
+
+```bash
+conda run -n phystwin-cu132 env PYTHONPATH=. python -m unittest \
+  tests.test_fim_fisher tests.test_fim_operators tests.test_fim_viz \
+  tests.test_planning_trajectory tests.test_planning_mujoco
+
+conda run -n phystwin-cu132 env PYTHONPATH=. python scripts/plan_mujoco_smoke.py
+```
+
+The smoke run scores three small grouped-FIM candidate pushes, executes the
+selected trajectory with a coarse two-point tool approximation, and captures
+six RGB-D frames including the initial state. It does not validate contact
+fidelity, information transfer, or a closed learning loop. See
+[`planning.md`](planning.md) for the objective and constraints. Full-size
+commands below exceed the two-minute development limit and are for manual
+execution only.
+
 ```bash
 conda run -n phystwin-cu132 env PYTHONPATH=. python scripts/run_fim_case.py \
   --groups 50 --frames 60 --run-id g50_f60
