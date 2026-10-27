@@ -7,14 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
-from asid.fim.cache import (
-    ExactCache,
-    FactorCache,
-    digest,
-    exact_gain,
-    exact_key,
-    factor_key,
-)
+from asid.fim.cache import ExactCache, FactorCache, digest, exact_key, factor_key
 from asid.fim.sketch import Sketch
 
 
@@ -155,19 +148,6 @@ class ExactCacheTest(unittest.TestCase):
             sigma=0.005,
             seed=0,
         )
-
-    def test_exact_gain_matches_a_direct_logdet(self) -> None:
-        """One-dimensional run: the exact gain is the Fisher log-determinant."""
-        phi0 = np.zeros(1)
-
-        def run(phi):
-            return np.array([3.0 * phi[0], 2.0 * phi[0]])
-
-        gain, matrix = exact_gain(run, phi0, 0.01, 0.5, np.array([0.5]))
-        # J = [[3], [2]] / sigma = 0.5, whitened by prior std 0.5.
-        expected = np.log1p(((3.0 / 0.5) ** 2 + (2.0 / 0.5) ** 2) * 0.25)
-        self.assertAlmostEqual(gain, float(expected), places=8)
-        self.assertEqual(matrix.shape, (1, 1))
 
 
 if __name__ == "__main__":

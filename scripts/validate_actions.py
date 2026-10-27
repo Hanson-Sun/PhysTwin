@@ -13,10 +13,11 @@ from scipy.stats import spearmanr
 from asid.fim.case import load_case
 from asid.fim.fim import Fisher, Prior
 from asid.fim.group import build_partition
-from asid.fim.operators import default_observation, jacobian, parameterized_run
-from asid.fim.simulator import Rollout, SimConfig
+from asid.fim.operators import default_observation
+from asid.fim.simulator import SimConfig
 from asid.fim.sketch import random_subspace
 from asid.planning.dictionary import Entry
+from asid.planning.measure import Decision, Measure
 from asid.planning.select import greedy, subspace_entry
 from asid.planning.viz import plot_gain_comparison
 
@@ -49,11 +50,20 @@ def main() -> None:
     )
     observation = default_observation(config["frames"], config["stride"], config["sigma"])
     prior = Prior().std(partition.groups)
+    measure = Measure(
+        case,
+        sim_config,
+        partition,
+        observation,
+        prior,
+        rank=gains["rank"],
+        step=config["step"],
+        sigma=config["sigma"],
+        seed=config["seed"],
+    )
+    decision = Decision.from_payload(gains)
 
     started = time.time()
-    # One simulator for every action: set_action swaps the trajectory and run()
-    # restarts the state, so rebuilding per action only repeats kernel setup.
-    rollout = Rollout(case, sim_config)
     exact_entries = []
     exact_gains = {}
     whitened = {}
@@ -63,12 +73,10 @@ def main() -> None:
         if args.reuse_fisher and matrix_path.exists():
             fisher = Fisher(np.load(matrix_path), prior)
         else:
-            rollout.set_action(
-                np.load(directory / "controller.npy"), np.load(directory / "contact.npy")
+            fisher = measure.fisher(
+                np.load(directory / "controller.npy"),
+                np.load(directory / "contact.npy"),
             )
-            run = parameterized_run(rollout, partition, observation)
-            jac = jacobian(run, partition.phi0, config["step"], central=True)
-            fisher = Fisher.from_jacobian(jac, config["sigma"], prior)
             np.save(matrix_path, fisher.matrix)
         eigenvalues, vectors = np.linalg.eigh(fisher.whitened)
         U = vectors * np.sqrt(np.maximum(eigenvalues, 0.0))
@@ -86,11 +94,7 @@ def main() -> None:
     exact_values = [exact_gains[name] for name in names]
     sketch_values = [sketch_gains[name] for name in names]
     exact_selected = greedy(exact_entries, select_count)
-    # ``selected`` is the pipeline's decision, which is exact-based once
-    # --exact-top is used; ``sketch_selected`` is what the screen alone picked.
-    sketch_selected = [
-        name for name in gains.get("sketch_selected", [])
-    ] or [entry["name"] for entry in gains["selected"]]
+    sketch_selected = list(decision.screened)
     exact_top = names[int(np.argmax(exact_values))]
     sketch_top = names[int(np.argmax(sketch_values))]
     exact_names = [entry.name for entry, _ in exact_selected]

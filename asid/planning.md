@@ -90,10 +90,11 @@ ordering criterion, not a calibrated expected information gain.
 
 A factor is **local to one trajectory, body state and parameter point**, so it
 is never reused across candidates. What is cached is only what does not change
-between them: one `Rollout` instance reused through `ActionRunner`, and sketch
-factors on disk keyed by a hash over the case, node count, every `SimConfig`
-field, `phi0`, both trajectory arrays, rank, step, sigma and seed
-(`asid/fim/cache.py`, `CACHE_VERSION` invalidates stale entries).
+between them: one `Rollout` instance reused through `ActionRunner`
+(`asid/fim/runner.py`), and sketch factors on disk keyed by a hash over the
+case, node count, every `SimConfig` field, `phi0`, both trajectory arrays, rank,
+step, sigma and seed (`asid/fim/cache.py`, `CACHE_VERSION` invalidates stale
+entries).
 
 ## Constraints
 
@@ -199,13 +200,24 @@ cache only ever helps across repeated screens of the same family.
 
 | Path | Role |
 |---|---|
-| `asid/planning/spline.py` | Spec, sampling, bounds, mirror, `plan_spline` |
+| `asid/planning/spline.py` | Spec, interpolation, rigid sampling, mirror |
+| `asid/planning/envelope.py` | Workspace, offset/orientation, slew and contact limits |
+| `asid/planning/search.py` | `plan_spline`: CEM over a spec inside an envelope |
 | `asid/planning/cem.py` | Bounded CEM with infeasible-sample rejection |
 | `asid/planning/actions.py` | Screened azimuth/tilt family and contact checks |
 | `asid/planning/dictionary.py`, `select.py` | Sketch factors, marginal-gain selection |
-| `asid/fim/cache.py` | `ActionRunner` (one simulator), `FactorCache`, `ExactCache` |
+| `asid/planning/measure.py` | `Measure` (gain per candidate) and `Decision` (the pick) |
+| `asid/fim/runner.py` | `ActionRunner`: one simulator re-armed per trajectory |
+| `asid/fim/cache.py` | `FactorCache`, `ExactCache` and their keys |
 | `scripts/plan_push_trajectory.py` | Screen → CEM → `trajectory.json` |
 | `scripts/generate_sim_data.py` | `--trajectory` replay through the capture path |
+
+Each concern has one owner: :mod:`asid.planning.measure` decides and records
+the gain of a candidate (sketch screen, exact arbitration, the labels a
+comparison reads), :mod:`asid.planning.envelope` owns feasibility and the box
+the search draws from, :mod:`asid.planning.search` owns the search, and
+:mod:`asid.fim.runner` owns rollout reuse. The scripts only parse arguments,
+wire those together and write artifacts.
 
 ## Not claimed
 

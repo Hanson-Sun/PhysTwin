@@ -185,7 +185,8 @@ smoke case requires its existing `final_data.pkl`, CUDA, MuJoCo rendering, and
 ```bash
 conda run -n phystwin-cu132 env PYTHONPATH=. python -m unittest \
   tests.test_fim_fisher tests.test_fim_operators tests.test_fim_viz \
-  tests.test_planning_trajectory tests.test_planning_mujoco
+  tests.test_planning_trajectory tests.test_planning_mujoco \
+  tests.test_planning_spline tests.test_planning_measure tests.test_fim_cache
 
 conda run -n phystwin-cu132 env PYTHONPATH=. python scripts/plan_mujoco_smoke.py
 
