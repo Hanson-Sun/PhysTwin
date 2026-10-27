@@ -86,7 +86,11 @@ def main() -> None:
     exact_values = [exact_gains[name] for name in names]
     sketch_values = [sketch_gains[name] for name in names]
     exact_selected = greedy(exact_entries, select_count)
-    sketch_selected = [entry["name"] for entry in gains["selected"]]
+    # ``selected`` is the pipeline's decision, which is exact-based once
+    # --exact-top is used; ``sketch_selected`` is what the screen alone picked.
+    sketch_selected = [
+        name for name in gains.get("sketch_selected", [])
+    ] or [entry["name"] for entry in gains["selected"]]
     exact_top = names[int(np.argmax(exact_values))]
     sketch_top = names[int(np.argmax(sketch_values))]
     exact_names = [entry.name for entry, _ in exact_selected]

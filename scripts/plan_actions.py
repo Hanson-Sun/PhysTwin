@@ -201,6 +201,9 @@ def main() -> None:
         "exact_top": args.exact_top,
         "exact": exact_gains,
         "exact_selected": [entry.name for entry, _ in selected],
+        # What the screen alone would have chosen, so a comparison run can score
+        # the sketch against the exact metric after the decision stopped using it.
+        "sketch_selected": [entry.name for entry, _ in greedy(entries, args.select)],
         "rank_agreement": {
             "sketch_top": max(entries, key=lambda item: item.gain).name,
             "exact_top": ranked[0].name if ranked else None,
