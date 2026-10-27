@@ -32,6 +32,7 @@ wp.config.verify_autograd_array_access = False
 class SimConfig:
     frames: int = 60
     num_substeps: int = 167
+    frame_dt: float = 1.0 / 30.0
     spring_Y: float = 3e4
     dashpot_damping: float = 100.0
     total_mass: float = 0.3
@@ -99,7 +100,7 @@ class Rollout:
             init_springs=torch.tensor(case.springs, dtype=torch.int32, device=cfg.device),
             init_rest_lengths=torch.tensor(case.rest_lengths, device=cfg.device),
             init_masses=torch.tensor(masses, device=cfg.device),
-            dt=1.0 / 30.0 / config.num_substeps,
+            dt=config.frame_dt / config.num_substeps,
             num_substeps=config.num_substeps,
             spring_Y=config.spring_Y,
             collide_elas=0.5,
@@ -160,8 +161,8 @@ class Rollout:
             raise ValueError("controller and contact trajectories disagree")
         if len(controller) < self.config.frames:
             raise ValueError("action is shorter than the rollout")
-        self.sim.controller_points = torch.tensor(controller, device=cfg.device)
-        self.sim.controller_contact_points = torch.tensor(contact, device=cfg.device)
+        self.sim.controller_points = torch.as_tensor(controller, dtype=torch.float32, device=cfg.device)
+        self.sim.controller_contact_points = torch.as_tensor(contact, dtype=torch.float32, device=cfg.device)
         motion = torch.linalg.vector_norm(
             self.sim.controller_contact_points[1:]
             - self.sim.controller_contact_points[:-1],

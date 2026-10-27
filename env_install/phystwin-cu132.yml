@@ -52,6 +52,8 @@ dependencies:
       - PyOpenGL==3.1.0
       # Bundles MuJoCo's optional elasticity plugin libraries (including cable).
       - mujoco>=3.3.0
+      # Required to tetrahedralize soft-object meshes for MuJoCo.
+      - gmsh==4.15.2
       - ninja==1.13.0
       - kornia==0.8.2
       - plyfile==1.1.3

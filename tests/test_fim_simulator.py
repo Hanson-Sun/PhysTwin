@@ -61,7 +61,7 @@ class RolloutTests(unittest.TestCase):
     def test_action_swap_matches_case_action(self):
         rollout = Rollout(self.case, self.config())
         nominal = rollout.run()
-        rollout.set_action(self.case.controller, self.case.contact)
+        rollout.set_action(self.case.controller.astype(np.float64), self.case.contact.astype(np.float64))
         swapped = rollout.run()
         self.assertLess(float((nominal - swapped).abs().max()), 1e-5)
 
