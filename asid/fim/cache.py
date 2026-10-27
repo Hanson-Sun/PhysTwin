@@ -1,9 +1,9 @@
-"""Caches for work that does not depend on the trajectory under test.
+"""On-disk caches for sketch factors and exact Fisher scores.
 
-A factor is not cacheable across trajectories: it is local to an action, a body
-state and the parameter point, so every candidate is scored with its own
-rollouts. What is cacheable is everything around that -- one simulator instance
-reused across actions, and factors keyed by exactly the inputs that made them.
+A factor is not cacheable across trajectories: it is local to a trajectory, a
+body state and the parameter point. What is cacheable is the factor itself,
+keyed by exactly the inputs that made it, and reused only when the same
+trajectory is measured again.
 """
 
 from __future__ import annotations
@@ -14,11 +14,9 @@ from pathlib import Path
 
 import numpy as np
 
-from asid.fim.fim import Fisher
-from asid.fim.operators import jacobian
 from asid.fim.sketch import Sketch
 
-# Bump when the simulator, sketch or observation model changes: factors keyed by
+# Bump when the simulator, sketch or observation model changes: entries keyed by
 # an older version are then ignored instead of silently reused.
 CACHE_VERSION = 1
 
@@ -34,7 +32,7 @@ def digest(*parts) -> str:
     return hasher.hexdigest()
 
 
-def _action_key(case, config, phi0, controller, contact, step, sigma) -> str:
+def _trajectory_key(case, config, phi0, controller, contact, step, sigma) -> str:
     return digest(
         CACHE_VERSION,
         case.name,
@@ -50,54 +48,32 @@ def _action_key(case, config, phi0, controller, contact, step, sigma) -> str:
 
 def factor_key(case, config, phi0, controller, contact, rank, step, sigma, seed) -> str:
     """Everything a ``randomized_sketch`` result depends on, plus a version."""
-    return digest(_action_key(case, config, phi0, controller, contact, step, sigma), rank, seed)
+    return digest(
+        _trajectory_key(case, config, phi0, controller, contact, step, sigma), rank, seed
+    )
 
 
 def exact_key(case, config, phi0, controller, contact, step, sigma) -> str:
     """Everything an exact Fisher log-det depends on. No rank or seed: exact is exact."""
-    return digest("exact", _action_key(case, config, phi0, controller, contact, step, sigma))
-
-
-def exact_gain(run, phi0, step, sigma, prior_std) -> tuple[float, np.ndarray]:
-    """Exact Fisher log-det of one trajectory and its parameter-space matrix."""
-    fisher = Fisher.from_jacobian(
-        jacobian(run, phi0, step, central=True), sigma, np.asarray(prior_std, dtype=np.float64)
+    return digest(
+        "exact", _trajectory_key(case, config, phi0, controller, contact, step, sigma)
     )
-    return fisher.logdet(), fisher.matrix
 
 
-class ActionRunner:
-    """One simulator instance, re-armed for each trajectory.
+class _Store:
+    """A directory of ``<key>.npz`` entries with hit and miss accounting."""
 
-    ``Rollout`` compiles Warp kernels and allocates its graph, so building one
-    per candidate costs seconds each. ``set_action`` swaps the controller and
-    contact trajectories and ``run`` restarts from the case state, so a single
-    instance is enough as long as evaluation stays sequential.
-    """
-
-    def __init__(self, case, config):
-        from asid.fim.simulator import Rollout  # keeps this module Warp-free
-
-        self.rollout = Rollout(case, config)
-
-    def run(self, controller, contact, partition, observation, initial=None):
-        """Return ``phi -> observation vector`` for one trajectory."""
-        def evaluate(phi):
-            self.rollout.set_action(controller, contact)
-            partition.apply(self.rollout, phi)
-            return observation.vector(self.rollout.run(initial=initial))
-        return evaluate
-
-
-class FactorCache:
-    """Sketch factors on disk, keyed by :func:`factor_key`."""
+    label = "cache"
 
     def __init__(self, root: Path | str | None = None):
         self.root = Path(root) if root is not None else None
         self.hits = 0
         self.misses = 0
 
-    def get(self, key: str) -> Sketch | None:
+    def _read(self, path: Path):
+        raise NotImplementedError
+
+    def get(self, key: str):
         if self.root is None:
             self.misses += 1
             return None
@@ -105,8 +81,25 @@ class FactorCache:
         if not path.is_file():
             self.misses += 1
             return None
-        data = np.load(path)
         self.hits += 1
+        return self._read(path)
+
+    def _path(self, key: str) -> Path:
+        self.root.mkdir(parents=True, exist_ok=True)
+        return self.root / f"{key}.npz"
+
+    def report(self) -> str:
+        total = self.hits + self.misses
+        return f"{self.label}: {self.hits}/{total} hits"
+
+
+class FactorCache(_Store):
+    """Sketch factors on disk, keyed by :func:`factor_key`."""
+
+    label = "factor cache"
+
+    def _read(self, path: Path) -> Sketch:
+        data = np.load(path)
         return Sketch(
             directions=data["directions"],
             JQ=data["JQ"],
@@ -118,9 +111,8 @@ class FactorCache:
     def put(self, key: str, sketch: Sketch) -> None:
         if self.root is None:
             return
-        self.root.mkdir(parents=True, exist_ok=True)
         np.savez(
-            self.root / f"{key}.npz",
+            self._path(key),
             directions=sketch.directions,
             JQ=sketch.JQ,
             T=sketch.T,
@@ -128,41 +120,21 @@ class FactorCache:
             gain=sketch.gain,
         )
 
-    def report(self) -> str:
-        total = self.hits + self.misses
-        return f"factor cache: {self.hits}/{total} hits"
 
-
-class ExactCache:
+class ExactCache(_Store):
     """Exact Fisher log-dets on disk, keyed by :func:`exact_key`.
 
-    The exact metric costs ``2P`` rollouts per action, so a shortlist is worth
-    caching; unlike a sketch factor it does not depend on rank or seed.
+    The exact metric costs ``2P`` rollouts per trajectory, so a shortlist is
+    worth caching; unlike a sketch factor it does not depend on rank or seed.
     """
 
-    def __init__(self, root: Path | str | None = None):
-        self.root = Path(root) if root is not None else None
-        self.hits = 0
-        self.misses = 0
+    label = "exact cache"
 
-    def get(self, key: str):
-        if self.root is None:
-            self.misses += 1
-            return None
-        path = self.root / f"{key}.npz"
-        if not path.is_file():
-            self.misses += 1
-            return None
+    def _read(self, path: Path):
         data = np.load(path)
-        self.hits += 1
         return float(data["gain"]), data["matrix"]
 
     def put(self, key: str, gain: float, matrix: np.ndarray) -> None:
         if self.root is None:
             return
-        self.root.mkdir(parents=True, exist_ok=True)
-        np.savez(self.root / f"{key}.npz", gain=gain, matrix=matrix)
-
-    def report(self) -> str:
-        total = self.hits + self.misses
-        return f"exact cache: {self.hits}/{total} hits"
+        np.savez(self._path(key), gain=gain, matrix=matrix)
