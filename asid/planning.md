@@ -16,8 +16,8 @@ orientation:
 spec = { positions[K,3], times[K] (0 = t_0 < ... < t_K-1 = 1), yaw[K], pitch[K] }
 ```
 
-With normalized time `u` over the plan horizon and natural cubic splines
-`S_pos`, `S_yaw`, `S_pitch` through the knots,
+With normalized time `u` over the plan horizon and shape-preserving (PCHIP)
+splines `S_pos`, `S_yaw`, `S_pitch` through the knots,
 
 ```
 p(u)   = S_pos(u)          positions off the recorded tool path
@@ -96,10 +96,15 @@ penalty that could masquerade as a low score) if:
   observations at 24 frames), so without this guard a claw that misses the object
   ties at the nominal score and floods the elites.
 
-`yaw` and `pitch` are bounded to ±30°, and interior times must keep a minimum
-gap. The offset box bounds the knots; a natural cubic can overshoot between them
-(measured 0.111 m on an 0.05 m box), which is why feasibility is checked on the
-sampled per-frame tool points and never on the knot vector alone.
+`yaw` and `pitch` are bounded to ±30°, the wrist slew to 1.5 rad/s, and interior
+times must keep a minimum gap. The interpolation is shape-preserving, so the
+waypoints bound the motion that is actually commanded; the envelope is still
+checked on the **sampled per-frame** motion, because a natural cubic does not do
+that — measured 0.25 m of offset and 53° of yaw from a bound of 0.05 m and 30°,
+which made the diagnostics claim a tighter motion than the plan was. The first
+waypoint is pinned in position *and* orientation — at 124 frames an unpinned
+wrist started the replay 15.5° / 9.8° off the recorded pose — so the plan departs
+from where the tool actually is and only then curves and rotates.
 
 ## Search: CEM over the spline
 

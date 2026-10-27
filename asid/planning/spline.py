@@ -1,10 +1,9 @@
-"""Spline tool motions in PhysTwin's z-down world frame.
-
-A plan is ``knots`` waypoints, each with a position offset from the recorded
-tool path, a time fraction and a claw orientation. Position and angles follow a
-cubic spline in normalized time, and the fractions are that spline's knot
-locations, so their spacing is the speed profile: the claw can dwell, press,
-back off and re-approach instead of sliding along one straight stroke.
+"""Spline tool motions in PhysTwin's z-down world frame.A plan is ``knots`` waypoints, each with a position offset from the recorded
+   tool path, a time fraction and a claw orientation. Position and angles follow a
+   shape-preserving (PCHIP) spline in normalized time, so the waypoints bound the
+   commanded motion, and the fractions are that spline's knot locations, so their
+   spacing is the speed profile: the claw can dwell, press, back off and
+   re-approach instead of sliding along one straight stroke.
 
 The tool rotates rigidly about its own centre every frame, so the controller and
 contact clouds keep their shape. Offsets are relative to the recorded path, so
@@ -17,7 +16,7 @@ from dataclasses import dataclass
 from typing import Callable, Sequence
 
 import numpy as np
-from scipy.interpolate import CubicSpline
+from scipy.interpolate import PchipInterpolator
 
 from asid.planning.actions import minimum_clearance
 from asid.planning.cem import CemResult, cem
@@ -25,6 +24,8 @@ from asid.planning.trajectory import feasible_points
 
 MIN_TIME_GAP = 1e-3
 ORIENTATION_LIMIT = np.deg2rad(30.0)
+# Wrist slew the plan may ask for; a poke does not spin the tool 90 deg/s.
+MAX_ANGULAR_RATE = 1.5
 REFLECTION = np.array([1.0, 1.0, -1.0])
 
 
@@ -97,24 +98,29 @@ def bounds(
     """Box bounds for the search, with the first waypoint pinned to the start pose.
 
     The tool is already at the recorded start pose, so a plan must not begin
-    somewhere else; only the later waypoints carry an offset.
+    somewhere else: the first knot's offset *and* its yaw and pitch are fixed at
+    zero, otherwise the replay's first command carries a wrist step (measured
+    15.5 deg / 9.8 deg at 124 frames before this was pinned). Rotation is still
+    free at every later waypoint.
     """
     if knots < 2 or not np.isfinite(offset_limit) or offset_limit <= 0.0:
         raise ValueError("invalid knot count or offset limit")
+    pinned_yaw = np.concatenate([np.zeros(1), np.full(knots - 1, -orientation_limit)])
+    pinned_yaw_upper = np.concatenate([np.zeros(1), np.full(knots - 1, orientation_limit)])
     lower = np.concatenate(
         [
             np.concatenate([np.zeros(3), np.full(3 * knots - 3, -offset_limit)]),
             np.full(knots - 2, MIN_TIME_GAP),
-            np.full(knots, -orientation_limit),
-            np.full(knots, -orientation_limit),
+            pinned_yaw,
+            pinned_yaw,
         ]
     )
     upper = np.concatenate(
         [
             np.concatenate([np.zeros(3), np.full(3 * knots - 3, offset_limit)]),
             np.full(knots - 2, 1.0 - MIN_TIME_GAP),
-            np.full(knots, orientation_limit),
-            np.full(knots, orientation_limit),
+            pinned_yaw_upper,
+            pinned_yaw_upper,
         ]
     )
     return lower, upper
@@ -146,12 +152,19 @@ def _rigid(points: np.ndarray, positions, yaw, pitch) -> np.ndarray:
 
 
 def controls(spec: Spec, frames: int):
-    """Per-frame offsets and angles of a spec, for replay outside the planner."""
+    """Per-frame offsets and angles of a spec, for replay outside the planner.
+
+    Shape-preserving interpolation (PCHIP), not a natural cubic: a cubic
+    overshoots between its knots, so the waypoint box would not bound the motion
+    that is actually commanded (measured 0.25 m of offset and 53° of yaw from a
+    box of 0.05 m and 30°). With PCHIP the waypoints are the extremes, so the box
+    and the sampled motion agree and a bounded search stays feasible.
+    """
     u = np.linspace(0.0, 1.0, frames)
     return (
-        CubicSpline(spec.times, spec.positions, axis=0, bc_type="natural")(u),
-        CubicSpline(spec.times, spec.yaw, bc_type="natural")(u),
-        CubicSpline(spec.times, spec.pitch, bc_type="natural")(u),
+        PchipInterpolator(spec.times, spec.positions, axis=0)(u),
+        PchipInterpolator(spec.times, spec.yaw)(u),
+        PchipInterpolator(spec.times, spec.pitch)(u),
     )
 
 
@@ -196,19 +209,31 @@ def plan_spline(
     elites: int = 2,
     seed: int = 0,
     orientation_limit: float = ORIENTATION_LIMIT,
+    max_rate: float = MAX_ANGULAR_RATE,
 ) -> Plan:
     """Search a spline tool motion with CEM.
 
     ``score`` maps a sampled ``(controller, contact)`` pair to an information
     gain and ``lower``/``upper`` bound the absolute tool points. Candidates that
-    leave the workspace, move faster than ``max_speed`` or never reach the object
-    are infeasible: the gain is exactly flat before contact, so those would
-    otherwise tie with the nominal plan and dominate the elites.
+    leave the workspace, leave the offset or orientation envelope *as sampled*,
+    move faster than ``max_speed``, slew faster than ``max_rate``, or never reach
+    the object are infeasible: the gain is exactly flat before contact, so those
+    would otherwise tie with the nominal plan and dominate the elites. The
+    envelope is checked on the sampled frames as well as at the knots: with a
+    monotone interpolant the two agree, and an interpolant that overshoots would
+    be caught rather than silently commanding a wider motion than the box.
     """
     controller, contact = template
 
     def objective(vector: np.ndarray) -> float | None:
         spec = unflatten(vector, knots)
+        positions, yaw, pitch = controls(spec, frames)
+        if np.abs(positions).max() > offset_limit:
+            return None
+        if max(np.abs(yaw).max(), np.abs(pitch).max()) > orientation_limit:
+            return None
+        if max(np.abs(np.diff(yaw)).max(), np.abs(np.diff(pitch)).max()) > max_rate * dt:
+            return None
         sampled = sample(spec, controller, contact, frames)
         if not feasible_points(*sampled, lower, upper, max_speed, dt):
             return None
