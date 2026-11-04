@@ -129,11 +129,18 @@ from where the tool actually is and only then curves and rotates.
 
 ```
 mean <- initializer (the best screened rigid action, zero spline)
+std  <- 0.1 * (upper - lower), one value per coordinate
 repeat iterations (default 3):
     evaluate mean and samples (default 8) drawn as mean + std * N(0, I)
     refit mean to the top elites (default 2), std <- 0.7 std + 0.3 std_elites
     clip to bounds, project (sorted times), floor std
 ```
+
+One std **per coordinate**, a fraction of that coordinate's own range: positions,
+time fractions and angles share the box but not a unit, and a single spread for
+all of them (the old mean-width rule) drew nearly every sample out of contact
+once the box became object-sized — measured 3% admitted, versus 76% here, which
+stall the search at the initializer.
 
 Elite ranking is scale-free, so the log-determinant score needs no rescaling;
 the initializer is always evaluated and always competes, so the plan can never
