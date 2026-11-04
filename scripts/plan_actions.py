@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-from asid.fim.cache import ExactCache, FactorCache
+from asid.fim.cache import ExactCache, FactorCache, run_cache
 from asid.fim.case import load_case
 from asid.fim.fim import Prior, posterior_std
 from asid.fim.group import build_partition
@@ -53,7 +53,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--cache-dir",
         type=Path,
         default=None,
-        help="factor cache; defaults to <root>/<case>/.factor_cache",
+        help="this run's cache; defaults to <root>/<case>/<run-id>.cache",
     )
     parser.add_argument(
         "--exact-top",
@@ -66,12 +66,6 @@ def build_parser() -> argparse.ArgumentParser:
             "rank them the wrong way round."
         ),
     )
-    parser.add_argument(
-        "--exact-cache",
-        type=Path,
-        default=None,
-        help="exact Fisher cache; defaults to <root>/<case>/.exact_cache",
-    )
     return parser
 
 
@@ -79,6 +73,8 @@ def main() -> None:
     args = build_parser().parse_args()
     case_name = Path(args.case).name
     run_id = args.run_id or datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_path = Path(args.root) / case_name / run_id
+    cache = args.cache_dir or run_cache(run_path)
     config = SimConfig(frames=args.frames, num_substeps=args.substeps)
     case = load_case(args.case, num_nodes=args.nodes, max_frames=args.frames)
     partition = build_partition(case, args.groups, seed=args.seed, config=config)
@@ -101,8 +97,8 @@ def main() -> None:
         sigma=args.sigma,
         seed=args.seed,
         subspace=args.subspace,
-        factors=FactorCache(args.cache_dir or Path(args.root) / case_name / ".factor_cache"),
-        exacts=ExactCache(args.exact_cache or Path(args.root) / case_name / ".exact_cache"),
+        factors=FactorCache(cache),
+        exacts=ExactCache(cache),
     )
     entries = measure.screen(actions, progress=progress_printer(started))
     decision = measure.decide(entries, actions, args.select, args.exact_top)
@@ -169,8 +165,8 @@ def main() -> None:
             ),
             contact_radius=config.contact_radius,
         )
-    print(measure.factors.report())
-    print(f"run: {Path(args.root) / case_name / run_id}")
+    print(f"{measure.factors.report()} in {cache}")
+    print(f"run: {run_path}")
     print(f"figure: {figure}")
     print(f"selected: {[choice.name for choice in decision.chosen]}")
 

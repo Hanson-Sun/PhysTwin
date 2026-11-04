@@ -21,6 +21,17 @@ from asid.fim.sketch import Sketch
 CACHE_VERSION = 1
 
 
+def run_cache(artifact: Path | str) -> Path:
+    """The cache directory of one run, derived from that run's own output path.
+
+    A run owns its caches: a smoke, a wide-box run and a full chain would
+    otherwise pile every entry into one directory per case, so a hit count says
+    nothing about which run reused what.
+    """
+    artifact = Path(artifact)
+    return artifact.parent / f"{artifact.stem}.cache"
+
+
 def digest(*parts) -> str:
     hasher = hashlib.sha1()
     for part in parts:
