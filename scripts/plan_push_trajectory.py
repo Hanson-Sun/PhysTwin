@@ -22,14 +22,14 @@ from pathlib import Path
 
 import numpy as np
 
-from asid.fim.cache import ExactCache, FactorCache
+from asid.fim.cache import ExactCache, FactorCache, run_cache
 from asid.fim.case import load_case
 from asid.fim.fim import Prior
 from asid.fim.group import build_partition
 from asid.fim.operators import default_observation
 from asid.fim.simulator import SimConfig
 from asid.planning.actions import generate_actions, require_contact
-from asid.planning.envelope import Envelope
+from asid.planning.envelope import GROUND_CLEARANCE, OFFSET_FRACTION, Envelope
 from asid.planning.measure import Measure
 from asid.planning.search import plan_spline
 
@@ -52,11 +52,27 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--samples", type=int, default=8)
     parser.add_argument("--iterations", type=int, default=3)
     parser.add_argument("--elites", type=int, default=2)
-    parser.add_argument("--offset-limit", type=float, default=0.05, help="metres")
+    parser.add_argument(
+        "--offset-fraction",
+        type=float,
+        default=OFFSET_FRACTION,
+        help="per-axis offset box as a fraction of the object's size",
+    )
     parser.add_argument("--orientation-limit", type=float, default=30.0, help="degrees")
     parser.add_argument("--margin", type=float, default=0.15, help="workspace padding, metres")
+    parser.add_argument(
+        "--ground-clearance",
+        type=float,
+        default=GROUND_CLEARANCE,
+        help="metres the claw must stay above the case's ground plane",
+    )
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--cache-dir", type=Path, default=None)
+    parser.add_argument(
+        "--cache-dir",
+        type=Path,
+        default=None,
+        help="this run's cache; defaults to <out>.cache, never shared between runs",
+    )
     parser.add_argument(
         "--exact-top",
         type=int,
@@ -66,7 +82,6 @@ def build_parser() -> argparse.ArgumentParser:
             "and start CEM from the exact-best; 0 starts from the sketch-best"
         ),
     )
-    parser.add_argument("--exact-cache", type=Path, default=None)
     parser.add_argument(
         "--skip-exact-score",
         action="store_true",
@@ -77,9 +92,16 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def cache_dir(args: argparse.Namespace, out: Path) -> Path:
+    """The cache of this run: beside its own trajectory file unless overridden."""
+    return args.cache_dir or run_cache(out)
+
+
 def main() -> None:
     args = build_parser().parse_args()
     case_dir = Path(args.case)
+    out = args.out or Path(args.root) / case_dir.name / "trajectory.json"
+    cache = cache_dir(args, out)
     config = SimConfig(
         frames=args.frames, num_substeps=args.substeps, frame_dt=1.0 / 30.0
     )
@@ -102,12 +124,8 @@ def main() -> None:
         step=args.step,
         sigma=args.sigma,
         seed=args.seed,
-        factors=FactorCache(
-            args.cache_dir or Path(args.root) / case_dir.name / ".factor_cache"
-        ),
-        exacts=ExactCache(
-            args.exact_cache or Path(args.root) / case_dir.name / ".exact_cache"
-        ),
+        factors=FactorCache(cache),
+        exacts=ExactCache(cache),
         current=current,
     )
 
@@ -120,7 +138,7 @@ def main() -> None:
     start_entry = {entry.name: entry for entry in entries}[decision.chosen[0].name]
     start = {action.name: action for action in actions}[start_entry.name]
     print(
-        f"screened {len(actions)} actions ({measure.factors.report()}); "
+        f"screened {len(actions)} actions ({measure.factors.report()} in {cache}); "
         f"initializer basis: {decision.basis}",
         flush=True,
     )
@@ -136,8 +154,14 @@ def main() -> None:
         dt=config.frame_dt,
         contact_radius=config.contact_radius,
         margin=args.margin,
-        offset_limit=args.offset_limit,
+        offset_fraction=args.offset_fraction,
         orientation_limit=np.deg2rad(args.orientation_limit),
+        ground_clearance=args.ground_clearance,
+    )
+    print(
+        f"offset box +-{[round(value, 4) for value in envelope.offset_limits]} m "
+        f"({args.offset_fraction} x the object's size)",
+        flush=True,
     )
     plan = plan_spline(
         measure.score,
@@ -199,6 +223,8 @@ def main() -> None:
             "yaw": plan.motion.yaw.tolist(),
             "pitch": plan.motion.pitch.tolist(),
         },
+        "offset_limits": envelope.offset_limits.tolist(),
+        "offset_fraction": args.offset_fraction,
         "diagnostics": dataclasses.asdict(plan.diagnostics),
         "knots": args.knots,
         "rank": measure.rank,
@@ -209,7 +235,6 @@ def main() -> None:
         if current is None
         else "nominal phi0 with accumulated factors",
     }
-    out = args.out or Path(args.root) / case_dir.name / "trajectory.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(payload, indent=2))
     print(f"wrote {out}")

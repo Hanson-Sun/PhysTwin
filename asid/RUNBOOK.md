@@ -120,7 +120,7 @@ python scripts/validate_actions.py experiments-fim/$CASE/plan_g20_$TAG
 because at 124 frames and `g = 20` its ordering disagrees with the exact Fisher
 (it ranked az270 first, the exact check ranked az090 first by 64 nats). Each
 exact Fisher costs `2P` rollouts (~18 min at `g = 20`, 124 frames) and is cached
-under `<root>/<case>/.exact_cache`, so raising `N` is a one-off cost.
+for that run only, so raising `N` is a one-off cost within the run.
 
 `plan_sequential.py`/`plot_sequential.py` pick a *set* of pushes by greedy
 re-simulation from each deformed state. That answers "which three pushes would
@@ -139,7 +139,7 @@ python scripts/plan_mujoco_smoke.py 2>&1 | tee logs/mujoco_smoke_$TAG.log
 
 python scripts/plan_push_trajectory.py --case $BASE/$CASE \
   --frames 60 --nodes 500 --groups 20 --azimuth-count 6 --tilts 0 \
-  --knots 3 --samples 8 --iterations 3 --offset-limit 0.05 --exact-top 4 \
+  --knots 3 --samples 8 --iterations 3 --offset-fraction 0.5 --exact-top 4 \
   --out experiments-fim/$CASE/trajectory_$TAG.json \
   2>&1 | tee logs/trajectory_$TAG.log
 python scripts/generate_sim_data.py models.json --case $CASE \
@@ -155,9 +155,12 @@ over a spline (waypoint offsets, time warp, ±30° claw yaw/pitch) and replays t
 plan through the generator, so the capture has the case's own model, cameras,
 848x480 resolution, `capture_every` and fps: `color/{0,1,2}.mp4` is comparable
 to `data/different_types/<case>/color/`. Allow ~65 min at the defaults: a
-six-action screen (~13 min, ~4 min on a `.factor_cache` hit) plus 25 CEM
-evaluations at ~2.1 min each. Lower `--samples`/`--iterations` to budget a
-shorter plan; the screen is the part the cache removes. See
+six-action screen (~13 min, ~4 min on a cache hit) plus 25 CEM evaluations at
+~2.1 min each. Each run caches its own work under `<out>.cache` (or
+`<run-id>.cache` for `plan_actions.py`); no two runs share a cache, so a re-run
+of the same `--out` hits and a different run does not. Lower
+`--samples`/`--iterations` to budget a shorter plan; the screen is the part the
+cache removes. See
 [planning.md](planning.md) for the parameterization and the score.
 
 Read the result honestly. The objective is the sketch gain at the nominal

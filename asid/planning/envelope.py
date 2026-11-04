@@ -1,4 +1,4 @@
-"""The feasible set of tool motions: workspace, envelope, slew and contact.
+"""The feasible set of tool motions: workspace, floor, slew and contact.
 
 One owner of every constraint a candidate must satisfy, and of the box the
 search draws from. A candidate that leaves the set is infeasible rather than
@@ -16,6 +16,19 @@ import numpy as np
 from asid.planning import spline
 from asid.planning.actions import minimum_clearance
 from asid.planning.spline import Motion, Spec
+
+# The case frame points down, so the ground plane is the largest z a tool point
+# may have. It is z = 0 for the recorded cases: their objects rest on it, and the
+# Warp rollout penalises z > 0 with its soft-ground spring.
+GROUND_Z = 0.0
+# How close to that plane a planned motion may come.
+GROUND_CLEARANCE = 0.005
+# The offset box is the object's own bounding box times this fraction, per axis,
+# so the search space scales with what is being poked instead of a fixed metre
+# count: a waypoint may be moved anywhere within the object's own extent, which
+# is the space in which a push can still engage it. The contact guard rejects
+# the rest.
+OFFSET_FRACTION = 1.0
 
 
 def within_workspace(
@@ -57,12 +70,14 @@ class Diagnostics:
     max_pitch: float
     max_slew: float
     min_clearance: float
+    ground_clearance: float
 
     def summary(self) -> str:
         return (
             f"max offset {self.max_offset:.3f} m, yaw {self.max_yaw:.2f} rad, "
             f"pitch {self.max_pitch:.2f} rad, slew {self.max_slew:.3f} rad/frame, "
-            f"clearance {self.min_clearance:.3f} m"
+            f"clearance {self.min_clearance:.3f} m, "
+            f"floor clearance {self.ground_clearance:.3f} m"
         )
 
 
@@ -73,13 +88,15 @@ class Envelope:
     lower: np.ndarray
     upper: np.ndarray
     max_speed: float
-    offset_limit: float
+    offset_limits: np.ndarray
     orientation_limit: float
     max_rate: float
     dt: float
     contact_radius: float
     nodes: np.ndarray
     frames: int
+    ground_z: float = GROUND_Z
+    ground_clearance: float = GROUND_CLEARANCE
 
     @classmethod
     def from_demo(
@@ -91,20 +108,26 @@ class Envelope:
         dt: float,
         contact_radius: float,
         margin: float = 0.15,
-        offset_limit: float = 0.05,
+        offset_fraction: float = OFFSET_FRACTION,
         orientation_limit: float = spline.ORIENTATION_LIMIT,
         speed_factor: float = 1.5,
         max_rate: float = spline.MAX_ANGULAR_RATE,
+        ground_z: float = GROUND_Z,
+        ground_clearance: float = GROUND_CLEARANCE,
     ) -> "Envelope":
         """Wrap what the demonstration occupies, with room to move and to be faster.
 
         The workspace is the object plus the recorded tool path, padded: an
         object-only box would reject the demonstration's own approach, which
-        starts half a stroke away.
+        starts half a stroke away. The offset box is ``offset_fraction`` times
+        the object's bounding box, per axis.
         """
+        if not np.isfinite(offset_fraction) or offset_fraction <= 0.0:
+            raise ValueError("offset fraction must be positive and finite")
+        nodes = np.asarray(nodes, dtype=np.float64)
         controller, contact = (np.asarray(cloud, dtype=np.float64) for cloud in template)
         occupied = np.concatenate(
-            [np.asarray(nodes, dtype=np.float64), controller.reshape(-1, 3), contact.reshape(-1, 3)]
+            [nodes, controller.reshape(-1, 3), contact.reshape(-1, 3)]
         )
         peak = max(
             float(np.linalg.norm(np.diff(cloud, axis=0), axis=-1).max())
@@ -114,31 +137,65 @@ class Envelope:
             lower=occupied.min(axis=0) - margin,
             upper=occupied.max(axis=0) + margin,
             max_speed=speed_factor * peak / dt,
-            offset_limit=offset_limit,
+            offset_limits=offset_fraction * (nodes.max(axis=0) - nodes.min(axis=0)),
             orientation_limit=orientation_limit,
             max_rate=max_rate,
             dt=dt,
             contact_radius=contact_radius,
-            nodes=np.asarray(nodes, dtype=np.float64),
+            nodes=nodes,
             frames=frames,
+            ground_z=ground_z,
+            ground_clearance=ground_clearance,
         )
 
-    def bounds(self, knots: int) -> tuple[np.ndarray, np.ndarray]:
+    @property
+    def ground_limit(self) -> float:
+        """The lowest world z the tool may reach (z counts down, so it is a cap)."""
+        return self.ground_z - self.ground_clearance
+
+    @staticmethod
+    def lowest(controller: np.ndarray, contact: np.ndarray) -> float:
+        """Lowest tool point in a z-down frame: the largest z over both clouds."""
+        return float(max(controller[..., 2].max(), contact[..., 2].max()))
+
+    def bounds(
+        self, knots: int, template: tuple[np.ndarray, np.ndarray]
+    ) -> tuple[np.ndarray, np.ndarray]:
         """Box over :func:`spline.flatten`, with the first waypoint pinned.
+
+        Each free waypoint may move by up to ``offset_limits`` per axis, which is
+        the object's own size scaled by the offset fraction.
 
         The tool is already at the recorded start pose, so a plan must not begin
         somewhere else: the first knot's offset *and* its yaw and pitch are fixed
         at zero, otherwise the replay's first command carries a wrist step
         (measured 15.5° / 9.8° at 124 frames before this was pinned). Rotation is
         still free at every later waypoint.
+
+        Downward travel is capped by the floor: an offset moves the whole cloud,
+        so the room a knot has is what the *lowest* recorded tool point leaves
+        above ``ground_limit``. Capping the box keeps the search from sampling
+        into the floor (a waste), while the rotation a sampled candidate adds is
+        caught by :meth:`admit`.
         """
-        if knots < 2 or not np.isfinite(self.offset_limit) or self.offset_limit <= 0.0:
-            raise ValueError("invalid knot count or offset limit")
+        limits = np.asarray(self.offset_limits, dtype=np.float64)
+        if (
+            knots < 2
+            or limits.shape != (3,)
+            or not np.isfinite(limits).all()
+            or np.any(limits <= 0.0)
+        ):
+            raise ValueError("invalid knot count or offset limits")
+        headroom = np.clip(
+            self.ground_limit - self.lowest(*template), -limits[2], limits[2]
+        )
+        axis_lower = -limits
+        axis_upper = np.concatenate([limits[:2], [headroom]])
         free_yaw = np.concatenate([np.zeros(1), np.full(knots - 1, -self.orientation_limit)])
         free_yaw_upper = np.concatenate([np.zeros(1), np.full(knots - 1, self.orientation_limit)])
         lower = np.concatenate(
             [
-                np.concatenate([np.zeros(3), np.full(3 * knots - 3, -self.offset_limit)]),
+                np.concatenate([np.zeros(3), np.tile(axis_lower, knots - 1)]),
                 np.full(knots - 2, spline.MIN_TIME_GAP),
                 free_yaw,
                 free_yaw,
@@ -146,7 +203,7 @@ class Envelope:
         )
         upper = np.concatenate(
             [
-                np.concatenate([np.zeros(3), np.full(3 * knots - 3, self.offset_limit)]),
+                np.concatenate([np.zeros(3), np.tile(axis_upper, knots - 1)]),
                 np.full(knots - 2, 1.0 - spline.MIN_TIME_GAP),
                 free_yaw_upper,
                 free_yaw_upper,
@@ -165,11 +222,13 @@ class Envelope:
         than the box.
         """
         motion = spline.motion(spec, template[0], template[1], self.frames)
-        if np.abs(motion.positions).max() > self.offset_limit:
+        if np.any(np.abs(motion.positions) > self.offset_limits):
             return None
         if max(np.abs(motion.yaw).max(), np.abs(motion.pitch).max()) > self.orientation_limit:
             return None
         if self._slew(motion) > self.max_rate * self.dt:
+            return None
+        if self.lowest(motion.controller, motion.contact) > self.ground_limit:
             return None
         if not within_workspace(
             motion.controller, motion.contact, self.lower, self.upper, self.max_speed, self.dt
@@ -186,6 +245,9 @@ class Envelope:
             max_pitch=float(np.abs(motion.pitch).max()),
             max_slew=self._slew(motion),
             min_clearance=float(minimum_clearance(self.nodes, motion.contact).min()),
+            ground_clearance=float(
+                self.ground_z - self.lowest(motion.controller, motion.contact)
+            ),
         )
 
     @staticmethod

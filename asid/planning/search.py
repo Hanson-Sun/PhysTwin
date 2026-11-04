@@ -53,7 +53,7 @@ def plan_spline(
     result = cem(
         objective,
         spline.flatten(Spec.start(knots)),
-        *envelope.bounds(knots),
+        *envelope.bounds(knots, template),
         samples=samples,
         iterations=iterations,
         elites=elites,

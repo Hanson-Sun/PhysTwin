@@ -94,7 +94,8 @@ between them: one `Rollout` instance reused through `ActionRunner`
 (`asid/fim/runner.py`), and sketch factors on disk keyed by a hash over the
 case, node count, every `SimConfig` field, `phi0`, both trajectory arrays, rank,
 step, sigma and seed (`asid/fim/cache.py`, `CACHE_VERSION` invalidates stale
-entries).
+entries). A run's cache lives with that run's own artifact (`<out>.cache`,
+`run_cache`), so a smoke and the full chain never share entries or hit counts.
 
 ## Constraints
 
@@ -111,7 +112,23 @@ penalty that could masquerade as a low score) if:
 - the closest object point never comes within the contact radius during the
   horizon. The score is *exactly flat* before contact (measured: bit-identical
   observations at 24 frames), so without this guard a claw that misses the object
-  ties at the nominal score and floods the elites.
+  ties at the nominal score and floods the elites;
+- any tool point reaches the floor. The case frame counts z downward, the objects
+  rest on `z = 0` and the Warp rollout penalises `z > 0` with the same soft-ground
+  spring, so the plane is a hard limit: a plan may not put any point of the
+  controller or contact cloud above `ground_z - ground_clearance` (`0.005 m`),
+  at any frame. Offsets are translations of the whole cloud, so the box's
+  downward bound is the room the *lowest* recorded tool point leaves
+  (`ground_limit - lowest(template)`, i.e. 2.05 cm for the sloth push instead of
+  the full box height), and the rotation a candidate adds — pitching the claw
+  drops one side of it — is caught by the per-frame guard. Before this, the box
+  was symmetric in z and the recorded 124-frame plan drove the fingertips
+  1.06 cm **below** the floor.
+
+Each free waypoint may move by up to ``offset_fraction`` × the object's bounding
+box per axis (default 1.0, i.e. anywhere within the object's own extent) — the
+box scales with the object instead of a fixed metre count, so 5 cm is not the
+whole space for an object twice that size.
 
 `yaw` and `pitch` are bounded to ±30°, the wrist slew to 1.5 rad/s, and interior
 times must keep a minimum gap. The interpolation is shape-preserving, so the
@@ -168,7 +185,8 @@ direction is worth pushing from", not the planner's decision space.
 
 ```
 spec, samples {offsets[T,3], yaw[T], pitch[T]}, diagnostics {max_offset, max_yaw,
-max_pitch, max_slew, min_clearance}, start_action, start_gain (sketch), screen,
+max_pitch, max_slew, min_clearance, ground_clearance}, start_action, start_gain
+(sketch), screen,
 selection_basis, exact {action: exact log-det}, exact_scores {start, plan, delta},
 score (sketch), history, evaluations, knots, rank, groups, frames, nodes, basis
 ```

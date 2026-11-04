@@ -18,19 +18,24 @@ def _template(frames: int = 5, points: int = 4):
 
 
 def _envelope(template, frames: int, offset_limit: float = 0.05) -> Envelope:
-    """A permissive envelope: wide box, loose speed, always in contact."""
+    """A permissive envelope: wide box, loose speed, floor far below, contact everywhere.
+
+    The case frame counts z downwards, so a floor that never binds sits at a
+    large z, far below the synthetic template around the origin.
+    """
     nodes = np.asarray(template[1], dtype=float).reshape(-1, 3)
     return Envelope(
         lower=np.full(3, -1.0),
         upper=np.full(3, 1.0),
         max_speed=10.0,
-        offset_limit=offset_limit,
+        offset_limits=np.full(3, offset_limit),
         orientation_limit=spline.ORIENTATION_LIMIT,
         max_rate=spline.MAX_ANGULAR_RATE,
         dt=1.0 / 30.0,
         contact_radius=10.0,
         nodes=nodes,
         frames=frames,
+        ground_z=10.0,
     )
 
 
@@ -97,15 +102,16 @@ class SpecTest(unittest.TestCase):
 
 class EnvelopeTest(unittest.TestCase):
     def test_bounds_pin_the_start_pose(self) -> None:
-        envelope = _envelope(_template(), frames=5)
+        template = _template()
+        envelope = _envelope(template, frames=5)
         for knots in (2, 3, 5):
-            lower, upper = envelope.bounds(knots)
+            lower, upper = envelope.bounds(knots, template)
             self.assertEqual(lower.shape, (6 * knots - 2,))
             pinned = np.zeros(lower.size, dtype=bool)
             pinned[[0, 1, 2, 4 * knots - 2, 5 * knots - 2]] = True
             self.assertTrue(np.all(upper[pinned] == lower[pinned]))
             self.assertTrue(np.all(upper[~pinned] > lower[~pinned]))
-        lower, upper = envelope.bounds(3)
+        lower, upper = envelope.bounds(3, template)
         np.testing.assert_allclose(lower[:3], 0.0)
         np.testing.assert_allclose(upper[:3], 0.0)
         np.testing.assert_allclose(lower[3:9], -0.05)
@@ -114,6 +120,29 @@ class EnvelopeTest(unittest.TestCase):
         # later waypoints free to rotate.
         np.testing.assert_allclose(lower[10:13], [0.0, -np.deg2rad(30.0), -np.deg2rad(30.0)])
         np.testing.assert_allclose(upper[10:13], [0.0, np.deg2rad(30.0), np.deg2rad(30.0)])
+
+    def test_from_demo_scales_the_offset_box_with_the_object(self) -> None:
+        """A bigger object buys a bigger search space, not a fixed metre count."""
+        template = _template(frames=5)
+        nodes = np.asarray(template[1], dtype=float).reshape(-1, 3)
+        envelope = Envelope.from_demo(
+            nodes, template, frames=5, dt=1.0 / 30.0, contact_radius=0.02
+        )
+        extent = nodes.max(axis=0) - nodes.min(axis=0)
+        np.testing.assert_allclose(envelope.offset_limits, extent)
+        twice = Envelope.from_demo(
+            np.concatenate([nodes, nodes * 2.0]),
+            template,
+            frames=5,
+            dt=1.0 / 30.0,
+            contact_radius=0.02,
+        )
+        self.assertTrue(np.all(twice.offset_limits > envelope.offset_limits))
+        with self.assertRaises(ValueError):
+            Envelope.from_demo(
+                nodes, template, frames=5, dt=1.0 / 30.0, contact_radius=0.02,
+                offset_fraction=0.0,
+            )
 
     def test_from_demo_pads_the_recorded_motion(self) -> None:
         template = _template(frames=5)
@@ -147,6 +176,68 @@ class EnvelopeTest(unittest.TestCase):
         self.assertFalse(within_workspace(outside, points, np.full(3, -1.0), np.full(3, 1.0), 1.0, 0.1))
         with self.assertRaises(ValueError):
             within_workspace(points, points, np.ones(3), np.zeros(3), 1.0, 0.1)
+
+
+class GroundTest(unittest.TestCase):
+    """A planned motion must stay above the case's ground plane.
+
+    The case frame points down (the objects rest on z = 0 and the Warp rollout's
+    soft-ground spring penalises z > 0), so "above ground" is z <= 0 and the
+    planned tool must respect ``ground_z - ground_clearance`` at every frame and
+    every point of both clouds, including the rotation a candidate applies.
+    """
+
+    @staticmethod
+    def _flat(frames: int = 6, points: int = 4, height: float = 0.02):
+        """A tool of finite width sitting ``height`` above the plane."""
+        controller = np.zeros((frames, points, 3))
+        controller[..., 0] = np.linspace(-0.1, 0.1, points)
+        controller[..., 2] = -height
+        return controller, controller.copy()
+
+    def _envelope(self, template, frames: int) -> Envelope:
+        return dataclasses.replace(_envelope(template, frames=frames), ground_z=0.0)
+
+    def test_box_caps_downward_travel_at_the_headroom(self) -> None:
+        template = self._flat(height=0.02)
+        envelope = self._envelope(template, frames=6)
+        lower, upper = envelope.bounds(3, template)
+        # 20 mm above the plane, 5 mm of it reserved: 15 mm of room to descend.
+        np.testing.assert_allclose(upper[3:9], [0.05, 0.05, 0.015, 0.05, 0.05, 0.015])
+        np.testing.assert_allclose(lower[3:9], -0.05)
+
+    def test_descending_past_the_floor_is_rejected(self) -> None:
+        template = self._flat(height=0.02)
+        envelope = self._envelope(template, frames=6)
+        within = spline.Spec.start(3)
+        within.positions[1:, 2] = 0.014
+        past = spline.Spec.start(3)
+        past.positions[1:, 2] = 0.017
+        self.assertIsNotNone(envelope.admit(within, template))
+        self.assertIsNone(envelope.admit(past, template))
+        self.assertEqual(
+            envelope.lowest(*template), -0.02
+        )
+
+    def test_rotation_that_dips_into_the_floor_is_rejected(self) -> None:
+        """The rigid rotation moves the far side of the claw down as it tilts."""
+        template = self._flat(frames=12)
+        envelope = self._envelope(template, frames=12)
+        level = spline.Spec.start(3)
+        self.assertIsNotNone(envelope.admit(level, template))
+        tilted = dataclasses.replace(
+            spline.Spec.start(3), pitch=np.array([0.0, 0.3, 0.3])
+        )
+        self.assertIsNone(envelope.admit(tilted, template))
+
+    def test_diagnostics_report_the_achieved_floor_clearance(self) -> None:
+        template = self._flat(height=0.02)
+        envelope = self._envelope(template, frames=6)
+        spec = spline.Spec.start(3)
+        spec.positions[1:, 2] = 0.01
+        motion = envelope.admit(spec, template)
+        self.assertIsNotNone(motion)
+        self.assertAlmostEqual(envelope.diagnostics(motion).ground_clearance, 0.01)
 
 
 class PlanTest(unittest.TestCase):
