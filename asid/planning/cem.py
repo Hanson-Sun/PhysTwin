@@ -13,6 +13,13 @@ from typing import Callable
 
 import numpy as np
 
+# Initial spread of a sample, per coordinate, as a fraction of that coordinate's
+# own range. Positions, time fractions and angles share one box but not one
+# unit, and a single spread for all of them drew nearly every sample out of
+# contact once the box became object-sized (measured 3% admitted, versus 76% at
+# this fraction), which left CEM with no feasible elite to move to.
+SPREAD = 0.1
+
 
 @dataclass(frozen=True)
 class CemResult:
@@ -31,7 +38,7 @@ def cem(
     samples: int = 8,
     iterations: int = 3,
     elites: int = 2,
-    init_std: float | None = None,
+    spread: float = SPREAD,
     smoothing: float = 0.7,
     min_std: float = 1e-4,
     project: Callable[[np.ndarray], np.ndarray] | None = None,
@@ -42,8 +49,10 @@ def cem(
     ``evaluate`` returns ``None`` for an infeasible vector; those samples are
     dropped instead of being penalised, so a constraint never masquerades as a
     low score. ``project`` maps a sample back onto the feasible set (ordering,
-    for a time warp). The initial vector is always evaluated and always competes
-    for the elites, so the result never scores below it.
+    for a time warp). ``spread`` is the initial per-coordinate std, as a
+    fraction of that coordinate's own range. The initial vector is always
+    evaluated and always competes for the elites, so the result never scores
+    below it.
     """
     lower = np.asarray(lower, dtype=np.float64)
     upper = np.asarray(upper, dtype=np.float64)
@@ -53,8 +62,8 @@ def cem(
     # only ``lower > upper`` is a broken box.
     if np.any(lower > upper) or samples < 1 or iterations < 1 or elites < 1:
         raise ValueError("invalid CEM settings")
-    if not 0.0 <= smoothing < 1.0 or min_std <= 0.0:
-        raise ValueError("invalid smoothing or std floor")
+    if not 0.0 <= smoothing < 1.0 or min_std <= 0.0 or not 0.0 < spread <= 1.0:
+        raise ValueError("invalid smoothing, std floor or spread")
 
     def clip(vector: np.ndarray) -> np.ndarray:
         vector = np.clip(vector, lower, upper)
@@ -65,11 +74,7 @@ def cem(
     if score is None:
         raise ValueError("initial vector is infeasible")
     free = upper > lower
-    std = np.where(
-        free,
-        (upper - lower)[free].mean() * 0.5 if init_std is None else init_std,
-        0.0,
-    )
+    std = np.where(free, spread * (upper - lower), 0.0)
 
     best, best_score = mean.copy(), float(score)
     history = [best_score]
@@ -88,7 +93,9 @@ def cem(
             best, best_score = scored[0][1].copy(), scored[0][0]
         chosen = np.stack([vector for _, vector in scored[: max(elites, 1)]])
         mean = chosen.mean(axis=0)
-        spread = chosen.std(axis=0) if len(chosen) > 1 else std
-        std = np.where(free, np.maximum(smoothing * std + (1.0 - smoothing) * spread, min_std), 0.0)
+        elite_std = chosen.std(axis=0) if len(chosen) > 1 else std
+        std = np.where(
+            free, np.maximum(smoothing * std + (1.0 - smoothing) * elite_std, min_std), 0.0
+        )
         history.append(best_score)
     return CemResult(best, best_score, history, evaluations)

@@ -18,7 +18,18 @@ from asid.fim.sketch import Sketch
 
 # Bump when the simulator, sketch or observation model changes: entries keyed by
 # an older version are then ignored instead of silently reused.
-CACHE_VERSION = 1
+CACHE_VERSION = 2
+
+
+def run_cache(artifact: Path | str) -> Path:
+    """The cache directory of one run, derived from that run's own output path.
+
+    A run owns its caches: a smoke, a wide-box run and a full chain would
+    otherwise pile every entry into one directory per case, so a hit count says
+    nothing about which run reused what.
+    """
+    artifact = Path(artifact)
+    return artifact.parent / f"{artifact.stem}.cache"
 
 
 def digest(*parts) -> str:

@@ -32,3 +32,39 @@ class ActionRunner:
             return observation.vector(self.rollout.run(initial=initial))
 
         return evaluate
+
+
+class BatchedActionRunner:
+    """Reuse one batched simulator, returning ``phi_batch -> observations``.
+
+    ``k`` is the chunk the caller runs; the rollout is rebuilt when that size
+    changes, so a chunked Jacobian allocates one simulator per distinct chunk
+    (in practice two: the full chunks and the remainder).
+    """
+
+    def __init__(self, case, config):
+        self.case = case
+        self.config = config
+        self.rollout = None
+        self.instances = None
+
+    def _get(self, instances: int):
+        from asid.fim.batched import BatchedRollout  # keeps this module Warp-free
+
+        if self.rollout is None or self.instances != instances:
+            self.rollout = BatchedRollout(self.case, self.config, instances)
+            self.instances = instances
+        return self.rollout
+
+    def run(
+        self, controller, contact, partition, observation, initial=None
+    ) -> Callable[[np.ndarray], np.ndarray]:
+        """Return ``phi_batch -> (k, D) observations`` for one trajectory."""
+
+        def evaluate(phi_batch):
+            rollout = self._get(len(phi_batch))
+            rollout.set_action(controller, contact)
+            rollout.set_parameters(phi_batch, partition)
+            return observation.batch(rollout.run(initial=initial), len(phi_batch))
+
+        return evaluate

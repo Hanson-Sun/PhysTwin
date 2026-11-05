@@ -176,6 +176,18 @@ Full runs: 6-action screen at $g = 10$ or $g = 20$, 13–14 min; exact validatio
 of those 6 actions, 24 min ($g = 10$) and 54 min ($g = 20$); three-round
 sequential selection at $g = 10$, 42 min. Figures regenerate in seconds.
 
+`--batch N` runs the finite differences as N simulator instances in one call
+(`FIM_BATCH` in `run_fisher.sh`; 0 keeps the serial path). Measured at 500
+nodes / 60 frames, one exact Fisher takes 20 s at $g = 20$ ($k = 82$) and 10 s
+at $g = 10$ ($k = 42$), about 21x the $2P$ serial rollouts, with 1.7 GB and
+0.8 GB of peak GPU memory (~20 MB per instance; the pure state arrays are
+$7 \cdot 12\,\text{B} \cdot N_{\text{nodes}} \cdot (n_{\text{substeps}} + 1)$).
+A full batch is 1.2–2x faster than the default $2g$ chunk, because every chunk
+repeats the whole 60-frame simulation. The batched class contacts the dense
+cloud with point spheres where the serial path sweeps segments, so logdets
+agree within 2% and the selected action matches; the matrices themselves do
+not.
+
 ## Reproduce
 
 Use an interactive WSL shell with the `phystwin-cu132` conda environment; the

@@ -48,6 +48,7 @@ def build_dictionary(
     progress: Callable[[int, int], None] | None = None,
     cache: "FactorCache | None" = None,
     key: Callable[[int, str], str] | None = None,
+    batch: int = 0,
 ) -> list[Entry]:
     """Sketch every ``(name, run)`` request at the same ``phi0``.
 
@@ -71,6 +72,7 @@ def build_dictionary(
                 rank=rank,
                 step=step,
                 seed=subspace_seed(seed, index, subspace),
+                batch=batch,
             )
             if cache_key is not None:
                 cache.put(cache_key, sketch)

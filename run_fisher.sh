@@ -11,10 +11,14 @@
 # (a greedy set of pushes) is deliberately not chained here.
 #
 # Sizes are chosen to finish in roughly 1.5-2 h on one GPU at the default 60
-# frames. Everything is overridable from the environment; see the variables
-# below. As with run.sh, the terminal gets the output untouched and
-# logs/fisher_<case>_<timestamp>.log gets the same text with tqdm's
-# carriage-return progress updates flattened and dropped.
+# frames; all 124 frames of the sloth case cost considerably more (see the
+# README next to this script). Everything is overridable from the environment;
+# see the variables below. A run's caches live beside its own artifacts
+# (``<trajectory>.cache``, ``<run-id>.cache``), so repeating a run with the same
+# ``STAMP`` reuses them and a different run never does. As with run.sh, the
+# terminal gets the output untouched and logs/fisher_<case>_<timestamp>.log gets
+# the same text with tqdm's carriage-return progress updates flattened and
+dropped.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -25,6 +29,10 @@ ROOT=${ROOT:-experiments-fim}
 # Exact FIM tolerates more groups than the rank-12 sketch used for planning.
 FIM_GROUPS=${FIM_GROUPS:-20}
 PLAN_GROUPS=${PLAN_GROUPS:-10}
+# Simulator instances per run; 0 keeps the serial path. Chunking lowers peak
+# memory but adds launches, so raise it until the memory formula in
+# asid/RUNBOOK.md says otherwise.
+FIM_BATCH=${FIM_BATCH:-0}
 FRAMES=${FRAMES:-60}
 NODES=${NODES:-500}
 RANK=${RANK:-12}
@@ -33,8 +41,14 @@ TILTS=${TILTS:-"0 -20"}
 # One ASID iteration commits to a single best trajectory, so the default
 # shortlist is one action; raise SELECT only for an offline set study.
 SELECT=${SELECT:-1}
+# Exact Fisher over the best N screened actions for the planning stage; the
+# sketch alone can rank close candidates the wrong way round (az270 over az090
+# at 124 frames), so the shortlist is arbitrated exactly.
+EXACT_TOP=${EXACT_TOP:-4}
 PLAN_FRAMES=${PLAN_FRAMES:-60}
-OFFSET_LIMIT=${OFFSET_LIMIT:-0.05}
+# Per-axis offset box as a fraction of the object's own size (see
+# asid/planning.md); raise it to explore wider pushes, lower it for finer ones.
+OFFSET_FRACTION=${OFFSET_FRACTION:-1.0}
 STAMP=${STAMP:-$(date +%Y%m%d_%H%M%S)}
 LOG_DIR=${LOG_DIR:-logs}
 
@@ -94,7 +108,8 @@ echo
 #    per-node local gain map. ~7 min at g=20, f=60.
 stage "exact FIM" "${PY[@]}" scripts/run_fim_case.py \
     --case "$BASE/$CASE" --root "$ROOT" --nodes "$NODES" --frames "$FRAMES" \
-    --groups "$FIM_GROUPS" --run-id "fim_g${FIM_GROUPS}_f${FRAMES}"
+    --groups "$FIM_GROUPS" --run-id "fim_g${FIM_GROUPS}_f${FRAMES}" \
+    --batch "$FIM_BATCH"
 
 stage "FIM overlay (reload path)" "${PY[@]}" scripts/plot_fim.py "$FIM_RUN"
 
@@ -103,7 +118,8 @@ stage "FIM overlay (reload path)" "${PY[@]}" scripts/plot_fim.py "$FIM_RUN"
 stage "selection" "${PY[@]}" scripts/plan_actions.py \
     --case "$BASE/$CASE" --root "$ROOT" --nodes "$NODES" --frames "$FRAMES" \
     --groups "$PLAN_GROUPS" --rank "$RANK" --azimuth-count "$AZIMUTH" \
-    --tilts $TILTS --select "$SELECT" --run-id "mix_g${PLAN_GROUPS}_r${RANK}"
+    --tilts $TILTS --select "$SELECT" --run-id "mix_g${PLAN_GROUPS}_r${RANK}" \
+    --batch "$FIM_BATCH"
 
 # 3. Exact Fisher for every candidate: how good the sketch ranking really was.
 stage "exact validation" "${PY[@]}" scripts/validate_actions.py \
@@ -131,7 +147,8 @@ fi
 stage "plan trajectory" "${PY[@]}" scripts/plan_push_trajectory.py \
     --case "$BASE/$CASE" --frames "$PLAN_FRAMES" --nodes "$NODES" \
     --azimuth-count "$AZIMUTH" --tilts $TILTS --knots 3 --samples 8 --iterations 3 \
-    --offset-limit "$OFFSET_LIMIT" --out "$TRAJECTORY"
+    --offset-fraction "$OFFSET_FRACTION" --exact-top "$EXACT_TOP" --out "$TRAJECTORY" \
+    --batch "$FIM_BATCH"
 
 stage "generate planned capture" "${PY[@]}" scripts/generate_sim_data.py models.json \
     --case "$CASE" --trajectory "$TRAJECTORY" \
