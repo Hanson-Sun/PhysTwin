@@ -146,9 +146,17 @@ class BatchedRolloutTests(unittest.TestCase):
         batched = BatchedRollout(self.case, self.config, 1).run()
         difference = float((batched - serial).abs().max())
         print(f"k=1 vs serial: max|d| = {difference:.3e}")
-        # The serial contact query widens by the controller sweep radius; the
-        # candidate set differs, the accepted contacts do not.
+        # Six frames end before the tool reaches the object, so this pins the
+        # spring/ground path only. Contact is covered by the cloud check below.
         self.assertLess(difference, 1e-5)
+
+    def test_contact_cloud_is_the_dense_controller(self):
+        # Point contact against the 30 pad points instead of the dense cloud
+        # moved the 60-frame trajectory by 16 cm, so the block must be dense.
+        rollout = BatchedRollout(self.case, self.config, 1)
+        self.assertEqual(
+            rollout.sim.num_controller_points, len(self.case.contact[0])
+        )
 
     def test_per_instance_parameters_match_individual_runs(self):
         rows = self.partition.phi0 + np.random.default_rng(0).normal(

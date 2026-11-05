@@ -116,10 +116,14 @@ class BatchedRollout:
         cfg.controller_contact_stiffness = config.contact_stiffness
 
         nodes = len(case.nodes)
-        controllers = len(case.controller[0])
+        # The serial ASID path contacts the dense controller-contact cloud; the
+        # 30 pad points only drive its IK. The batched class has a single
+        # controller block, so it must be the dense cloud: point contact against
+        # the pad points alone moves the trajectory by 16 cm at 60 frames.
+        controllers = len(case.contact[0])
         device = cfg.device
         vertices = np.concatenate(
-            [_tile(case.nodes, instances), _tile(case.controller[0], instances)],
+            [_tile(case.nodes, instances), _tile(case.contact[0], instances)],
             axis=0,
         )
         incidence, max_incident = build_signed_incidence_map(
@@ -155,7 +159,7 @@ class BatchedRollout:
             object_massnodes_single=nodes,
             controller_massnodes_single=controllers,
             controller_rest_location=torch.tensor(
-                _tile(case.controller[0], instances), device=device
+                _tile(case.contact[0], instances), device=device
             ),
             number_of_instance=instances,
             controller_contact_friction=config.contact_friction,
@@ -204,27 +208,23 @@ class BatchedRollout:
         wp.synchronize()
 
     def set_action(self, controller: np.ndarray, contact: np.ndarray) -> None:
-        """Tile one ``(T, C, 3)`` trajectory into the ``k`` controller blocks."""
-        controller = np.asarray(controller)
+        """Tile one ``(T, C, 3)`` contact trajectory into the ``k`` blocks.
+
+        ``controller`` is the pad control cloud the serial class uses for IK;
+        the batched class has no separate IK path, so only ``contact`` drives
+        the simulator.
+        """
         contact = np.asarray(contact)
         single = self.sim.controller_massnode_single
-        # The batched class builds its contact frame from the controller cloud,
-        # so the dense contact trajectory is only kept for interface parity.
-        if controller.ndim != 3 or controller.shape[1:] != (single, 3):
+        if contact.ndim != 3 or contact.shape[1:] != (single, 3):
             raise ValueError(
-                "controller point counts must match the simulator's geometry"
+                "contact point counts must match the simulator's geometry"
             )
-        if contact.ndim != 3 or contact.shape[2] != 3:
-            raise ValueError("contact points must be (T, C, 3)")
-        if len(controller) != len(contact):
-            raise ValueError("controller and contact trajectories disagree")
-        if len(controller) < self.config.frames:
+        if len(contact) < self.config.frames:
             raise ValueError("action is shorter than the rollout")
-        if not np.isfinite(controller).all() or not np.isfinite(contact).all():
+        if not np.isfinite(contact).all():
             raise ValueError("action points must be finite")
-        tiled = np.tile(
-            controller[: self.config.frames], (1, self.instances, 1)
-        )
+        tiled = np.tile(contact[: self.config.frames], (1, self.instances, 1))
         self._controller_t.copy_(
             torch.as_tensor(tiled, dtype=torch.float32, device=cfg.device)
         )

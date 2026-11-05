@@ -92,7 +92,9 @@ Writes `experiments-fim/$CASE/fim_g20_f60/`: `fisher.npy`, `fim_diag.npy`,
 5.15 s per 60-frame/500-node rollout, so the run is `2P + 1` rollouts: about
 4 min at `--groups 10` (`P = 21`), 7 min at 20 (`P = 41`), 17 min at 50
 (`P = 101`). `--batch N` packs the finite differences into N simulator
-instances; each costs about 7 MB of state at 500 nodes, so chunk to fit.
+instances, about 20 MB each at 500 nodes / 60 frames, so chunk to fit; set it
+to `2P` to run the whole Jacobian in one call. Gains agree with the serial
+path within 2% (see `asid/fim/README.md` for the contact-model caveat).
 Redraw the overlay at any time with:
 
 ```bash

@@ -118,6 +118,10 @@ python scripts/validate_sketch.py \
 
 - The analysis uses a smooth penalty ground contact (`soft_ground`). The
   upstream hard-contact trainer is unchanged.
+- `--batch` contacts the dense controller cloud with point spheres; the serial
+  path sweeps segments. Logdets agree within 2% and the g=10 selection matches
+  (az240, 308.0 against 308.9), but the matrices themselves differ by ~1.2 in
+  Frobenius norm, so do not compare `--batch` heatmaps with serial ones.
 - Finite differences are of the smoothed simulator. Derivatives through contact
   and action gradients are not validated by this path.
 - The logdet spectrum has a heavy tail. Rank 50 still reaches only 77% of the
