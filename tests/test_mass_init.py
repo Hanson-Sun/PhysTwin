@@ -135,16 +135,17 @@ class StabilityFollowsMassTests(unittest.TestCase):
         ctrl = [[1.0, 0.0, 0.0]]
         sim = self._build(n, ctrl, cfg.init_spring_Y, dashpot)
         m = cfg.object_total_mass / n
-        ratio = sim.dashpot_damping * DT / m
+        stored = float(sim.wp_dashpot_damping.numpy()[0])
+        ratio = stored * DT / m
         self.assertLess(
             ratio, 1.0,
             f"dashpot*dt/m = {ratio:.3g} is unstable (must be <~2)",
         )
-        # and it equals the config value per unit mass. dashpot_damping is stored as
-        # a Python float but derived from a float32 mass mean, so it carries
-        # ~7 significant digits, not float64. Compare relatively at 1e-6.
+        # and it equals the config value per unit mass. The stored array is
+        # derived from a float32 mass mean, so it carries ~7 significant digits,
+        # not float64. Compare relatively at 1e-6.
         self.assertLess(
-            abs(sim.dashpot_damping / dashpot - m) / m, 1e-6,
+            abs(stored / dashpot - m) / m, 1e-6,
             "dashpot must be the config value scaled by the node mass",
         )
 
