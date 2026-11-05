@@ -180,6 +180,7 @@ def eval_springs_single_instance_atomic(
     inv_rest_lengths: wp.array(dtype=float),
     spring_Y_clamped: wp.array(dtype=float),
     dashpot_damping: wp.array(dtype=float),
+    spring_Y_log: int,
     f: wp.array(dtype=wp.vec3),
 ):
     tid = wp.tid()
@@ -203,6 +204,8 @@ def eval_springs_single_instance_atomic(
 
     inv_rest = inv_rest_lengths[tid]
     y = spring_Y_clamped[tid]
+    if spring_Y_log != 0:
+        y = wp.exp(y)
 
     dis = x2 - x1
     dis_len = wp.length(dis)
@@ -237,6 +240,7 @@ def eval_springs_batched_template_state_atomic(
     object_massnode_single: int,
     controller_massnode_single: int,
     n_springs: int,
+    spring_Y_log: int,
 
     # output: per-instance object-node forces
     f: wp.array(dtype=wp.vec3),
@@ -270,6 +274,8 @@ def eval_springs_batched_template_state_atomic(
     inv_rest = inv_rest_lengths[local_idx]
     gid = inst * n_springs + local_idx
     y = spring_Y_clamped[gid]
+    if spring_Y_log != 0:
+        y = wp.exp(y)
 
     dis = x2 - x1
     dis_len = wp.length(dis)
@@ -305,6 +311,7 @@ def eval_springs_batched_compute_all_base(
     controller_massnode_single: int,
     n_springs: int,
     number_of_instance: int,
+    spring_Y_log: int,
 
     # output: per-instance per-base-spring force (size = number_of_instance * n_springs)
     spring_out: wp.array(dtype=wp.vec3),
@@ -315,6 +322,8 @@ def eval_springs_batched_compute_all_base(
     local_idx = tid - inst * n_springs  # BASE spring id in [0, n_springs)
 
     y = spring_Y_clamped[tid]
+    if spring_Y_log != 0:
+        y = wp.exp(y)
 
     local_idx1 = springs[local_idx][0]
     local_idx2 = springs[local_idx][1]
@@ -792,6 +801,7 @@ class SpringMassSystemWarp:
         ground_stiffness=1000.0,
         ground_damping=2.0,
         ground_smoothing=1e-4,
+        spring_Y_log=False,
     ):
         logger.info(f"[SIMULATION]: Initialize the Spring-Mass System")
         self.device = cfg.device
@@ -809,8 +819,12 @@ class SpringMassSystemWarp:
         self.ground_stiffness = float(ground_stiffness)
         self.ground_damping = float(ground_damping)
         self.ground_smoothing = float(ground_smoothing)
+        # Training stores linear stiffness; the ASID serial path stores logs and
+        # exponentiates in-kernel. The flag matches that path bit for bit.
+        self.spring_Y_log = int(bool(spring_Y_log))
         self.use_gather_solver = (
-            number_of_instance > 1 and sim_force_mode == SIM_FORCE_MODE_GATHER
+            sim_force_mode == SIM_FORCE_MODE_GATHER
+            and signed_incidence_map is not None
         )
         self.use_template_state_batched_atomic = (
             sim_force_mode == SIM_FORCE_MODE_TEMPLATE_STATE_BATCHED_ATOMIC
@@ -844,9 +858,7 @@ class SpringMassSystemWarp:
 
         # Parameters are instance-major. A shared (N,) mass vector is tiled, not
         # reinterpreted, so training with shared masses is unchanged.
-        init_masses = torch.as_tensor(
-            init_masses, dtype=torch.float32, device=self.device
-        ).reshape(-1)
+        init_masses = torch.as_tensor(init_masses, device=self.device).reshape(-1)
         if init_masses.numel() == object_massnodes_single:
             init_masses = init_masses.repeat(number_of_instance)
         elif init_masses.numel() != object_massnodes_total:
@@ -854,15 +866,16 @@ class SpringMassSystemWarp:
                 f"init_masses must have {object_massnodes_single} or "
                 f"{object_massnodes_total} entries, got {init_masses.numel()}"
             )
-        self.wp_masses = wp.from_torch(
-            init_masses.contiguous(), dtype=wp.float32, requires_grad=False
-        )
         # spring_Y and dashpot_damping are forces whose stability limits scale with
         # mass (dashpot*dt/m <~ 2), so with physical node masses both are
         # mass-normalized: the caller's value stays per unit mass and the force
         # is scaled by the node mass. This preserves the mass=1 dynamics.
         ref_mass = float(
             init_masses[:object_massnodes_single].to(dtype=torch.float64).mean().item()
+        )
+        init_masses = init_masses.to(dtype=torch.float32).contiguous()
+        self.wp_masses = wp.from_torch(
+            init_masses, dtype=wp.float32, requires_grad=False
         )
         if not (ref_mass > 0.0) or not np.isfinite(ref_mass):
             raise ValueError(f"invalid mean object-node mass: {ref_mass}")
@@ -976,6 +989,8 @@ class SpringMassSystemWarp:
         spring_Y_clamped = spring_Y_values.clamp(
             min=self.spring_Y_min, max=self.spring_Y_max
         ) * ref_mass
+        if self.spring_Y_log:
+            spring_Y_clamped = torch.log(spring_Y_clamped)
 
         self.wp_spring_Y_clamped = wp.from_torch(
             spring_Y_clamped.contiguous(), dtype=wp.float32, requires_grad=False
@@ -1194,6 +1209,7 @@ class SpringMassSystemWarp:
                         self.controller_massnode_single,
                         self.n_springs_single,
                         self.number_of_instance,
+                        self.spring_Y_log,
                     ],
                     outputs=[self.wp_spring_force_lookup],
                 )
@@ -1226,6 +1242,7 @@ class SpringMassSystemWarp:
                         self.object_massnode_single,
                         self.controller_massnode_single,
                         self.n_springs_single,
+                        self.spring_Y_log,
                     ],
                     outputs=[self.wp_states[i].wp_vertice_forces],
                 )
@@ -1243,6 +1260,7 @@ class SpringMassSystemWarp:
                         self.wp_inv_template_rest_length,
                         self.wp_spring_Y_clamped,
                         self.wp_dashpot_damping,
+                        self.spring_Y_log,
                     ],
                     outputs=[self.wp_states[i].wp_vertice_forces],
                 )

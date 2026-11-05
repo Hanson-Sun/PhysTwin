@@ -10,7 +10,9 @@ from asid.fim.operators import (
     Observation,
     default_observation,
     directional_derivatives,
+    directional_derivatives_batched,
     jacobian,
+    jacobian_batched,
 )
 
 
@@ -78,6 +80,55 @@ class JacobianTests(unittest.TestCase):
         found = jacobian(quadratic, self.phi, step=1e-3, central=True)
         expected = weights * (1.0 + self.phi[:, None])
         np.testing.assert_allclose(found, expected, atol=1e-7)
+
+
+class BatchedOperatorTests(unittest.TestCase):
+    """The batched operators on a linear map, where central differences are exact."""
+
+    def setUp(self):
+        rng = np.random.default_rng(3)
+        self.dimension = 5
+        self.output = 7
+        self.matrix = rng.normal(size=(self.output, self.dimension))
+        self.phi = rng.normal(size=self.dimension)
+
+    def evaluate(self, phi):
+        return self.matrix @ phi
+
+    def run_batch(self, phi_batch):
+        return np.stack([self.evaluate(row) for row in phi_batch])
+
+    def test_jacobian_matches_and_chunking_is_exact(self):
+        expected = jacobian(self.evaluate, self.phi, 1e-5, central=True)
+        found = jacobian_batched(self.run_batch, self.phi, 1e-5)
+        chunked = jacobian_batched(self.run_batch, self.phi, 1e-5, chunk=2)
+        np.testing.assert_allclose(found, expected, atol=1e-8)
+        np.testing.assert_array_equal(found, chunked)
+
+    def test_indices_and_directions(self):
+        subset = jacobian_batched(
+            self.run_batch, self.phi, 1e-5, indices=[1, 3]
+        )
+        np.testing.assert_allclose(subset, self.matrix.T[[1, 3]], atol=1e-8)
+        directions = np.linalg.qr(
+            np.random.default_rng(4).normal(size=(self.dimension, 3))
+        )[0]
+        found = directional_derivatives_batched(
+            self.run_batch, self.phi, directions, 1e-5
+        )
+        np.testing.assert_allclose(found, self.matrix @ directions, atol=1e-8)
+        self.assertEqual(found.shape, (self.output, 3))
+
+    def test_observation_batch_matches_per_instance_vectors(self):
+        trajectory = torch.arange(4 * 3 * 2 * 3, dtype=torch.float32).reshape(4, 6, 3)
+        for reduce in ("none", "mean"):
+            observation = Observation(np.array([0, 2]), 0.01, reduce)
+            found = observation.batch(trajectory, 3)
+            for index in range(3):
+                np.testing.assert_array_equal(
+                    found[index],
+                    observation.vector(trajectory[:, index * 2 : (index + 1) * 2]),
+                )
 
 
 if __name__ == "__main__":
