@@ -7,7 +7,7 @@ from typing import Callable
 
 import numpy as np
 
-from asid.fim.operators import directional_derivatives
+from asid.fim.operators import directional_derivatives, directional_derivatives_batched
 
 
 @dataclass(frozen=True)
@@ -40,13 +40,19 @@ def randomized_sketch(
     rank: int,
     step: float,
     seed: int = 0,
+    batch: int = 0,
 ) -> Sketch:
     phi0 = np.asarray(phi0, dtype=np.float64)
     rank = min(int(rank), len(phi0))
     Q = random_subspace(len(phi0), rank, seed)
 
     directions = prior_std[:, None] * Q
-    JQ = directional_derivatives(run, phi0, directions, step) / sigma
+    if batch:
+        JQ = directional_derivatives_batched(
+            run, phi0, directions, step, chunk=batch
+        ) / sigma
+    else:
+        JQ = directional_derivatives(run, phi0, directions, step) / sigma
     T = JQ.T @ JQ
     values, vectors = np.linalg.eigh(T)
     values = np.maximum(values, 0.0)

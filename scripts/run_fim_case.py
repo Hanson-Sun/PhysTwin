@@ -13,7 +13,13 @@ from asid.fim.case import load_case
 from asid.fim.fim import Fisher, Prior
 from asid.fim.group import build_partition
 from asid.fim.logging_utils import Run, progress_printer
-from asid.fim.operators import default_observation, jacobian, parameterized_run
+from asid.fim.operators import (
+    default_observation,
+    jacobian,
+    jacobian_batched,
+    parameterized_run,
+)
+from asid.fim.runner import BatchedActionRunner
 from asid.fim.simulator import Rollout, SimConfig
 from asid.fim.viz import (
     plot_fim_matrix,
@@ -35,6 +41,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sigma", type=float, default=0.005)
     parser.add_argument("--step", type=float, default=1e-2)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--batch",
+        type=int,
+        default=0,
+        help="simulator instances per run; 0 keeps the serial path",
+    )
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--skip-step-check", action="store_true")
     return parser
@@ -48,13 +60,20 @@ def main() -> None:
     case = load_case(args.case, num_nodes=args.nodes, max_frames=args.frames)
     partition = build_partition(case, args.groups, seed=args.seed, config=config)
     observation = default_observation(args.frames, args.stride, args.sigma)
-    rollout = Rollout(case, config)
-    run = parameterized_run(rollout, partition, observation)
     phi0 = partition.phi0
     prior = Prior().std(partition.groups)
 
     started = time.time()
-    jac = jacobian(run, phi0, args.step, central=True, progress=progress_printer(started))
+    if args.batch:
+        run = BatchedActionRunner(case, config).run(
+            case.controller, case.contact, partition, observation
+        )
+        jac = jacobian_batched(run, phi0, args.step, chunk=args.batch)
+    else:
+        run = parameterized_run(Rollout(case, config), partition, observation)
+        jac = jacobian(
+            run, phi0, args.step, central=True, progress=progress_printer(started)
+        )
     elapsed = time.time() - started
     fisher = Fisher.from_jacobian(jac, args.sigma, prior)
     diagonal = np.diag(fisher.matrix)
@@ -70,6 +89,7 @@ def main() -> None:
         "sigma": args.sigma,
         "step": args.step,
         "central": True,
+        "batch": args.batch,
         "soft_ground": config.soft_ground,
         "rollout_seconds": elapsed / (2 * partition.dimension),
         "logdet": fisher.logdet(),
@@ -79,9 +99,14 @@ def main() -> None:
 
     if not args.skip_step_check:
         check = np.linspace(0, partition.dimension - 1, 3, dtype=int)
-        second = jacobian(
-            run, phi0, 2.0 * args.step, indices=check, central=True
-        )
+        if args.batch:
+            second = jacobian_batched(
+                run, phi0, 2.0 * args.step, indices=check, chunk=args.batch
+            )
+        else:
+            second = jacobian(
+                run, phi0, 2.0 * args.step, indices=check, central=True
+            )
         relative = np.linalg.norm(second - jac[check], axis=1) / np.maximum(
             np.linalg.norm(jac[check], axis=1), 1e-30
         )

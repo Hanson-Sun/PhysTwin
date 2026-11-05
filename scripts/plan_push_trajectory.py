@@ -68,6 +68,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
+        "--batch",
+        type=int,
+        default=0,
+        help="simulator instances per run; 0 keeps the serial path",
+    )
+    parser.add_argument(
         "--cache-dir",
         type=Path,
         default=None,
@@ -127,6 +133,7 @@ def main() -> None:
         factors=FactorCache(cache),
         exacts=ExactCache(cache),
         current=current,
+        batch=args.batch,
     )
 
     azimuths = np.linspace(0.0, 360.0, args.azimuth_count, endpoint=False)

@@ -15,8 +15,8 @@ import numpy as np
 
 from asid.fim.cache import ExactCache, FactorCache, exact_key, factor_key
 from asid.fim.fim import Fisher
-from asid.fim.operators import jacobian
-from asid.fim.runner import ActionRunner
+from asid.fim.operators import jacobian, jacobian_batched
+from asid.fim.runner import ActionRunner, BatchedActionRunner
 from asid.fim.sketch import gain_against, randomized_sketch
 from asid.planning.dictionary import Entry, build_dictionary, subspace_seed
 from asid.planning.select import exact_ordered, greedy, shortlist
@@ -99,11 +99,18 @@ def exact_fisher(
     step: float,
     sigma: float,
     prior_std: np.ndarray,
+    batch: int = 0,
 ) -> Fisher:
-    """Exact Fisher of a ``phi -> observation`` map at ``phi0``."""
-    return Fisher.from_jacobian(
-        jacobian(run, phi0, step, central=True), sigma, prior_std
-    )
+    """Exact Fisher of a ``phi -> observation`` map at ``phi0``.
+
+    With ``batch`` set, ``run`` maps a ``(k, P)`` batch and the Jacobian is
+    built by :func:`jacobian_batched`.
+    """
+    if batch:
+        matrix = jacobian_batched(run, phi0, step, chunk=batch)
+    else:
+        matrix = jacobian(run, phi0, step, central=True)
+    return Fisher.from_jacobian(matrix, sigma, prior_std)
 
 
 def arbitrate(
@@ -163,6 +170,7 @@ class Measure:
         factors: FactorCache | None = None,
         exacts: ExactCache | None = None,
         current: np.ndarray | None = None,
+        batch: int = 0,
     ):
         self.case = case
         self.config = config
@@ -177,6 +185,7 @@ class Measure:
         self.subspace = subspace
         self.factors = factors or FactorCache(None)
         self.exacts = exacts or ExactCache(None)
+        self.batch = int(batch)
         self.current = None if current is None else np.asarray(current, dtype=np.float64)
         if self.current is not None and (
             self.current.ndim != 2 or self.current.shape[0] != partition.dimension
@@ -185,10 +194,13 @@ class Measure:
         self._runner = None
 
     @property
-    def runner(self) -> ActionRunner:
+    def runner(self):
         """The reused simulator, built on first use so imports stay Warp-free."""
         if self._runner is None:
-            self._runner = ActionRunner(self.case, self.config)
+            if self.batch:
+                self._runner = BatchedActionRunner(self.case, self.config)
+            else:
+                self._runner = ActionRunner(self.case, self.config)
         return self._runner
 
     def run(self, controller, contact) -> Callable[[np.ndarray], np.ndarray]:
@@ -230,12 +242,18 @@ class Measure:
             progress=progress,
             cache=self.factors,
             key=key,
+            batch=self.batch,
         )
 
     def fisher(self, controller, contact) -> Fisher:
         """Exact Fisher of one trajectory at ``phi0``."""
         return exact_fisher(
-            self.run(controller, contact), self.phi0, self.step, self.sigma, self.prior_std
+            self.run(controller, contact),
+            self.phi0,
+            self.step,
+            self.sigma,
+            self.prior_std,
+            batch=self.batch,
         )
 
     def _key(self, controller, contact) -> str:
@@ -255,7 +273,11 @@ class Measure:
         key = self._key(controller, contact)
         cached = self.exacts.get(key)
         if cached is None:
-            log(f"exact Fisher {name}: {2 * self.partition.dimension + 1} rollouts")
+            note = f", batch {self.batch}" if self.batch else ""
+            log(
+                f"exact Fisher {name}: {2 * self.partition.dimension + 1} "
+                f"rollouts{note}"
+            )
             fisher = self.fisher(controller, contact)
             gain = float(fisher.logdet())
             self.exacts.put(key, gain, fisher.matrix)
@@ -272,6 +294,7 @@ class Measure:
             self.rank,
             self.step,
             self.seed,
+            batch=self.batch,
         )
         return gain_against(sketch.U, self.current)
 

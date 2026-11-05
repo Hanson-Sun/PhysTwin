@@ -47,6 +47,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--select", type=int, default=1, help="actions to keep; one per ASID iteration"
     )
     parser.add_argument("--subspace", choices=SUBSPACES, default="shared")
+    parser.add_argument(
+        "--batch",
+        type=int,
+        default=0,
+        help="simulator instances per run; 0 keeps the serial path",
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--run-id", default=None)
     parser.add_argument(
@@ -99,6 +105,7 @@ def main() -> None:
         subspace=args.subspace,
         factors=FactorCache(cache),
         exacts=ExactCache(cache),
+        batch=args.batch,
     )
     entries = measure.screen(actions, progress=progress_printer(started))
     decision = measure.decide(entries, actions, args.select, args.exact_top)

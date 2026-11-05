@@ -18,7 +18,7 @@ from asid.fim.sketch import Sketch
 
 # Bump when the simulator, sketch or observation model changes: entries keyed by
 # an older version are then ignored instead of silently reused.
-CACHE_VERSION = 1
+CACHE_VERSION = 2
 
 
 def run_cache(artifact: Path | str) -> Path:

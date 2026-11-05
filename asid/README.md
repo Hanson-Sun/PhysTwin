@@ -176,6 +176,11 @@ Full runs: 6-action screen at $g = 10$ or $g = 20$, 13–14 min; exact validatio
 of those 6 actions, 24 min ($g = 10$) and 54 min ($g = 20$); three-round
 sequential selection at $g = 10$, 42 min. Figures regenerate in seconds.
 
+`--batch N` runs the finite differences as N simulator instances in one call
+(`FIM_BATCH` in `run_fisher.sh`; 0 keeps the serial path). Peak memory is
+$7 \cdot 12\,\text{B} \cdot N_{\text{nodes}} \cdot (n_{\text{substeps}} + 1)$
+per instance, about 7 MB at 500 nodes, so chunk to fit: $k = 82$ is 0.58 GB.
+
 ## Reproduce
 
 Use an interactive WSL shell with the `phystwin-cu132` conda environment; the

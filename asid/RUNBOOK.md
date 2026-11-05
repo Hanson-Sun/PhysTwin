@@ -91,7 +91,9 @@ Writes `experiments-fim/$CASE/fim_g20_f60/`: `fisher.npy`, `fim_diag.npy`,
 `figs/{fim_matrix,point_information,fim_partition}.png`. Measured cost is
 5.15 s per 60-frame/500-node rollout, so the run is `2P + 1` rollouts: about
 4 min at `--groups 10` (`P = 21`), 7 min at 20 (`P = 41`), 17 min at 50
-(`P = 101`). Redraw the overlay at any time with:
+(`P = 101`). `--batch N` packs the finite differences into N simulator
+instances; each costs about 7 MB of state at 500 nodes, so chunk to fit.
+Redraw the overlay at any time with:
 
 ```bash
 python scripts/plot_fim.py experiments-fim/$CASE/fim_g20_f60

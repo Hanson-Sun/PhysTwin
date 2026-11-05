@@ -29,6 +29,10 @@ ROOT=${ROOT:-experiments-fim}
 # Exact FIM tolerates more groups than the rank-12 sketch used for planning.
 FIM_GROUPS=${FIM_GROUPS:-20}
 PLAN_GROUPS=${PLAN_GROUPS:-10}
+# Simulator instances per run; 0 keeps the serial path. Chunking lowers peak
+# memory but adds launches, so raise it until the memory formula in
+# asid/RUNBOOK.md says otherwise.
+FIM_BATCH=${FIM_BATCH:-0}
 FRAMES=${FRAMES:-60}
 NODES=${NODES:-500}
 RANK=${RANK:-12}
@@ -104,7 +108,8 @@ echo
 #    per-node local gain map. ~7 min at g=20, f=60.
 stage "exact FIM" "${PY[@]}" scripts/run_fim_case.py \
     --case "$BASE/$CASE" --root "$ROOT" --nodes "$NODES" --frames "$FRAMES" \
-    --groups "$FIM_GROUPS" --run-id "fim_g${FIM_GROUPS}_f${FRAMES}"
+    --groups "$FIM_GROUPS" --run-id "fim_g${FIM_GROUPS}_f${FRAMES}" \
+    --batch "$FIM_BATCH"
 
 stage "FIM overlay (reload path)" "${PY[@]}" scripts/plot_fim.py "$FIM_RUN"
 
@@ -113,7 +118,8 @@ stage "FIM overlay (reload path)" "${PY[@]}" scripts/plot_fim.py "$FIM_RUN"
 stage "selection" "${PY[@]}" scripts/plan_actions.py \
     --case "$BASE/$CASE" --root "$ROOT" --nodes "$NODES" --frames "$FRAMES" \
     --groups "$PLAN_GROUPS" --rank "$RANK" --azimuth-count "$AZIMUTH" \
-    --tilts $TILTS --select "$SELECT" --run-id "mix_g${PLAN_GROUPS}_r${RANK}"
+    --tilts $TILTS --select "$SELECT" --run-id "mix_g${PLAN_GROUPS}_r${RANK}" \
+    --batch "$FIM_BATCH"
 
 # 3. Exact Fisher for every candidate: how good the sketch ranking really was.
 stage "exact validation" "${PY[@]}" scripts/validate_actions.py \
@@ -141,7 +147,8 @@ fi
 stage "plan trajectory" "${PY[@]}" scripts/plan_push_trajectory.py \
     --case "$BASE/$CASE" --frames "$PLAN_FRAMES" --nodes "$NODES" \
     --azimuth-count "$AZIMUTH" --tilts $TILTS --knots 3 --samples 8 --iterations 3 \
-    --offset-fraction "$OFFSET_FRACTION" --exact-top "$EXACT_TOP" --out "$TRAJECTORY"
+    --offset-fraction "$OFFSET_FRACTION" --exact-top "$EXACT_TOP" --out "$TRAJECTORY" \
+    --batch "$FIM_BATCH"
 
 stage "generate planned capture" "${PY[@]}" scripts/generate_sim_data.py models.json \
     --case "$CASE" --trajectory "$TRAJECTORY" \

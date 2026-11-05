@@ -206,6 +206,20 @@ class BatchedRolloutTests(unittest.TestCase):
         self.assertLess(relative, max(1e-3, 2.0 * noise))
         self.assertLess(gain_relative, 1e-2)
 
+    def test_chunking_does_not_change_the_jacobian(self):
+        observation = default_observation(self.config.frames, stride=2)
+        run = BatchedActionRunner(self.case, self.config).run(
+            self.case.controller, self.case.contact, self.partition, observation
+        )
+        indices = [0, self.partition.dimension // 2]
+        small = jacobian_batched(
+            run, self.partition.phi0, 1e-2, indices=indices, chunk=2
+        )
+        large = jacobian_batched(
+            run, self.partition.phi0, 1e-2, indices=indices, chunk=4
+        )
+        np.testing.assert_array_equal(small, large)
+
 
 if __name__ == "__main__":
     unittest.main()
